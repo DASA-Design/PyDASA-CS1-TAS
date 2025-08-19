@@ -1,0 +1,19 @@
+{
+    "python.analysis.typeCheckingMode": "off",
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "flake8.args": [
+        // "--max-line-length=120",
+        "--ignore=E501,",
+    ],
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "./tests",
+        "-p",
+        "test_*.py"
+    ]
+}
