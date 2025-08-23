@@ -1,0 +1,3 @@
+damatrix,sym,alias,fwk,name,description,relevant,idx,cat,units,dims,min,max,mean,std_units,std_min,std_max,std_mean,dist_type,dist_params
+0, \\lambda_{1},lambda_tas_1,SOFTWARE,TAS component 1 arrival 1,TAS arrival rate 1,True,0,IN,req/s,E*T^-1,0.0,344.83,344.83,req/s,0.0,344.83,344.83,exponential,"{'scale': 1/344.83}"
+0, 
