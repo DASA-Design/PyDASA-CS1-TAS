@@ -1,4 +1,7 @@
-﻿# Third-party imports
+﻿# Standard library imports
+import os
+
+# Third-party imports
 # import numpy as np
 import pandas as pd
 # import seaborn as sns
@@ -36,7 +39,8 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
                        nd_metrics: pd.DataFrame,
                        nd_names: list = None,
                        col_names: list = None,
-                       file_path: str = None):
+                       file_path: str = None,
+                       fname: str = None):
     """Plot the queue network with metrics on each node and the overall network data.
 
     Args:
@@ -46,6 +50,10 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
         col_names (list, optional): List of column names. Default to None.
         nd_names (list, optional): List of node names. Defaults to None.
         file_path (str, optional): File path to save the plot. Defaults to None.
+        fname (str, optional): File name to save the plot. Defaults to None.
+
+    Raises:
+        ValueError: If file_path or fname is not provided when attempting to save the plot.
     """
     # Create directed graph
     G = nx.DiGraph()
@@ -84,8 +92,11 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     ax_table.set_facecolor("white")
     ax_table.axis("off")  # Hide axes for table
 
+    # ALT 1
+    pos = nx.bfs_layout(G, start=0)  # Breadth-first layout from source node
+    # ALT 2
     # Use spring layout for better node distribution
-    pos = nx.spring_layout(G, k=0.5, iterations=100, seed=42)  # k controls spacing, higher = more spread out
+    # pos = nx.spring_layout(G, k=1.25, iterations=250, seed=42)  # k controls spacing, higher = more spread out
 
     # preset node sizes
     node_sizes = [1500 for _ in range(n_nodes)]
@@ -100,17 +111,18 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     nx.draw_networkx_nodes(G, pos,
                            node_size=node_sizes,
                            node_color=node_colors,
-                           alpha=0.8,
+                           alpha=0.9,
                            ax=ax_graph)
 
-    # Draw edges
+    # Draw edges with curved arcs to improve visibility
     nx.draw_networkx_edges(G, pos,
                            width=1.5,
                            alpha=0.7,
-                           edge_color="gray",
+                           edge_color="black",
                            arrows=True,
                            arrowsize=20,
                            arrowstyle="-|>",
+                           connectionstyle="arc3,rad=0.2",
                            ax=ax_graph)
 
     # Draw edge labels
@@ -119,7 +131,14 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     nx.draw_networkx_edge_labels(G,
                                  pos,
                                  edge_labels=edge_labels,
-                                 font_size=12,
+                                 font_size=11,
+                                 font_color="black",
+                                 font_weight="light",
+                                 bbox=dict(facecolor="white",
+                                           edgecolor="none",
+                                           alpha=0.9,
+                                           pad=0.3),
+                                 label_pos=0.4,  # Adjust label pos along edge
                                  ax=ax_graph)
 
     # Draw simplified node labels (only names)
@@ -134,17 +153,11 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     table_data = []
     # Add header row
     table_data.append(col_names)
-    # OLD column names:
-    # ["Node", "λ (req/s)", "μ (req/s)", "ρ", "L (req)", "Lq (req)", "W (s)", "Wq (s)"]
 
     # Add data rows for each node
     for i in range(n_nodes):
         row = []
-        # for col in col_names:
-        #     data = nd_metrics[col].iloc[i]
-        #     if isinstance(data, [str]):
-        #         pass
-
+        # TODO improve this part later
         row = [
             nd_names[i],
             f"{nd_metrics['lambda'].iloc[i]:.2f}",
@@ -287,12 +300,28 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     plt.tight_layout()
 
     # Save with white background if needed
-    if file_path:
-        plt.savefig(file_path,
-                    facecolor="white",
-                    bbox_inches="tight",
-                    dpi=600)
+    if file_path and fname:
+        # Create directory if it doesn't exist
+        os.makedirs(file_path, exist_ok=True)
 
+        # Construct full file path
+        full_file_path = os.path.join(file_path, fname)
+
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            plt.savefig(full_file_path,
+                        facecolor="white",
+                        bbox_inches="tight",
+                        dpi=300,
+                        format="png")  # Explicitly set format
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            print(f"Error saving plot: {e}")
+    else:
+        _msg = "File path or file name not provided, skipping save."
+        _msg = f"{_msg} file_path: {file_path}, fname: {fname}"
+        # print(_msg)
+        raise ValueError(_msg)
     plt.show()
     plt.close()
     # plt.clf()
