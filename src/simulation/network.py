@@ -233,12 +233,10 @@ def simulate_network(miu, lambda0, P, s=None, K=None, sim_time=5000):
         lambda_sim = jobs_served / sim_time
 
         # Calculate actual average service rate from the service times
-        avg_service_time = np.mean(
-            node.service_times) if node.service_times else 1 / miu[i]
+        avg_service_time = np.mean(node.service_times) if node.service_times else 1 / miu[i]
 
         # Calculated average service rate
-        service_rate_sim = 1 / \
-            avg_service_time if avg_service_time > 0 else miu[i]
+        service_rate_sim = 1 / avg_service_time if avg_service_time > 0 else miu[i]
 
         # For multi-server queues, utilization is per server
         rho_sim = min(1.0, lambda_sim / (node.s * service_rate_sim))

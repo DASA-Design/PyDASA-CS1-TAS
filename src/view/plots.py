@@ -2,7 +2,7 @@
 import os
 
 # Third-party imports
-# import numpy as np
+import numpy as np
 import pandas as pd
 # import seaborn as sns
 import networkx as nx
@@ -318,7 +318,6 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
             _msg = f"Error saving plot: {e}.\n"
             _msg += "File path or file name not provided, skipping save. "
             _msg += f"{_msg} file_path: {file_path}, fname: {fname}"
-            # print(_msg)
             raise ValueError(_msg)
     plt.show()
     plt.close()
@@ -326,19 +325,21 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     # plt.cla()
 
 
-def plot_metric_comparison(delta_metrics: pd.DataFrame,
-                           metrics: list[str] = None,
-                           labels: list[str] = None,
-                           title: str = None,
-                           file_path: str = None,
-                           fname: str = None) -> None:
-    """Plot a comparison of metrics between two states.
+def plot_net_comparison(delta_metrics: pd.DataFrame,
+                        metrics: list[str] = None,
+                        labels: list[str] = None,
+                        title: str = None,
+                        group_by: str = None,
+                        file_path: str = None,
+                        fname: str = None) -> None:
+    """Plot a comparison of metrics between two states in the overall network.
 
     Args:
         delta_metrics (pd.DataFrame): DataFrame containing the metrics to compare.
         metrics (list[str], optional): List of metrics to include in the comparison. Defaults to None.
         labels (list[str], optional): List of labels for the metrics. Defaults to None.
         title (str, optional): Title of the plot. Defaults to None.
+        group_by (str, optional): Column name to group the data by. Defaults to None.
         file_path (str, optional): Directory path to save the plot. Defaults to None.
         fname (str, optional): File name for the saved plot. Defaults to None.
 
@@ -347,11 +348,14 @@ def plot_metric_comparison(delta_metrics: pd.DataFrame,
     """
     # setting default values
     if metrics is None:
-        metrics = delta_metrics.columns.tolist()
+        # Select only numeric columns if metrics not specified
+        metrics = delta_metrics.select_dtypes(include='number').columns.tolist()
+
     if labels is None:
         labels = metrics
+
     if title is None:
-        title = "Default Metrics Comparison: Optimal vs Default."
+        title = "Default Metrics Comparison"
 
     # creating plot labels
     metric_labels = dict(zip(metrics, labels))
@@ -390,7 +394,7 @@ def plot_metric_comparison(delta_metrics: pd.DataFrame,
                 y_pos,
                 f"{values[i]:.2f}%",
                 color="black",
-                fontweight="bold",
+                fontweight="light",
                 fontsize=10,
                 ha="center",
                 va="bottom"
@@ -410,14 +414,6 @@ def plot_metric_comparison(delta_metrics: pd.DataFrame,
     # Add grid lines for better readability
     ax.grid(axis="y", linestyle="--", alpha=0.7)
 
-    # # Add a note explaining color coding
-    # ax.text(0.5,
-    #         -0.2,
-    #         "Green: Improvement, Red: Degradation",
-    #         transform=ax.transAxes,
-    #         ha="center",
-    #         fontsize=10)
-
     # Set y-axis limit to provide some padding
     y_min = min(min(values) * 1.1, -2)  # At least -2% or 10% below minimum
     y_max = max(max(values) * 1.1, 2)   # At least 2% or 10% above maximum
@@ -427,12 +423,12 @@ def plot_metric_comparison(delta_metrics: pd.DataFrame,
     legend_elements = [
         plt.Rectangle((0, 0),
                       1, 1,
-                      facecolor="#4CAF50",
+                      facecolor=_green,
                       alpha=0.8,
                       label="Improvement"),
         plt.Rectangle((0, 0),
                       1, 1,
-                      facecolor="#FF5252",
+                      facecolor=_red,
                       alpha=0.8,
                       label="Degradation")
     ]
@@ -468,3 +464,163 @@ def plot_metric_comparison(delta_metrics: pd.DataFrame,
     plt.close()
     # plt.clf()
     # plt.cla()
+
+
+# Add this function to your plots.py file
+def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
+                       nodes: list[str],
+                       metrics: list[str] = None,
+                       labels: list[str] = None,
+                       title: str = None,
+                       cname: str = "name",
+                       file_path: str = None,
+                       fname: str = None) -> None:
+    """Plot a heatmap of node metrics.
+
+    Args:
+        delta_metrics (pd.DataFrame): DataFrame containing the metrics to compare.
+        nodes (list[str]): List of node names to include in the heatmap.
+        metrics (list[str], optional): List of metric column names to include. Defaults to all numeric columns.
+        labels (list[str], optional): Custom labels for the metrics. Defaults to metric names.
+        title (str, optional): Title of the plot. Defaults to "Node Metrics Heatmap".
+        cname (str, optional): Column name containing node names. Defaults to "name".
+        file_path (str, optional): Directory path to save the plot. Defaults to None.
+        fname (str, optional): Filename to save the plot. Defaults to None.
+
+    Raises:
+        ValueError: If the specified nodes or metrics are not found in the DataFrame.
+        ValueError: If the plot cannot be saved.
+    """
+    # Setting default values
+    if metrics is None:
+        # Select only numeric columns if metrics not specified
+        metrics = delta_metrics.select_dtypes(include="number").columns.tolist()
+
+    if labels is None:
+        labels = metrics
+
+    if title is None:
+        title = "Metrics Heatmap"
+
+    # Check if the node name column exists
+    if cname not in delta_metrics.columns:
+        raise ValueError(f"Node name column '{cname}' not found in DataFrame")
+
+    # Check if all metric columns are in the dataframe
+    if not set(metrics).issubset(delta_metrics.columns):
+        missing_cols = set(metrics) - set(delta_metrics.columns)
+        _msg = f"Missing metric columns in DataFrame: {missing_cols}"
+        raise ValueError(_msg)
+
+    # First filter by node names
+    node_filter = delta_metrics[cname].isin(nodes)
+    filtered_data = delta_metrics[node_filter]
+
+    # if filtered_data.empty:
+    #     available_nodes = delta_metrics[cname].unique()
+    #     raise ValueError(f"No matching nodes found. Available nodes: {available_nodes}, Requested: {nodes}")
+
+    # Get the actual node names that were found (in case some weren't)
+    found_nodes = filtered_data[cname].values
+    print(f"Found {len(found_nodes)} nodes: {found_nodes}")
+
+    # Now extract just the metric columns for the heatmap
+    heatmap_data = filtered_data[metrics].values
+    print(f"Heatmap data shape: {heatmap_data.shape}")
+
+    # Create the figure and axis
+    fig, ax = plt.subplots(figsize=(12, len(found_nodes) * 0.6 + 2))
+    fig.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    # Create a mask for NaN values
+    mask = np.isnan(heatmap_data)
+    # Setup the colormap with a diverging scale (coolwarm)
+    # Find the maximum absolute value for symmetric color scale
+    vmax = np.nanmax(np.abs(heatmap_data))
+    if np.isnan(vmax) or vmax == 0:
+        vmax = 1.0  # Default if no data or all zeros
+    vmin = -vmax
+
+    # Create the heatmap
+    im = ax.imshow(heatmap_data,
+                   cmap="PiYG",   # "RdYlGn",
+                   aspect="auto",
+                   vmin=vmin,
+                   vmax=vmax)
+
+    # Add colorbar
+    cbar = fig.colorbar(im, ax=ax, pad=0.01)
+    cbar.set_label('Relative Change', rotation=270, labelpad=15)
+
+    # Add value annotations on each cell
+    for i in range(len(found_nodes)):
+        for j in range(len(metrics)):
+            if i < heatmap_data.shape[0] and j < heatmap_data.shape[1]:
+                if mask[i, j]:
+                    # Skip NaN values
+                    continue
+
+                value = heatmap_data[i, j]
+                text_color = 'black'
+
+                # Format text based on value
+                if abs(value) >= 0.1:  # For significant values
+                    text = f"{value:.2f}"
+                else:
+                    text = f"{value:.3f}"
+
+                ax.text(j, i, text,
+                        ha="center", va="center",
+                        color=text_color, fontweight="bold")
+
+    # Set tick labels
+    ax.set_xticks(np.arange(len(metrics)))
+    ax.set_yticks(np.arange(len(found_nodes)))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_yticklabels(found_nodes)
+
+    # Add grid lines for better readability
+    ax.set_xticks(np.arange(-.5, len(metrics), 1), minor=True)
+    ax.set_yticks(np.arange(-.5, len(found_nodes), 1), minor=True)
+    ax.grid(which="minor", color="w", linestyle="-", linewidth=2)
+
+    # Add title and labels
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=20)
+
+    # # Add a legend explaining color coding
+    # ax.text(len(metrics) - 1, len(found_nodes) + 0.5,
+    #         "Blue: Improvement, Red: Degradation",
+    #         ha="right",
+    #         va="center",
+    #         fontsize=10,
+    #         bbox=dict(facecolor="white",
+    #                   alpha=0.8,
+    #                   edgecolor="gray"))
+
+    # Ensure tight layout
+    fig.tight_layout()
+
+    # Save with white background if needed
+    if file_path and fname:
+        # Create directory if it doesn't exist
+        os.makedirs(file_path, exist_ok=True)
+
+        # Construct full file path
+        full_file_path = os.path.join(file_path, fname)
+
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path,
+                        facecolor="white",
+                        bbox_inches="tight",
+                        dpi=300)
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            _msg = f"Error saving plot: {e}.\n"
+            _msg += "File path or file name not provided, skipping save. "
+            _msg += f"{_msg} file_path: {file_path}, fname: {fname}"
+            raise ValueError(_msg)
+
+    plt.show()
+    plt.close(fig)
