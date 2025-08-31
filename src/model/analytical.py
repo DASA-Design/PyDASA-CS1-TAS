@@ -1,11 +1,13 @@
 ﻿import numpy as np
 import pandas as pd
-from typing import List
+from typing import List, Union
 # import os
 # from pydasa import Queue
-from src.model.queueing import Queue
+from src.model.queueing import QueueMM1, QueueMMs, QueueMM1K, QueueMMsK
 # import random
 # import simpy
+
+Queue = Union[QueueMM1, QueueMMs, QueueMM1K, QueueMMsK]
 
 
 # -----------------------------
@@ -15,23 +17,21 @@ from src.model.queueing import Queue
 
 def solve_jackson_network(miu: List[float],
                           lambda_zero: List[float],
-                          n_servers: List[int],
-                          kap: List[int],
-                          P: np.ndarray) -> List[pd.DataFrame]:
+                          queues: List[Queue],
+                          P: np.ndarray) -> pd.DataFrame:
     """*solve_jackson_network()* solves the open Jackson network using traffic equations.
 
     Args:
         miu (List[float]): Service rates for each node.
         lambda_zero (List[float]): Arrival rates for each node.
-        n_servers (List[int]): Number of servers for each node.
-        kap (List[int]): Capacity limits for each node.
+        queues (List[Queue]): List of Queue instances representing each node.
         P (np.ndarray): State transition probability matrix.
 
     Raise:
         ValueError: If the system is unstable (ρ >= 1 at some node).
 
     Returns:
-        List[pd.DataFrame]: A list containing two DataFrames, one with the node results and other with the network metrics.
+        pd.DataFrame: DataFrame containing performance metrics for each node.
     """
     # creating identity matrix
     Is = np.eye(len(miu))
@@ -47,9 +47,11 @@ def solve_jackson_network(miu: List[float],
     Wq = []
 
     # iterating over each node's parameters
-    for la, m, n, k in zip(lambdas, miu, n_servers, kap):
+    # for la, m, n, k in zip(lambdas, miu, n_servers, kap):
+    for q, la in zip(queues, lambdas):
         # creating Queue instance for each node
-        q = Queue(la, m, n, k)
+        # q = Queue(la, m, n, k)
+        q._lambda = la
         # calculating metrics for the queue
         q.calculate_metrics()
         # append metric results
@@ -65,8 +67,9 @@ def solve_jackson_network(miu: List[float],
         _msg = f"Warning!, unestable system!, calculated rho (ρ): {aprox_rho}"
         raise ValueError(_msg)
 
-    # Calculate network-wide metrics
-    net_metrics = calculate_net_metrics(lambdas, L, Lq, W, Wq, rho, miu)
+    # # Calculate network-wide metrics
+    # net_metrics = calculate_net_metrics(lambdas, L, Lq, W, Wq, rho, miu)
+
     # Create DataFrame for node-specific metrics
     node_metrics = pd.DataFrame({
         "node": range(1, len(lambdas) + 1),
@@ -80,30 +83,33 @@ def solve_jackson_network(miu: List[float],
     })
 
     # Return individual node metrics
-    return node_metrics, net_metrics
+    return node_metrics
 
 
-def calculate_net_metrics(lambdas: List[float],
-                          L: List[float],
-                          Lq: List[float],
-                          W: List[float],
-                          Wq: List[float],
-                          rho: List[float] = None,
-                          miu: List[float] = None) -> pd.DataFrame:
+def calculate_net_metrics(nd_metrics: pd.DataFrame) -> pd.DataFrame:
     """*calculate_net_metrics()* calculates network-wide performance metrics for a Jackson network.
 
     Args:
-        lambdas (List[float]): Arrival rates at each node.
-        L (List[float]): Average number of jobs in the system at each node.
-        Lq (List[float]): Average number of jobs waiting in queues at each node.
-        W (List[float]): Average time a job spends in the system at each node.
-        Wq (List[float]): Average time a job spends waiting in queues at each node.
-        rho (List[float], optional): Utilization at each node. Defaults to None.
-        miu (List[float], optional): Service rates for fallback calculations. Defaults to None.
+        nd_metrics (pd.DataFrame): DataFrame containing node-specific performance metrics. The expected columns are:
+            - "lambda": Arrival rates at each node.
+            - "miu": Service rates at each node. (Optional, if available)
+            - "rho": Utilization at each node. (Optional, if available)
+            - "L": Average number of jobs in the system at each node.
+            - "Lq": Average number of jobs waiting in queues at each node.
+            - "W": Average time a job spends in the system at each node.
+            - "Wq": Average time a job spends waiting in queues at each node.
 
     Returns:
         pd.DataFrame: DataFrame containing network-wide performance metrics.
     """
+    lambdas = nd_metrics["lambda"].tolist()
+    L = nd_metrics["L"].tolist()
+    Lq = nd_metrics["Lq"].tolist()
+    W = nd_metrics["W"].tolist()
+    Wq = nd_metrics["Wq"].tolist()
+    rho = nd_metrics["rho"].tolist() if "rho" in nd_metrics.columns else None
+    miu = nd_metrics["miu"].tolist() if "miu" in nd_metrics.columns else None
+
     # Sum of all arrival rates (total throughput)
     total_lambda = np.sum(lambdas)
 
@@ -129,12 +135,12 @@ def calculate_net_metrics(lambdas: List[float],
 
     # Create DataFrame for network-wide metrics
     net_metrics = pd.DataFrame({
-        "avg_miu": avg_miu,
-        "avg_rho": avg_rho,
-        "L_net": L_network,
-        "Lq_net": Lq_network,
-        "W_net": W_network,
-        "Wq_net": Wq_network,
-        "total_throughput": total_lambda
+        "avg_miu": [avg_miu],
+        "avg_rho": [avg_rho],
+        "L_net": [L_network],
+        "Lq_net": [Lq_network],
+        "W_net": [W_network],
+        "Wq_net": [Wq_network],
+        "total_throughput": [total_lambda]
     })
     return net_metrics

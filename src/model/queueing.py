@@ -33,7 +33,8 @@ from src.utils.helpers import gfactorial
 INF = math.inf
 
 
-def Queue(_lambda: float,
+def Queue(model: str,
+          _lambda: float,
           miu: float,
           n_servers: int = 1,
           kapacity: Optional[int] = None) -> BasicQueue:
@@ -42,10 +43,11 @@ def Queue(_lambda: float,
     NOTE: some variable names start with underscore (_) to avoid conflict with Python keywords.
 
     Args:
-        _lambda (float): Arrival rate (λ) of the queue.
-        miu (float): Service rate (μ) of the queue.
-        n_servers (int, optional): Number of servers (s). Defaults to 1.
-        kapacity (Optional[int], optional): Maximum capacity (K) of the queue. Defaults to None.
+        model (str): Type of queue model to create. Options: 'M/M/1', 'M/M/s', 'M/M/1/K', 'M/M/s/K'.
+        _lambda (float): Arrival rate ($\\lambda$) of the queue.
+        miu (float): Service rate ($\\mu$) of the queue.
+        n_servers (int, optional): Number of servers ($s$). Defaults to 1.
+        kapacity (Optional[int], optional): Maximum capacity ($K$) of the queue. Defaults to None.
 
     Raises:
         NotImplementedError: If the queue configuration is not supported.
@@ -54,24 +56,56 @@ def Queue(_lambda: float,
         BasicQueue: An instance of a specific queue model (based on the abstract basic model).
     """
     _queue = None
+    options = ["M/M/1", "M/M/s", "M/M/1/K", "M/M/s/K"]
+    # check for supported models
+    if model not in options:
+        _msg = f"Unsupported queue model: {model}. "
+        _msg += f"Supported models: {options}"
+        raise NotImplementedError(_msg)
+
     # Single server, infinite capacity
-    if n_servers == 1 and kapacity is None:
+    elif model == "M/M/1":
+        if n_servers != 1 or kapacity is not None:
+            _msg = "M/M/1 requires exactly 1 server and infinite capacity. "
+            _msg += f"s={n_servers}, K={kapacity}"
+            raise ValueError(_msg)
         _queue = QueueMM1(_lambda, miu)
+        # print(f"Created M/M/1 Queue Model: {type(_queue)}")
 
     # Multi-server, infinite capacity
-    elif n_servers > 1 and kapacity is None:
+    elif model == "M/M/s":
+        if n_servers < 1 or kapacity is not None:
+            _msg = "M/M/s requires at least 1 server and infinite capacity. "
+            _msg += f"s={n_servers}, K={kapacity}"
+            raise ValueError(_msg)
         _queue = QueueMMs(_lambda, miu, n_servers)
+        # print(f"Created M/M/s Queue Model: {type(_queue)}")
 
     # Single server, finite capacity
-    elif n_servers == 1 and kapacity is not None:
+    elif model == "M/M/1/K":
+        if n_servers != 1 or kapacity is None:
+            _msg = "M/M/1/K requires exactly 1 server and finite capacity. "
+            _msg += f"s={n_servers}, K={kapacity}"
+            raise ValueError(_msg)
         _queue = QueueMM1K(_lambda, miu, n_servers, kapacity)
+        # print(f"Created M/M/1/K Queue Model: {type(_queue)}")
 
     # Multi-server, finite capacity
-    elif n_servers > 1 and kapacity is not None:
+    elif model == "M/M/s/K":
+        if n_servers < 1 or kapacity is None:
+            _msg = "M/M/s/K requires at least 1 server and finite capacity. "
+            _msg += f"s={n_servers}, K={kapacity}"
+            raise ValueError(_msg)
+        if kapacity < n_servers:
+            _msg = "M/M/s/K requires capacity K >= s. "
+            _msg += f"K={kapacity}, s={n_servers}"
+            raise ValueError(_msg)
         _queue = QueueMMsK(_lambda, miu, n_servers, kapacity)
+        # print(f"Created M/M/s/K Queue Model: {type(_queue)}")
 
     # Add more conditions for other queue types. e.g., M/G/1, G/G/1, etc.
     # TODO: Implement additional queue models
+
     # otherwise, raise an error
     else:
         _msg = f"Unsupported queue configuration: {n_servers} "
@@ -159,9 +193,9 @@ class BasicQueue(ABC):
             ValueError: If number of servers is non-positive.
         """
 
-        if self._lambda <= 0:
+        if self._lambda < 0:
             raise ValueError("Arrival rate must be positive.")
-        if self.miu <= 0:
+        if self.miu < 0:
             raise ValueError("Service rate must be positive.")
         if self.n_servers < 1:
             raise ValueError("Number of servers must be positive.")
@@ -511,7 +545,7 @@ class QueueMMs(BasicQueue):
 
 @dataclass
 class QueueMM1K(BasicQueue):
-    """**QueueMM1K** Represents an M/M/1/K queue system with finite capacity 'k' and one server.
+    """**QueueMM1K** Represents an M/M/1/K queue system with finite capacity 'K' and one server.
 
 
     Args:
