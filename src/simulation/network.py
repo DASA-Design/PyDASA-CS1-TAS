@@ -2,7 +2,6 @@
 import pandas as pd
 # import os
 # from pydasa import Queue
-from src.model.analytical import calculate_net_metrics
 import random
 import simpy
 
@@ -171,8 +170,13 @@ def simulate_network(miu, lambda0, P, s=None, K=None, sim_time=5000):
     # start external arrivals
     for i, rate in enumerate(lambda0):
         if rate > 0:
-            env.process(job_generator(
-                env, i, rate, nodes, P, results, sim_time))
+            env.process(job_generator(env,
+                                      i,
+                                      rate,
+                                      nodes,
+                                      P,
+                                      results,
+                                      sim_time))
 
     env.run(until=sim_time)
 
@@ -249,15 +253,15 @@ def simulate_network(miu, lambda0, P, s=None, K=None, sim_time=5000):
         blocking_prob = node.blocked_jobs / total_arrivals if total_arrivals > 0 else 0
 
         sim_metrics.append({
-            "Node": i,
-            "Model": model_type,
-            "lambda_sim": lambda_sim,
-            "miu_sim": service_rate_sim,
-            "rho_sim": rho_sim,
-            "L_sim": L_sim,
-            "Lq_sim": Lq_sim,
-            "W_sim": W_sim,
-            "Wq_sim": Wq_sim,
+            "node": i,
+            "type": model_type,
+            "lambda": lambda_sim,
+            "miu": service_rate_sim,
+            "rho": rho_sim,
+            "L": L_sim,
+            "Lq": Lq_sim,
+            "W": W_sim,
+            "Wq": Wq_sim,
             "L_littles": L_from_littles,
             "Lq_littles": Lq_from_littles,
             "Jobs_Served": jobs_served,
@@ -265,20 +269,4 @@ def simulate_network(miu, lambda0, P, s=None, K=None, sim_time=5000):
             "Blocking_Prob": blocking_prob,
         })
 
-    # Calculate network-wide metrics
-    lambda_sims = [metrics["lambda_sim"] for metrics in sim_metrics]
-    L_sims = [metrics["L_sim"] for metrics in sim_metrics]
-    Lq_sims = [metrics["Lq_sim"] for metrics in sim_metrics]
-    W_sims = [metrics["W_sim"] for metrics in sim_metrics]
-    Wq_sims = [metrics["Wq_sim"] for metrics in sim_metrics]
-    rhos = [metrics["rho_sim"] for metrics in sim_metrics]
-    mius = [metrics["miu_sim"] for metrics in sim_metrics]
-    network_metrics = calculate_net_metrics(lambda_sims,
-                                            L_sims,
-                                            Lq_sims,
-                                            W_sims,
-                                            Wq_sims,
-                                            rhos,
-                                            mius)
-
-    return pd.DataFrame(sim_metrics), network_metrics
+    return pd.DataFrame(sim_metrics)

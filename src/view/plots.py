@@ -309,7 +309,7 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
 
         print(f"Saving plot to: {full_file_path}")
         try:
-            plt.savefig(full_file_path,
+            fig.savefig(full_file_path,
                         facecolor="white",
                         bbox_inches="tight",
                         dpi=600)
@@ -329,7 +329,6 @@ def plot_net_comparison(delta_metrics: pd.DataFrame,
                         metrics: list[str] = None,
                         labels: list[str] = None,
                         title: str = None,
-                        group_by: str = None,
                         file_path: str = None,
                         fname: str = None) -> None:
     """Plot a comparison of metrics between two states in the overall network.
@@ -339,7 +338,6 @@ def plot_net_comparison(delta_metrics: pd.DataFrame,
         metrics (list[str], optional): List of metrics to include in the comparison. Defaults to None.
         labels (list[str], optional): List of labels for the metrics. Defaults to None.
         title (str, optional): Title of the plot. Defaults to None.
-        group_by (str, optional): Column name to group the data by. Defaults to None.
         file_path (str, optional): Directory path to save the plot. Defaults to None.
         fname (str, optional): File name for the saved plot. Defaults to None.
 
@@ -349,7 +347,7 @@ def plot_net_comparison(delta_metrics: pd.DataFrame,
     # setting default values
     if metrics is None:
         # Select only numeric columns if metrics not specified
-        metrics = delta_metrics.select_dtypes(include='number').columns.tolist()
+        metrics = delta_metrics.select_dtypes(include="number").columns.tolist()
 
     if labels is None:
         labels = metrics
@@ -450,7 +448,7 @@ def plot_net_comparison(delta_metrics: pd.DataFrame,
 
         print(f"Saving plot to: {full_file_path}")
         try:
-            plt.savefig(full_file_path,
+            fig.savefig(full_file_path,
                         facecolor="white",
                         bbox_inches="tight",
                         dpi=300)    # format="png")  # Explicitly set format
@@ -551,7 +549,7 @@ def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
 
     # Add colorbar
     cbar = fig.colorbar(im, ax=ax, pad=0.01)
-    cbar.set_label('Relative Change', rotation=270, labelpad=15)
+    cbar.set_label("Relative Change (%)", rotation=270, labelpad=15)
 
     # Add value annotations on each cell
     for i in range(len(found_nodes)):
@@ -562,7 +560,7 @@ def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
                     continue
 
                 value = heatmap_data[i, j]
-                text_color = 'black'
+                text_color = "black"
 
                 # Format text based on value
                 if abs(value) >= 0.1:  # For significant values
@@ -623,4 +621,4 @@ def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
             raise ValueError(_msg)
 
     plt.show()
-    plt.close(fig)
+    plt.close()
