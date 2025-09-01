@@ -1,0 +1,144 @@
+_idx,dm,_sym,_alias,_fwk,name,description,relevant,_cat,_dims,_units,_min,_max,_mean,_std_units,_std_min,_std_max,_std_mean,_dist_type,_dist_params
+1,1,\\lambda_{1},lambda_tas_1,SOFTWARE,TAS 1 arrival rate,Arrival rate for TAS 1,TRUE,IN,E*T^-1,req/s,0,345,345,req/s,0,345,345,exponential,{'scale': 1/345}
+2,1,\\chi_{1},chi_tas_1,SOFTWARE,TAS 1 departure rate,Departure rate for TAS 1,TRUE,CTRL,E*T^-1,req/s,0,345,345,req/s,0,345,345,exponential,{'scale': 1/345}
+3,1,\\mu_{1},mu_tas_1,SOFTWARE,TAS 1 service rate,Service rate for TAS 1,TRUE,CTRL,E*T^-1,req/s,0,900,900,req/s,0,900,900,exponential,{'scale': 1/900}
+4,1,s_{1},s_tas_1,SOFTWARE,TAS 1 resourses,Number of resources allocated in TAS 1,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+5,1,K_{1},K_tas_1,SOFTWARE,TAS 1 q-capacity,Allocated request capacity in TAS 1 memory buffer,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+6,1,n_{1},n_tas_1,SOFTWARE,TAS 1 requests,Number of requests in TAS 1 memory,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+7,1,L_{1},L_tas_1,SOFTWARE,TAS 1 mean processing requests,Average number of request in TAS 1 component,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+8,1,Lq_{1},Lq_tas_1,SOFTWARE,TAS 1 mean in memory requests,Average number of request in TAS 1 memory,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+9,1,W_{1},W_tas_1,SOFTWARE,TAS 1 mean time to answer,Average time to complete a request in TAS 1,TRUE,OUT,T*E^-1,s/req,0,0.001801802,0.001801802,s/req,0,0.001801802,0.001801802,uniform,"{'low': 0', high': 0.0018018018018018}"
+10,1,Wq_{1},Wq_tas_1,SOFTWARE,TAS 1 mean time in buffer,Average time for a request to transit the buffer in TAS 1,FALSE,CTRL,T*E^-1,s/req,0,0.000690691,0.000690691,s/req,0,0.000690691,0.000690691,uniform,"{'low': 0', high': 0.00069069069069069}"
+11,1,\\delta_{1},delta_tas_1,SOFTWARE,TAS 1 req data density,Data density for request in TAS 1 expected data per requests,TRUE,IN,D*E^-1,kB/req,128,1000,564,bit/req,131072000,1024000000,577536000,uniform,"{'low': 131072000', high': 1024000000}"
+12,2,\\lambda_{2},lambda_tas_2,SOFTWARE,TAS 2 arrival rate,Arrival rate for TAS 2,TRUE,IN,E*T^-1,req/s,0,258.75,258.75,req/s,0,258.75,258.75,exponential,{'scale': 1/258.75}
+13,2,\\chi_{2},chi_tas_2,SOFTWARE,TAS 2 departure rate,Departure rate for TAS 2,TRUE,CTRL,E*T^-1,req/s,0,258.75,258.75,req/s,0,258.75,258.75,exponential,{'scale': 1/258.75}
+14,2,\\mu_{2},mu_tas_2,SOFTWARE,TAS 2 service rate,Service rate for TAS 2,TRUE,CTRL,E*T^-1,req/s,0,700,700,req/s,0,700,700,exponential,{'scale': 1/700}
+15,2,s_{2},s_tas_2,SOFTWARE,TAS 2 resourses,Number of resources allocated in TAS 2,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+16,2,K_{2},K_tas_2,SOFTWARE,TAS 2 q-capacity,Allocated request capacity in TAS 2 memory buffer,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+17,2,n_{2},n_tas_2,SOFTWARE,TAS 2 requests,Number of requests in TAS 2 memory,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+18,2,L_{2},L_tas_2,SOFTWARE,TAS 2 mean processing requests,Average number of request in TAS 2 component,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+19,2,Lq_{2},Lq_tas_2,SOFTWARE,TAS 2 mean in memory requests,Average number of request in TAS 2 memory,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+20,2,W_{2},W_tas_2,SOFTWARE,TAS 2 mean time to answer,Average time to complete a request in TAS 2,TRUE,OUT,T*E^-1,s/req,0,0.002266289,0.002266289,s/req,0,0.002266289,0.002266289,uniform,"{'low': 0', high': 0.00226628895184136}"
+21,2,Wq_{2},Wq_tas_2,SOFTWARE,TAS 2 mean time in buffer,Average time for a request to transit the buffer in TAS 2,FALSE,CTRL,T*E^-1,s/req,0,0.000837718,0.000837718,s/req,0,0.000837718,0.000837718,uniform,"{'low': 0', high': 0.000837717523269931}"
+22,2,\\delta_{2},delta_tas_2,SOFTWARE,TAS 2 req data density,Data density for request in TAS 2 expected data per requests,TRUE,IN,D*E^-1,req/s,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+23,3,\\lambda_{3},lambda_tas_3,SOFTWARE,TAS 3 arrival rate,Arrival rate for TAS 3,TRUE,IN,E*T^-1,req/s,0,173.34525,173.34525,req/s,0,173.34525,173.34525,exponential,{'scale': 1/173.34525}
+24,3,\\chi_{3},chi_tas_3,SOFTWARE,TAS 3 departure rate,Departure rate for TAS 3,TRUE,CTRL,E*T^-1,req/s,0,173.34525,173.34525,req/s,0,173.34525,173.34525,exponential,{'scale': 1/173.34525}
+25,3,\\mu_{3},mu_tas_3,SOFTWARE,TAS 3 arrival rate,Service rate for TAS 3,TRUE,CTRL,E*T^-1,req,0,700,700,req/s,0,700,700,exponential,{'scale': 1/700}
+26,3,s_{3},s_tas_3,SOFTWARE,TAS 3 departure rate,Number of resources allocated in TAS 3,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+27,3,K_{3},K_tas_3,SOFTWARE,TAS 3 service rate,Allocated request capacity in TAS 3 memory buffer,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+28,3,n_{3},n_tas_3,SOFTWARE,TAS 3 resourses,Arrival rate for TAS 3,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+29,3,L_{3},L_tas_3,SOFTWARE,TAS 3 q-capacity,Departure rate for TAS 3,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+30,3,Lq_{3},Lq_tas_3,SOFTWARE,TAS 3 requests,Service rate for TAS 3,FALSE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+31,3,W_{3},W_tas_3,SOFTWARE,TAS 3 mean processing requests,Number of resources allocated in TAS 3,TRUE,OUT,T*E^-1,s/req,0,0.001898777,0.001898777,s/req,0,0.001898777,0.001898777,uniform,"{'low': 0', high': 0.00189877714005237}"
+32,3,Wq_{3},Wq_tas_3,SOFTWARE,TAS 3 mean in memory requests,Allocated request capacity in TAS 3 memory buffer,FALSE,CTRL,T*E^-1,req/s,0,0.000470206,0.000470206,s/req,0,0.000470206,0.000470206,uniform,"{'low': 0', high': 0.000470205711480949}"
+33,3,\\delta_{3},delta_tas_3,SOFTWARE,TAS 3 mean time to answer,Number of requests in TAS 3 memory,TRUE,IN,D*E^-1,req/s,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+34,4,\\lambda_{4},lambda_tas_4,SOFTWARE,TAS 4 mean time in buffer,Average number of request in TAS 4 component,TRUE,IN,E*T^-1,req/s,0,97.03125,97.03125,req/s,0,97.03125,97.03125,exponential,{'scale': 1/97.03125}
+35,4,\\chi_{4},chi_tas_4,SOFTWARE,TAS 4 req data density,Average number of request in TAS 4 memory,TRUE,CTRL,E*T^-1,req,0,77.59,77.59,req/s,0,77.59,77.59,exponential,{'scale': 1/77.59}
+36,4,\\mu_{4},mu_tas_4,SOFTWARE,TAS 4 arrival rate,Average time to complete a request in TAS 4,TRUE,CTRL,E*T^-1,req,0,180,180,req/s,0,180,180,exponential,{'scale': 1/180}
+37,4,s_{4},s_tas_4,SOFTWARE,TAS 4 departure rate,Average time for a request to transit the buffer in TAS 4,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+38,4,K_{4},K_tas_4,SOFTWARE,TAS 4 service rate,Data density for request in TAS 4 expected data per requests,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+39,4,n_{4},n_tas_4,SOFTWARE,TAS 4 resourses,Arrival rate for TAS 4,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+40,4,L_{4},L_tas_4,SOFTWARE,TAS 4 q-capacity,Departure rate for TAS 4,TRUE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+41,4,Lq_{4},Lq_tas_4,SOFTWARE,TAS 4 requests,Service rate for TAS 4,FALSE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+42,4,W_{4},W_tas_4,SOFTWARE,TAS 4 mean processing requests,Number of resources allocated in TAS 4,TRUE,OUT,T*E^-1,req/s,0,0.012052731,0.012052731,s/req,0,0.012052731,0.012052731,uniform,"{'low': 0', high': 0.0120527306967984}"
+43,4,Wq_{4},Wq_tas_4,SOFTWARE,TAS 4 mean in memory requests,Allocated request capacity in TAS 4 memory buffer,FALSE,CTRL,T*E^-1,req/s,0,0.006497175,0.006497175,s/req,0,0.006497175,0.006497175,uniform,"{'low': 0', high': 0.00649717514124293}"
+44,4,\\delta_{4},delta_tas_4,SOFTWARE,TAS 4 mean time to answer,Number of requests in TAS 4 memory,TRUE,IN,D*E^-1,req/s,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+45,5,\\lambda_{5},lambda_tas_5,SOFTWARE,TAS 5 mean time in buffer,Average number of request in TAS 5 component,TRUE,IN,E*T^-1,req,0,91.81451613,91.81451613,req/s,0,91.81451613,91.81451613,exponential,{'scale': 1/91.8145161290323}
+46,5,\\chi_{5},chi_tas_5,SOFTWARE,TAS 5 req data density,Average number of request in TAS 5 memory,TRUE,CTRL,E*T^-1,req,0,122.84,122.84,req/s,0,122.84,122.84,exponential,{'scale': 1/122.84}
+47,5,\\mu_{5},mu_tas_5,SOFTWARE,TAS 5 arrival rate,Average time to complete a request in TAS 5,TRUE,CTRL,E*T^-1,req,0,530,530,req/s,0,530,530,exponential,{'scale': 1/530}
+48,5,s_{5},s_tas_5,SOFTWARE,TAS 5 departure rate,Average time for a request to transit the buffer in TAS 5,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+49,5,K_{5},K_tas_5,SOFTWARE,TAS 5 arrival rate,Data density for request in TAS 5 expected data per requests,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+50,5,n_{5},n_tas_5,SOFTWARE,TAS 5 departure rate,Arrival rate for TAS 5,TRUE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+51,5,L_{5},L_tas_5,SOFTWARE,TAS 5 service rate,Departure rate for TAS 5,TRUE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+52,5,Lq_{5},Lq_tas_5,SOFTWARE,TAS 5 resourses,Service rate for TAS 5,FALSE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+53,5,W_{5},W_tas_5,SOFTWARE,TAS 5 q-capacity,Number of resources allocated in TAS 5,TRUE,OUT,T*E^-1,req/s,0,0.002282139,0.002282139,s/req,0,0.002282139,0.002282139,uniform,"{'low': 0', high': 0.00228213858470599}"
+54,5,Wq_{5},Wq_tas_5,SOFTWARE,TAS 5 requests,Allocated request capacity in TAS 5 memory buffer,FALSE,CTRL,T*E^-1,req/s,0,0.000395346,0.000395346,s/req,0,0.000395346,0.000395346,uniform,"{'low': 0', high': 0.000395346131875801}"
+55,5,\\delta_{5},delta_tas_5,SOFTWARE,TAS 5 mean processing requests,Arrival rate for TAS 5,TRUE,IN,D*E^-1,req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+56,6,\\lambda_{6},lambda_tas_6,SOFTWARE,TAS 6 mean in memory requests,Departure rate for TAS 6,TRUE,IN,E*T^-1,req,0,104.1310976,104.1310976,req/s,0,104.1310976,104.1310976,exponential,{'scale': 1/104.131097560975}
+57,6,\\chi_{6},chi_tas_6,SOFTWARE,TAS 6 mean time to answer,Service rate for TAS 6,TRUE,CTRL,E*T^-1,req,0,58.19,58.19,req/s,0,58.19,58.19,exponential,{'scale': 1/58.19}
+58,6,\\mu_{6},mu_tas_6,SOFTWARE,TAS 6 mean time in buffer,Number of resources allocated in TAS 6,TRUE,CTRL,E*T^-1,req,0,150,150,req/s,0,150,150,exponential,{'scale': 1/150}
+59,6,s_{6},s_tas_6,SOFTWARE,TAS 6 req data density,Allocated request capacity in TAS 6 memory buffer,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+60,6,K_{6},K_tas_6,SOFTWARE,TAS 6 arrival rate,Number of requests in TAS 6 memory,TRUE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+61,6,n_{6},n_tas_6,SOFTWARE,TAS 6 departure rate,Average number of request in TAS 6 component,TRUE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+62,6,L_{6},L_tas_6,SOFTWARE,TAS 6 service rate,Average number of request in TAS 6 memory,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+63,6,Lq_{6},Lq_tas_6,SOFTWARE,TAS 6 resourses,Average time to complete a request in TAS 6,FALSE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+64,6,W_{6},W_tas_6,SOFTWARE,TAS 6 q-capacity,Average time for a request to transit the buffer in TAS 6,TRUE,OUT,T*E^-1,req/s,0,0.021801263,0.021801263,s/req,0,0.021801263,0.021801263,uniform,"{'low': 0', high': 0.0218012628780325}"
+65,6,Wq_{6},Wq_tas_6,SOFTWARE,TAS 6 requests,Data density for request in TAS 6 expected data per requests,FALSE,CTRL,T*E^-1,req,0,0.015134596,0.015134596,s/req,0,0.015134596,0.015134596,uniform,"{'low': 0', high': 0.0151345962113659}"
+66,6,\\delta_{6},delta_tas_6,SOFTWARE,TAS 6 mean processing requests,Arrival rate for TAS 6,TRUE,IN,D*E^-1,req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+67,7,\\lambda_{7},lambda_tas_7,SOFTWARE,TAS 7 mean in memory requests,Departure rate for TAS 7,TRUE,IN,E*T^-1,req,0,64.27408146,64.27408146,req/s,0,64.27408146,64.27408146,exponential,{'scale': 1/64.2740814606741}
+68,7,\\chi_{7},chi_tas_7,SOFTWARE,TAS 7 mean time to answer,Service rate for TAS 7,TRUE,CTRL,E*T^-1,req,0,58.05,58.05,req/s,0,58.05,58.05,exponential,{'scale': 1/58.05}
+69,7,\\mu_{7},mu_tas_7,SOFTWARE,TAS 7 mean time in buffer,Number of resources allocated in TAS 7,TRUE,CTRL,E*T^-1,req,0,700,700,req/s,0,700,700,exponential,{'scale': 1/700}
+70,7,s_{7},s_tas_7,SOFTWARE,TAS 7 req data density,Allocated request capacity in TAS 7 memory buffer,TRUE,IN,E,s/req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+71,7,K_{7},K_tas_7,SOFTWARE,TAS 7 arrival rate,Number of requests in TAS 7 memory,TRUE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+72,7,n_{7},n_tas_7,SOFTWARE,TAS 7 departure rate,Average number of request in TAS 7 component,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+73,7,L_{7},L_tas_7,SOFTWARE,TAS 7 arrival rate,Average number of request in TAS 7 memory,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+74,7,Lq_{7},Lq_tas_7,SOFTWARE,TAS 7 departure rate,Average time to complete a request in TAS 7,FALSE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+75,7,W_{7},W_tas_7,SOFTWARE,TAS 7 service rate,Average time for a request to transit the buffer in TAS 7,TRUE,OUT,T*E^-1,req,0,0.001573005,0.001573005,s/req,0,0.001573005,0.001573005,uniform,"{'low': 0', high': 0.00157300492372192}"
+76,7,Wq_{7},Wq_tas_7,SOFTWARE,TAS 7 resourses,Data density for request in TAS 7 expected data per requests,FALSE,CTRL,T*E^-1,req,0,0.000144433,0.000144433,s/req,0,0.000144433,0.000144433,uniform,"{'low': 0', high': 0.000144433495150492}"
+77,7,\\delta_{7},delta_tas_7,SOFTWARE,TAS 7 q-capacity,Arrival rate for TAS 7,TRUE,IN,D*E^-1,req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+78,8,\\lambda_{8},lambda_tas_8,SOFTWARE,TAS 8 requests,Departure rate for TAS 8,TRUE,IN,E*T^-1,req,0,59.58742969,59.58742969,req/s,0,59.58742969,59.58742969,exponential,{'scale': 1/59.5874296875}
+79,8,\\chi_{8},chi_tas_8,SOFTWARE,TAS 8 mean processing requests,Service rate for TAS 8,TRUE,CTRL,E*T^-1,req,0,58.05,58.05,req/s,0,58.05,58.05,exponential,{'scale': 1/58.05}
+80,8,\\mu_{8},mu_tas_8,SOFTWARE,TAS 8 mean in memory requests,Number of resources allocated in TAS 8,TRUE,CTRL,E*T^-1,s/req,0,410,410,req/s,0,410,410,exponential,{'scale': 1/410}
+81,8,s_{8},s_tas_8,SOFTWARE,TAS 8 mean time to answer,Allocated request capacity in TAS 8 memory buffer,TRUE,IN,E,s/req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+82,8,K_{8},K_tas_8,SOFTWARE,TAS 8 mean time in buffer,Arrival rate for TAS 8,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+83,8,n_{8},n_tas_8,SOFTWARE,TAS 8 req data density,Departure rate for TAS 8,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+84,8,L_{8},L_tas_8,SOFTWARE,TAS 8 arrival rate,Service rate for TAS 8,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+85,8,Lq_{8},Lq_tas_8,SOFTWARE,TAS 8 departure rate,Number of resources allocated in TAS 8,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+86,8,W_{8},W_tas_8,SOFTWARE,TAS 8 service rate,Allocated request capacity in TAS 8 memory buffer,TRUE,OUT,T*E^-1,req,0,0.002853779,0.000414755,s/req,0,0.002853779,0.000414755,uniform,"{'low': 0', high': 0.00285377890156221}"
+87,8,Wq_{8},Wq_tas_8,SOFTWARE,TAS 8 resourses,Number of requests in TAS 8 memory,FALSE,CTRL,T*E^-1,req,0,,,s/req,0,0,0,uniform,"{'low': 0', high': 0}"
+88,8,\\delta_{8},delta_tas_8,SOFTWARE,TAS 8 q-capacity,Average number of request in TAS 8 component,TRUE,IN,D*E^-1,req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+89,9,\\lambda_{9},lambda_tas_9,SOFTWARE,TAS 9 requests,Average number of request in TAS 9 memory,TRUE,IN,E*T^-1,req,0,69.76089329,69.76089329,req/s,0,69.76089329,69.76089329,exponential,{'scale': 1/69.7608932926829}
+90,9,\\chi_{9},chi_tas_9,SOFTWARE,TAS 9 mean processing requests,Average time to complete a request in TAS 9,TRUE,CTRL,E*T^-1,s/req,0,58.05,58.05,req/s,0,58.05,58.05,exponential,{'scale': 1/58.05}
+91,9,\\mu_{9},mu_tas_9,SOFTWARE,TAS 9 mean in memory requests,Average time for a request to transit the buffer in TAS 9,TRUE,CTRL,E*T^-1,s/req,0,1580,1580,req/s,0,1580,1580,exponential,{'scale': 1/1580}
+92,9,s_{9},s_tas_9,SOFTWARE,TAS 9 mean time to answer,Data density for request in TAS 9 expected data per requests,TRUE,IN,E,req/s,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+93,9,K_{9},K_tas_9,SOFTWARE,TAS 9 mean time in buffer,Arrival rate for TAS 9,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+94,9,n_{9},n_tas_9,SOFTWARE,TAS 9 req data density,Departure rate for TAS 9,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+95,9,L_{9},L_tas_9,SOFTWARE,TAS 9 arrival rate,Service rate for TAS 9,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+96,9,Lq_{9},Lq_tas_9,SOFTWARE,TAS 9 departure rate,Number of resources allocated in TAS 9,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+97,9,W_{9},W_tas_9,SOFTWARE,TAS 9 arrival rate,Allocated request capacity in TAS 9 memory buffer,TRUE,OUT,T*E^-1,req,0,0.000662147,0.000662147,s/req,0,0.000662147,0.000662147,uniform,"{'low': 0', high': 0.000662146805468598}"
+98,9,Wq_{9},Wq_tas_9,SOFTWARE,TAS 9 departure rate,Number of requests in TAS 9 memory,FALSE,CTRL,T*E^-1,req,0,2.92E-05,2.92E-05,s/req,0,2.92354E-05,2.92354E-05,uniform,"{'low': 0', high': 2.92354130635357E-05}"
+99,9,\\delta_{9},delta_tas_9,SOFTWARE,TAS 9 service rate,Average number of request in TAS 9 component,TRUE,IN,D*E^-1,req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+100,10,\\lambda_{10},lambda_tas_10,SOFTWARE,TAS 10 resourses,Average number of request in TAS 10 memory,TRUE,IN,E*T^-1,s/req,0,256.1625,256.1625,req/s,0,256.1625,256.1625,exponential,{'scale': 1/256.1625}
+101,10,\\chi_{10},chi_tas_10,SOFTWARE,TAS 10 q-capacity,Average time to complete a request in TAS 10,TRUE,CTRL,E*T^-1,s/req,0,256.1625,256.1625,req/s,0,256.1625,256.1625,exponential,{'scale': 1/256.1625}
+102,10,\\mu_{10},mu_tas_10,SOFTWARE,TAS 10 requests,Average time for a request to transit the buffer in TAS 10,TRUE,CTRL,E*T^-1,req/s,0,700,700,req/s,0,700,700,exponential,{'scale': 1/700}
+103,10,s_{10},s_tas_10,SOFTWARE,TAS 10 mean processing requests,Data density for request in TAS 10 expected data per requests,TRUE,IN,E,req/s,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+104,10,K_{10},K_tas_10,SOFTWARE,TAS 10 mean in memory requests,Arrival rate for TAS 10,TRUE,CTRL,E,req/s,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+105,10,n_{10},n_tas_10,SOFTWARE,TAS 10 mean time to answer,Departure rate for TAS 10,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+106,10,L_{10},L_tas_10,SOFTWARE,TAS 10 mean time in buffer,Service rate for TAS 10,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+107,10,Lq_{10},Lq_tas_10,SOFTWARE,TAS 10 req data density,Number of resources allocated in TAS 10,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+108,10,W_{10},W_tas_10,SOFTWARE,TAS 10 arrival rate,Allocated request capacity in TAS 10 memory buffer,TRUE,OUT,T*E^-1,req,0,0.002253077,0.002253077,s/req,0,0.002253077,0.002253077,uniform,"{'low': 0', high': 0.00225307685808432}"
+109,10,Wq_{10},Wq_tas_10,SOFTWARE,TAS 10 departure rate,Arrival rate for TAS 10,FALSE,CTRL,T*E^-1,req,0,0.000824505,0.000824505,s/req,0,0.000824505,0.000824505,uniform,"{'low': 0', high': 0.000824505429512892}"
+110,10,\\delta_{10},delta_tas_10,SOFTWARE,TAS 10 service rate,Departure rate for TAS 10,TRUE,IN,D*E^-1,s/req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+111,11,\\lambda_{11},lambda_tas_11,SOFTWARE,TAS 11 resourses,Service rate for TAS 11,TRUE,IN,E*T^-1,s/req,0,177.9655263,177.9655263,req/s,0,177.9655263,177.9655263,exponential,{'scale': 1/177.965526315789}
+112,11,\\chi_{11},chi_tas_11,SOFTWARE,TAS 11 q-capacity,Number of resources allocated in TAS 11,TRUE,CTRL,E*T^-1,req/s,0,183.62,183.62,req/s,0,183.62,183.62,exponential,{'scale': 1/183.62}
+113,11,\\mu_{11},mu_tas_11,SOFTWARE,TAS 11 requests,Allocated request capacity in TAS 11 memory buffer,TRUE,CTRL,E*T^-1,req/s,0,550,550,req/s,0,550,550,exponential,{'scale': 1/550}
+114,11,s_{11},s_tas_11,SOFTWARE,TAS 11 mean processing requests,Number of requests in TAS 11 memory,TRUE,IN,E,req/s,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+115,11,K_{11},K_tas_11,SOFTWARE,TAS 11 mean in memory requests,Average number of request in TAS 11 component,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+116,11,n_{11},n_tas_11,SOFTWARE,TAS 11 mean time to answer,Average number of request in TAS 11 memory,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+117,11,L_{11},L_tas_11,SOFTWARE,TAS 11 mean time in buffer,Average time to complete a request in TAS 11,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+118,11,Lq_{11},Lq_tas_11,SOFTWARE,TAS 11 req data density,Average time for a request to transit the buffer in TAS 11,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+119,11,W_{11},W_tas_11,SOFTWARE,TAS 11 arrival rate,Data density for request in TAS 11 expected data per requests,TRUE,OUT,T*E^-1,req,0,0.002687923,0.002687923,s/req,0,0.002687923,0.002687923,uniform,"{'low': 0', high': 0.00268792294998129}"
+120,11,Wq_{11},Wq_tas_11,SOFTWARE,TAS 11 departure rate,Arrival rate for TAS 11,FALSE,CTRL,T*E^-1,s/req,0,0.000869741,0.000869741,s/req,0,0.000869741,0.000869741,uniform,"{'low': 0', high': 0.000869741131799472}"
+121,11,\\delta_{11},delta_tas_11,SOFTWARE,TAS 11 arrival rate,Departure rate for TAS 11,TRUE,IN,D*E^-1,s/req,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+122,12,\\lambda_{12},lambda_tas_12,SOFTWARE,TAS 12 departure rate,Service rate for TAS 12,TRUE,IN,E*T^-1,req/s,0,171.6117975,171.6117975,req/s,0,171.6117975,171.6117975,exponential,{'scale': 1/171.6117975}
+123,12,\\chi_{12},chi_tas_12,SOFTWARE,TAS 12 service rate,Number of resources allocated in TAS 12,TRUE,CTRL,E*T^-1,req/s,0,171.6117975,171.6117975,req/s,0,171.6117975,171.6117975,exponential,{'scale': 1/171.6117975}
+124,12,\\mu_{12},mu_tas_12,SOFTWARE,TAS 12 resourses,Allocated request capacity in TAS 12 memory buffer,TRUE,CTRL,E*T^-1,req/s,0,700,700,req/s,0,700,700,exponential,{'scale': 1/700}
+125,12,s_{12},s_tas_12,SOFTWARE,TAS 12 q-capacity,Number of requests in TAS 12 memory,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+126,12,K_{12},K_tas_12,SOFTWARE,TAS 12 requests,Average number of request in TAS 12 component,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+127,12,n_{12},n_tas_12,SOFTWARE,TAS 12 mean processing requests,Average number of request in TAS 12 memory,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+128,12,L_{12},L_tas_12,SOFTWARE,TAS 12 mean in memory requests,Average time to complete a request in TAS 12,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+129,12,Lq_{12},Lq_tas_12,SOFTWARE,TAS 12 mean time to answer,Average time for a request to transit the buffer in TAS 12,FALSE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+130,12,W_{12},W_tas_12,SOFTWARE,TAS 12 mean time in buffer,Data density for request in TAS 12 expected data per requests,TRUE,OUT,T*E^-1,s/req,0,0.001892548,0.001892548,s/req,0,0.001892548,0.001892548,uniform,"{'low': 0', high': 0.00189254793212382}"
+131,12,Wq_{12},Wq_tas_12,SOFTWARE,TAS 12 req data density,Arrival rate for TAS 12,FALSE,CTRL,T*E^-1,s/req,0,0.000463977,0.000463977,s/req,0,0.000463977,0.000463977,uniform,"{'low': 0', high': 0.000463976503552396}"
+132,12,\\delta_{12},delta_tas_12,SOFTWARE,TAS 12 arrival rate,Departure rate for TAS 12,TRUE,IN,D*E^-1,req/s,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
+133,13,\\lambda_{13},lambda_tas_13,SOFTWARE,TAS 13 departure rate,Service rate for TAS 13,TRUE,IN,E*T^-1,req/s,0,169.06725,169.06725,req/s,0,169.06725,169.06725,exponential,{'scale': 1/169.067249999999}
+134,13,\\chi_{13},chi_tas_13,SOFTWARE,TAS 13 service rate,Number of resources allocated in TAS 13,TRUE,CTRL,E*T^-1,req/s,0,169.06725,169.06725,req/s,0,169.06725,169.06725,exponential,{'scale': 1/169.067249999999}
+135,13,\\mu_{13},mu_tas_13,SOFTWARE,TAS 13 resourses,Allocated request capacity in TAS 13 memory buffer,TRUE,CTRL,E*T^-1,req,0,700,700,req/s,0,700,700,exponential,{'scale': 1/700}
+136,13,s_{13},s_tas_13,SOFTWARE,TAS 13 q-capacity,Arrival rate for TAS 13,TRUE,IN,E,req,0,1,1,req,0,1,1,uniform,"{'low': 0', high': 1}"
+137,13,K_{13},K_tas_13,SOFTWARE,TAS 13 requests,Departure rate for TAS 13,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,constant,{'constant':1000}
+138,13,n_{13},n_tas_13,SOFTWARE,TAS 13 mean processing requests,Service rate for TAS 13,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+139,13,L_{13},L_tas_13,SOFTWARE,TAS 13 mean in memory requests,Number of resources allocated in TAS 13,TRUE,CTRL,E,req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+140,13,Lq_{13},Lq_tas_13,SOFTWARE,TAS 13 mean time to answer,Allocated request capacity in TAS 13 memory buffer,FALSE,CTRL,E,s/req,0,1000,1000,req,0,1000,1000,uniform,"{'low': 0', high': 1000}"
+141,13,W_{13},W_tas_13,SOFTWARE,TAS 13 mean time in buffer,Number of requests in TAS 13 memory,TRUE,OUT,T*E^-1,s/req,0,0.001883478,0.001883478,s/req,0,0.001883478,0.001883478,uniform,"{'low': 0', high': 0.0018834777097476}"
+142,13,Wq_{13},Wq_tas_13,SOFTWARE,TAS 13 req data density,Average number of request in TAS 13 component,FALSE,CTRL,T*E^-1,req/s,0,0.000454906,0.000454906,s/req,0,0.000454906,0.000454906,uniform,"{'low': 0', high': 0.00045490628117618}"
+143,13,\\delta_{13},delta_tas_13,SOFTWARE,TAS 13 arrival rate,Average number of request in TAS 13 memory,TRUE,IN,D*E^-1,req/s,128,1000,564,bit/req,131072000,1000,564,uniform,"{'low': 131072000', high': 1000}"
