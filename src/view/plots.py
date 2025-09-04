@@ -325,7 +325,7 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
     # plt.cla()
 
 
-def plot_net_comparison(delta_metrics: pd.DataFrame,
+def plot_net_difference(delta_metrics: pd.DataFrame,
                         metrics: list[str] = None,
                         labels: list[str] = None,
                         title: str = None,
@@ -366,6 +366,147 @@ def plot_net_comparison(delta_metrics: pd.DataFrame,
     # Extract values for plotting
     # Convert to percentages
     values = delta_metrics[metrics].iloc[0].values * 100
+    _green = "#4CAF50"      # light green
+    _red = "#FF5252"        # light red
+
+    # Create color bars based on improvement (negative is good for most metrics)
+    colors = [_green if x < 0 else _red for x in values]
+
+    # For throughput, positive is good (more throughput is better)
+    if values[-1] > 0:
+        colors[-1] = _green
+    elif values[-1] < 0:
+        colors[-1] = _red
+
+    # Create the bar chart
+    bars = ax.bar(range(len(metrics)), values, color=colors)
+
+    # Add value labels on top of bars
+    for i, bar in enumerate(bars):
+        # height = bar.get_height()
+        # label_position = height + 1 if height >= 0 else height - 5
+        height = bar.get_height()
+        y_pos = height / 2 if height >= 0 else height / 2  # Middle of the bar
+
+        ax.text(bar.get_x() + bar.get_width() / 2.,
+                y_pos,
+                f"{values[i]:.2f}%",
+                color="black",
+                fontweight="light",
+                fontsize=10,
+                ha="center",
+                va="bottom"
+                if height >= 0 else "top")
+
+    # Add a horizontal line at y=0
+    ax.axhline(y=0, color="black", linestyle="-", alpha=0.3)
+
+    # Set labels and title
+    ax.set_xticks(range(len(metrics)))
+    ax.set_xticklabels([metric_labels[m] for m in metrics],
+                       rotation=30,
+                       ha="right")
+    ax.set_ylabel("Porcentual Change (%)")
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=20)
+
+    # Add grid lines for better readability
+    ax.grid(axis="y", linestyle="--", alpha=0.7)
+
+    # Set y-axis limit to provide some padding
+    y_min = min(min(values) * 1.1, -2)  # At least -2% or 10% below minimum
+    y_max = max(max(values) * 1.1, 2)   # At least 2% or 10% above maximum
+    ax.set_ylim(y_min, y_max)
+
+    # Add a legend directly in the plot area
+    legend_elements = [
+        plt.Rectangle((0, 0),
+                      1, 1,
+                      facecolor=_green,
+                      alpha=0.8,
+                      label="Improvement"),
+        plt.Rectangle((0, 0),
+                      1, 1,
+                      facecolor=_red,
+                      alpha=0.8,
+                      label="Degradation")
+    ]
+    ax.legend(handles=legend_elements, loc="best")
+
+    # Add some padding at the bottom for the rotated labels
+    plt.subplots_adjust(bottom=0.15)
+
+    # Show plot
+    plt.tight_layout()
+
+    # Save with white background if needed
+    if file_path and fname:
+        # Create directory if it doesn't exist
+        os.makedirs(file_path, exist_ok=True)
+
+        # Construct full file path
+        full_file_path = os.path.join(file_path, fname)
+
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path,
+                        facecolor="white",
+                        bbox_inches="tight",
+                        dpi=300)    # format="png")  # Explicitly set format
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            _msg = f"Error saving plot: {e}.\n"
+            _msg += "File path or file name not provided, skipping save. "
+            _msg += f"{_msg} file_path: {file_path}, fname: {fname}"
+            raise ValueError(_msg)
+    plt.show()
+    plt.close()
+    # plt.clf()
+    # plt.cla()
+
+
+def plot_net_comparison(net_metrics: list[pd.DataFrame],
+                        names: list[str],
+                        metrics: list[str] = None,
+                        labels: list[str] = None,
+                        title: str = None,
+                        file_path: str = None,
+                        fname: str = None) -> None:
+    """Plot a metrics comparison between two or more states at system wide level.
+
+    Args:
+        net_metrics (pd.DataFrame): DataFrame containing the metrics to compare.
+        metrics (list[str], optional): List of metrics to include in the comparison. Defaults to None.
+        labels (list[str], optional): List of labels for the metrics. Defaults to None.
+        title (str, optional): Title of the plot. Defaults to None.
+        file_path (str, optional): Directory path to save the plot. Defaults to None.
+        fname (str, optional): File name for the saved plot. Defaults to None.
+
+    Raises:
+        ValueError: If the plot cannot be saved.
+    """
+    # setting default values
+    if metrics is None:
+        # Select only numeric columns if metrics not specified
+        metrics = net_metrics.select_dtypes(include="number")
+        metrics = metrics.columns.tolist()
+
+    if labels is None:
+        labels = metrics
+
+    if title is None:
+        title = "Default Metrics Comparison"
+
+    # creating plot labels
+    metric_labels = dict(zip(metrics, labels))
+
+    # Create the figure and axis
+    fig, ax = plt.subplots(figsize=(12, 7))
+    fig.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    # Extract values for plotting
+    # Convert to percentages
+    values = net_metrics[metrics].iloc[0].values * 100
     _green = "#4CAF50"      # light green
     _red = "#FF5252"        # light red
 
