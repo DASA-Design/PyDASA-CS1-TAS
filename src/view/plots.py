@@ -475,6 +475,7 @@ def plot_net_comparison(net_metrics: list[pd.DataFrame],
 
     Args:
         net_metrics (pd.DataFrame): DataFrame containing the metrics to compare.
+        names (list[str]): List of names for the different states being compared.
         metrics (list[str], optional): List of metrics to include in the comparison. Defaults to None.
         labels (list[str], optional): List of labels for the metrics. Defaults to None.
         title (str, optional): Title of the plot. Defaults to None.
@@ -484,100 +485,162 @@ def plot_net_comparison(net_metrics: list[pd.DataFrame],
     Raises:
         ValueError: If the plot cannot be saved.
     """
-    # setting default values
+    # Validate inputs
+    if not isinstance(net_metrics, list) or len(net_metrics) == 0:
+        _msg = "net_metrics must be a non-empty list of DataFrames"
+        raise ValueError(_msg)
+
+    if not isinstance(names, list) or len(names) != len(net_metrics):
+        _msg = "names must be a list with same length as net_metrics"
+        raise ValueError(_msg)
+
+    # Setting default values
     if metrics is None:
         # Select only numeric columns if metrics not specified
-        metrics = net_metrics.select_dtypes(include="number")
+        metrics = net_metrics[0].select_dtypes(include="number")
         metrics = metrics.columns.tolist()
 
     if labels is None:
         labels = metrics
 
     if title is None:
-        title = "Default Metrics Comparison"
+        title = "Network Metrics Comparison"
 
-    # creating plot labels
-    metric_labels = dict(zip(metrics, labels))
-
-    # Create the figure and axis
-    fig, ax = plt.subplots(figsize=(12, 7))
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(max(12, len(metrics) * 1.5), 8))
     fig.set_facecolor("white")
     ax.set_facecolor("white")
 
-    # Extract values for plotting
-    # Convert to percentages
-    values = net_metrics[metrics].iloc[0].values * 100
-    _green = "#4CAF50"      # light green
-    _red = "#FF5252"        # light red
+    # Total width for each group of bars
+    group_w = 1.2
 
-    # Create color bars based on improvement (negative is good for most metrics)
-    colors = [_green if x < 0 else _red for x in values]
+    # Width of each individual bar (make this smaller for thinner bars)
+    # Halved to make thinner bars
+    bar_w = group_w / (len(net_metrics) * 1.3)
 
-    # For throughput, positive is good (more throughput is better)
-    if values[-1] > 0:
-        colors[-1] = _green
-    elif values[-1] < 0:
-        colors[-1] = _red
+    # Spacing between bars within a group (increase for more space)
+    bar_space = bar_w * 0.2  # 20% of bar width
 
-    # Create the bar chart
-    bars = ax.bar(range(len(metrics)), values, color=colors)
+    # Calculate spacing between metric groups (increased for more separation)
+    group_space = 1.5  # Larger value = more space between metric groups
 
-    # Add value labels on top of bars
-    for i, bar in enumerate(bars):
-        # height = bar.get_height()
-        # label_position = height + 1 if height >= 0 else height - 5
-        height = bar.get_height()
-        y_pos = height / 2 if height >= 0 else height / 2  # Middle of the bar
+    # Set position of bars on X axis with wider spacing between groups
+    positions = []
+    for i in range(len(net_metrics)):
+        if i == 0:
+            # First bar in each group starts at group_space * index
+            positions.append([j * group_space for j in range(len(metrics))])
+        else:
+            # Next bars positioned with spacing between them
+            positions.append([x + bar_w + bar_space for x in positions[i - 1]])
 
-        ax.text(bar.get_x() + bar.get_width() / 2.,
-                y_pos,
-                f"{values[i]:.2f}%",
-                color="black",
-                fontweight="light",
-                fontsize=10,
-                ha="center",
-                va="bottom"
-                if height >= 0 else "top")
+    # Define colormap for consistent colors
+    cmap = plt.cm.get_cmap("tab10", len(net_metrics))
+    # cmap = ['#e63946', '#4895ef']  # Bright red to calm blue
+
+    # Make the plot
+    for i, (df, name) in enumerate(zip(net_metrics, names)):
+        # Extract values - ensure we use only existing metrics
+        values = []
+        for m in metrics:
+            if m in df.columns:
+                values.append(df[m].iloc[0])
+            else:
+                values.append(np.nan)
+
+        # Plot bars
+        ax.bar(
+            positions[i],
+            values,
+            width=bar_w,
+            label=name,
+            color=cmap(i),
+            alpha=0.85,
+            edgecolor="black",
+            linewidth=0.5
+        )
+
+        # Add value annotations on top of bars
+        for j, value in enumerate(values):
+            if not np.isnan(value):
+                if abs(value) < 0.01:
+                    text = f"{value:.2e}"   # Scientific for very small values
+                elif abs(value) < 1:
+                    text = f"{value:.3f}"   # 3 decimals for small values
+                elif abs(value) > 10000:
+                    text = f"{value:.2e}"   # Scientific for very large values
+                else:
+                    text = f"{value:.2f}"   # 2 decimals for normal values
+
+                # POSITIONING LOGIC: Inside bar for values >= 1, on top for values < 1
+                text_color = "black"  # Black text inside colored bar
+                if abs(value) >= 1:  # Large values - place text INSIDE the bar
+                    if value > 0:
+                        y_pos = float(value / 3)  # Middle of the bar
+                        va_pos = "center"
+                        bbox_props = None
+                    else:
+                        # For negative values, still place on top since inside would be below axis
+                        y_pos = float(value * 1.05)
+                        va_pos = "top"
+                        bbox_props = dict(boxstyle="round,pad=0.2",
+                                          fc="white",
+                                          ec="none",
+                                          alpha=0.7)
+                else:  # Small values - place text ON TOP of the bar
+                    if value > 0:
+                        y_pos = float(value * 1.1)  # 10% above bar
+                        va_pos = "bottom"
+                    else:
+                        y_pos = float(value * 1.1)  # 10% below for negative
+                        va_pos = "top"
+                    bbox_props = dict(boxstyle="round,pad=0.2",
+                                      fc="white",
+                                      ec="none",
+                                      alpha=0.7)
+
+                # Add text annotation with smart positioning
+                ax.text(positions[i][j],
+                        y_pos,
+                        text,
+                        ha="center",
+                        va=va_pos,
+                        fontsize=12,
+                        rotation=90,
+                        fontweight="light",
+                        color=text_color,
+                        bbox=bbox_props)
 
     # Add a horizontal line at y=0
-    ax.axhline(y=0, color="black", linestyle="-", alpha=0.3)
-
-    # Set labels and title
-    ax.set_xticks(range(len(metrics)))
-    ax.set_xticklabels([metric_labels[m] for m in metrics],
-                       rotation=30,
-                       ha="right")
-    ax.set_ylabel("Porcentual Change (%)")
+    ax.axhline(y=0, color="black", linestyle="-", alpha=0.6)
+    # Set y-axis to log scale
+    ax.set_yscale("log")
+    # Add labels, title and axis ticks
+    # ax.set_xlabel("Metrics", fontweight="bold", labelpad=10)
+    ax.set_ylabel("Values (Log scale)", fontweight="bold")
     ax.set_title(title, fontsize=14, fontweight="bold", pad=20)
 
-    # Add grid lines for better readability
+    # Set the position of the x ticks - centered for each metric group
+    # INSANE LIST COMPREHENSION!!!
+    center_positions = [positions[0][i] + (positions[-1][i] - positions[0][i]) / 2 for i in range(len(metrics))]
+
+    ax.set_xticks(center_positions)
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+
+    # Add grid for better readability
     ax.grid(axis="y", linestyle="--", alpha=0.7)
 
-    # Set y-axis limit to provide some padding
-    y_min = min(min(values) * 1.1, -2)  # At least -2% or 10% below minimum
-    y_max = max(max(values) * 1.1, 2)   # At least 2% or 10% above maximum
-    ax.set_ylim(y_min, y_max)
-
-    # Add a legend directly in the plot area
-    legend_elements = [
-        plt.Rectangle((0, 0),
-                      1, 1,
-                      facecolor=_green,
-                      alpha=0.8,
-                      label="Improvement"),
-        plt.Rectangle((0, 0),
-                      1, 1,
-                      facecolor=_red,
-                      alpha=0.8,
-                      label="Degradation")
-    ]
-    ax.legend(handles=legend_elements, loc="best")
+    # Add legend
+    ax.legend(loc="upper center",
+              frameon=True,
+              fancybox=True,
+              shadow=True)
 
     # Add some padding at the bottom for the rotated labels
     plt.subplots_adjust(bottom=0.15)
 
-    # Show plot
-    plt.tight_layout()
+    # Ensure tight layout
+    fig.tight_layout()
 
     # Save with white background if needed
     if file_path and fname:
@@ -592,21 +655,18 @@ def plot_net_comparison(net_metrics: list[pd.DataFrame],
             fig.savefig(full_file_path,
                         facecolor="white",
                         bbox_inches="tight",
-                        dpi=300)    # format="png")  # Explicitly set format
+                        dpi=300)
             print(f"Plot saved successfully to: {full_file_path}")
         except Exception as e:
             _msg = f"Error saving plot: {e}.\n"
-            _msg += "File path or file name not provided, skipping save. "
-            _msg += f"{_msg} file_path: {file_path}, fname: {fname}"
+            _msg += f"File path: {file_path}, fname: {fname}"
             raise ValueError(_msg)
+
     plt.show()
-    plt.close()
-    # plt.clf()
-    # plt.cla()
+    plt.close(fig)
 
 
-# Add this function to your plots.py file
-def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
+def plot_nodes_diffmap(delta_metrics: pd.DataFrame,
                        nodes: list[str],
                        metrics: list[str] = None,
                        labels: list[str] = None,
@@ -683,7 +743,7 @@ def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
 
     # Create the heatmap
     im = ax.imshow(heatmap_data,
-                   cmap="PiYG",   # "RdYlGn",
+                   cmap="viridis",   # "RdYlGn",
                    aspect="auto",
                    vmin=vmin,
                    vmax=vmax)
@@ -763,3 +823,49 @@ def plot_nodes_heatmap(delta_metrics: pd.DataFrame,
 
     plt.show()
     plt.close()
+
+
+def plot_nodes_heatmap(net_metrics: list[pd.DataFrame],
+                       names: list[str],
+                       nodes: list[str],
+                       metrics: list[str] = None,
+                       labels: list[str] = None,
+                       title: str = None,
+                       cname: str = "name",
+                       file_path: str = None,
+                       fname: str = None) -> None:
+    # Setting default values
+    if metrics is None:
+        # Select only numeric columns if metrics not specified
+        metrics = net_metrics[0].select_dtypes(include="number")
+        metrics = metrics.columns.tolist()
+
+    if labels is None:
+        labels = metrics
+
+    if title is None:
+        title = "Metrics Heatmap"
+
+    # Check if the node name column exists in all dataframes
+    if not all(cname in df.columns for df in net_metrics):
+        _msg = f"Node name column '{cname}' not found in all DataFrames"
+        raise ValueError(_msg)
+
+    # Check if all metric columns are in all the dataframes
+    if not all(set(metrics).issubset(df.columns) for df in net_metrics):
+        missing_cols = set(metrics) - set(net_metrics[0].columns)
+        _msg = f"Missing metric columns in DataFrames: {missing_cols}"
+        raise ValueError(_msg)
+
+    # iterate to 1st filter by node names
+    filter_lt = []
+    for df in net_metrics:
+        node_filter = df[cname].isin(nodes)
+        filtered_data = df[node_filter]
+        filter_lt.append(filtered_data)
+
+    # Concatenate all filtered data
+    # filtered_data = pd.concat(filter_lt, ignore_index=True)
+
+    # plt.show()
+    # plt.close()
