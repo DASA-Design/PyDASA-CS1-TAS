@@ -4,7 +4,7 @@ import os
 # Third-party imports
 import numpy as np
 import pandas as pd
-# import seaborn as sns
+import seaborn as sns
 import networkx as nx
 import matplotlib.pyplot as plt
 
@@ -834,38 +834,152 @@ def plot_nodes_heatmap(net_metrics: list[pd.DataFrame],
                        cname: str = "name",
                        file_path: str = None,
                        fname: str = None) -> None:
+    """*plot_nodes_heatmap()* plot a heatmap comparing metrics across multiple configurations for each component in the system.
+
+    Args:
+        net_metrics (list[pd.DataFrame]): List of DataFrames containing metrics
+        names (list[str]): Names for each DataFrame in the list
+        nodes (list[str]): List of node names to include in the heatmap
+        metrics (list[str], optional): List of metrics to compare. Defaults to all numeric columns.
+        labels (list[str], optional): Custom labels for the metrics. Defaults to metric names.
+        title (str, optional): Title of the plot. Defaults to "Node Metrics Heatmap Comparison".
+        cname (str, optional): Column name containing node names. Defaults to "name".
+        file_path (str, optional): Directory path to save the plot. Defaults to None.
+        fname (str, optional): Filename to save the plot. Defaults to None.
+
+    Raises:
+        ValueError: if net metrics is empty or is not a list.
+        ValueError: if names is empty or does not match net metrics.
+    """
+
+    # Input validation
+    if not isinstance(net_metrics, list) or len(net_metrics) == 0:
+        _msg = f"Invalid type input: {type(net_metrics)}"
+        _msg += " - net_metrics must be a non-empty list of DataFrames"
+        raise ValueError(_msg)
+
+    if not isinstance(names, list) or len(names) != len(net_metrics):
+        _msg = f"Names list length ({len(names)}) "
+        _msg += f"must match DataFrames list length ({len(net_metrics)})"
+        raise ValueError(_msg)
+
     # Setting default values
     if metrics is None:
-        # Select only numeric columns if metrics not specified
         metrics = net_metrics[0].select_dtypes(include="number")
         metrics = metrics.columns.tolist()
+        if "node" in metrics:
+            metrics.remove("node")
 
     if labels is None:
         labels = metrics
 
     if title is None:
-        title = "Metrics Heatmap"
+        title = "Node Metrics Heatmap Comparison"
 
-    # Check if the node name column exists in all dataframes
-    if not all(cname in df.columns for df in net_metrics):
-        _msg = f"Node name column '{cname}' not found in all DataFrames"
-        raise ValueError(_msg)
+    n_configs = len(net_metrics)
+    fig, axes = plt.subplots(n_configs,
+                             1,
+                             figsize=(12, 4 * n_configs),
+                             sharex=True,
+                             constrained_layout=True)
+    if n_configs == 1:
+        axes = [axes]
 
-    # Check if all metric columns are in all the dataframes
-    if not all(set(metrics).issubset(df.columns) for df in net_metrics):
-        missing_cols = set(metrics) - set(net_metrics[0].columns)
-        _msg = f"Missing metric columns in DataFrames: {missing_cols}"
-        raise ValueError(_msg)
+    # Calculate per-metric min/max across all configs and nodes
+    metric_minmax = {}
+    for metric in metrics:
+        vals = []
+        for df in net_metrics:
+            df = df[df[cname].isin(nodes)]
+            df = df[metric].dropna().values
+            vals.extend(df)
+            # vals.extend(df[df[cname].isin(nodes)][metric].dropna().values)
+        metric_minmax[metric] = (np.min(vals), np.max(vals))
 
-    # iterate to 1st filter by node names
-    filter_lt = []
-    for df in net_metrics:
+    # OLD colormap
+    # colors = [(0, 0, 0.9), (1, 1, 1), (0.9, 0, 0)]
+    # cmap = LinearSegmentedColormap.from_list('BlueWhiteRed', colors, N=100)
+    # CURRENT colormap
+    cmap = "viridis"
+
+    # for i, (df, name, ax) in enumerate(zip(net_metrics, names, axes)):
+    for df, name, ax in zip(net_metrics, names, axes):
         node_filter = df[cname].isin(nodes)
-        filtered_data = df[node_filter]
-        filter_lt.append(filtered_data)
+        filtered_df = df[node_filter].copy()
+        if filtered_df.empty:
+            ax.text(0.5,
+                    0.5,
+                    f"No data for {name}",
+                    ha="center",
+                    fontsize=14)
+            # continue
 
-    # Concatenate all filtered data
-    # filtered_data = pd.concat(filter_lt, ignore_index=True)
+        plot_data = []
+        for node in nodes:
+            if node in filtered_df[cname].values:
+                node_row = filtered_df[filtered_df[cname] == node]
+                row_data = [node]
+                for metric in metrics:
+                    if metric in node_row.columns:
+                        val = node_row[metric].iloc[0]
+                        row_data.append(val)
+                    else:
+                        row_data.append(np.nan)
+                plot_data.append(row_data)
+        if not plot_data:
+            ax.text(0.5,
+                    0.5,
+                    f"No matching nodes found for {name}",
+                    ha="center",
+                    fontsize=14)
+            # continue
 
-    # plt.show()
-    # plt.close()
+        plot_df = pd.DataFrame(plot_data, columns=[cname] + metrics)
+        plot_df.set_index(cname, inplace=True)
+
+        # Normalize each column independently
+        norm_df = plot_df.copy()
+        for metric in metrics:
+            min_val, max_val = metric_minmax[metric]
+            if max_val > min_val:
+                _range = max_val - min_val
+                norm_df[metric] = (plot_df[metric] - min_val) / _range
+            else:
+                norm_df[metric] = 0.5  # If all values are the same
+
+        # Plot normalized heatmap
+        sns.heatmap(norm_df,
+                    ax=ax,
+                    cmap=cmap,
+                    center=0.5,
+                    vmin=0,
+                    vmax=1,
+                    annot=plot_df,
+                    fmt=".3e",
+                    linewidths=0.5,
+                    cbar_kws={"shrink": 0.8})
+
+        ax.set_title(f"{name} Component Metrics", fontsize=14, pad=10)
+        plt.setp(ax.get_xticklabels(),
+                 rotation=45,
+                 ha="right",
+                 rotation_mode="anchor")
+        ax.set_xticklabels(labels)
+
+    # Add overall title
+    fig.suptitle(title, fontsize=16, fontweight="bold")
+
+    # Save figure if requested
+    if file_path and fname:
+        os.makedirs(file_path, exist_ok=True)
+        full_file_path = os.path.join(file_path, fname)
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            raise ValueError(
+                f"Error saving plot: {e}. File path: {file_path}, fname: {fname}")
+
+    plt.show()
+    plt.close(fig)
