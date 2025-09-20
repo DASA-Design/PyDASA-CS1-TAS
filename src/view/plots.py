@@ -983,3 +983,81 @@ def plot_nodes_heatmap(net_metrics: list[pd.DataFrame],
 
     plt.show()
     plt.close(fig)
+
+
+def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
+                                range_vals: list[float],
+                                range_label: str,
+                                metrics: list[str] = None,
+                                labels: list[str] = None,
+                                title: str = None,
+                                file_path: str = None,
+                                fname: str = None) -> None:
+    """*plot_performance_coef_chart()* plot a dimensionless tren chart for system performance.
+
+    Args:
+        pi_coefs (pd.DataFrame): _description_
+        metrics (list[str], optional): _description_. Defaults to None.
+        labels (list[str], optional): _description_. Defaults to None.
+        title (str, optional): _description_. Defaults to None.
+        file_path (str, optional): _description_. Defaults to None.
+        fname (str, optional): _description_. Defaults to None.
+
+    Raises:
+        ValueError: _description_
+    """
+    # Input validation
+    if not isinstance(pi_coefs, pd.DataFrame):
+        _msg = f"Invalid type input: {type(pi_coefs)}"
+        _msg += " - pi_coefs must be a DataFrame"
+        raise ValueError(_msg)
+
+    # check for a list of numbers for regresion range
+    if all(not isinstance(x, (int, float)) for x in range_vals):
+        _msg = f"Invalid type input: {type(range_vals)}"
+        _msg += " - range_vals must be a list of numbers"
+        raise ValueError(_msg)
+
+    # check for a string in the regression label
+    if not isinstance(range_label, str):
+        _msg = f"Invalid type input: {type(range_label)}"
+        _msg += " - range_label must be a string"
+        raise ValueError(_msg)
+
+    # check for a list of strings for metrics labels
+    if not isinstance(metrics, list) or len(labels) != len(metrics):
+        _msg = f"Labels list length ({len(labels)}) "
+        _msg += f"must match DataFrames list length ({len(metrics)})"
+        raise ValueError(_msg)
+
+    # Setting default values
+    if metrics is None:
+        metrics = pi_coefs[0].select_dtypes(include="number")
+        metrics = metrics.columns.tolist()
+        if "node" in metrics:
+            metrics.remove("node")
+
+    if labels is None:
+        labels = metrics
+
+    if title is None:
+        title = "System's Performance Dimensionless Chart."
+
+    # Figure setup with appropriate size, resolution and white background
+    fig, ax = plt.subplots(figsize=(12, 9), dpi=300, facecolor="white")
+    ax.set_facecolor("white")
+
+    # Save figure if requested
+    if file_path and fname:
+        os.makedirs(file_path, exist_ok=True)
+        full_file_path = os.path.join(file_path, fname)
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            raise ValueError(
+                f"Error saving plot: {e}. File path: {file_path}, fname: {fname}")
+
+    plt.show()
+    plt.close(fig)
