@@ -152,7 +152,7 @@ def simulate_network(miu, lambda0, P, s=None, K=None, sim_time=5000):
     if s is None:
         s = [1] * len(miu)
     if K is None:
-        K = [float('inf')] * len(miu)
+        K = [float("inf")] * len(miu)
 
     env = simpy.Environment()
     results = [[] for _ in range(len(miu))]
@@ -185,9 +185,10 @@ def simulate_network(miu, lambda0, P, s=None, K=None, sim_time=5000):
         # Record the final state duration
         time_delta = sim_time - node.last_event_time
         if time_delta > 0:
-            node.queue_len_data.append((node.current_queue_length, time_delta))
-            node.system_len_data.append(
-                (node.current_system_length, time_delta))
+            node.queue_len_data.append((node.current_queue_length,
+                                        time_delta))
+            node.system_len_data.append((node.current_system_length,
+                                         time_delta))
 
     # Calculate metrics for each node
     sim_metrics = []
