@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 # for plotting refined dimensionless chart
 # from matplotlib.colors import LinearSegmentedColormap
 # from scipy.stats import binned_statistic_2d
-# import matplotlib.ticker as ticker
+import matplotlib.ticker as ticker
 
 # Set global style for white background and black text
 plt.rcParams.update({
@@ -126,11 +126,11 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
                            ax=ax_graph)
 
     # Draw edge labels
-    edge_labels = {(i, j): f"{rout_matrix[i, j]:.2f}"
-                   for i, j in G.edges() if rout_matrix[i, j] > 0.01}
+    edge_lbl = {(i, j): f"{rout_matrix[i, j]:.2f}"
+                for i, j in G.edges() if rout_matrix[i, j] > 0.01}
     nx.draw_networkx_edge_labels(G,
                                  pos,
-                                 edge_labels=edge_labels,
+                                 edge_labels=edge_lbl,
                                  font_size=11,
                                  font_color="black",
                                  font_weight="light",
@@ -356,7 +356,7 @@ def plot_net_difference(delta_metrics: pd.DataFrame,
         title = "Default Metrics Comparison"
 
     # creating plot labels
-    metric_labels = dict(zip(metrics, labels))
+    metric_lbl = dict(zip(metrics, labels))
 
     # Create the figure and axis
     fig, ax = plt.subplots(figsize=(12, 7))
@@ -403,7 +403,7 @@ def plot_net_difference(delta_metrics: pd.DataFrame,
 
     # Set labels and title
     ax.set_xticks(range(len(metrics)))
-    ax.set_xticklabels([metric_labels[m] for m in metrics],
+    ax.set_xticklabels([metric_lbl[m] for m in metrics],
                        rotation=30,
                        ha="right")
     ax.set_ylabel("Porcentual Change (%)")
@@ -986,17 +986,19 @@ def plot_nodes_heatmap(net_metrics: list[pd.DataFrame],
 
 
 def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
-                                range_vals: list[float],
-                                range_label: str,
+                                contour_lbl: str,
+                                contour_vals: list[float] = None,
                                 metrics: list[str] = None,
                                 labels: list[str] = None,
                                 title: str = None,
                                 file_path: str = None,
                                 fname: str = None) -> None:
-    """*plot_performance_coef_chart()* plot a dimensionless tren chart for system performance.
+    """*plot_performance_coef_chart()* _summary_
 
     Args:
         pi_coefs (pd.DataFrame): _description_
+        contour_lbl (str): _description_
+        contour_vals (list[float], optional): _description_. Defaults to None.
         metrics (list[str], optional): _description_. Defaults to None.
         labels (list[str], optional): _description_. Defaults to None.
         title (str, optional): _description_. Defaults to None.
@@ -1005,6 +1007,11 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
     Raises:
         ValueError: _description_
+        ValueError: _description_
+        ValueError: _description_
+        ValueError: _description_
+        ValueError: _description_
+        ValueError: _description_
     """
     # Input validation
     if not isinstance(pi_coefs, pd.DataFrame):
@@ -1012,33 +1019,48 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
         _msg += " - pi_coefs must be a DataFrame"
         raise ValueError(_msg)
 
-    # check for a list of numbers for regresion range
-    if all(not isinstance(x, (int, float)) for x in range_vals):
-        _msg = f"Invalid type input: {type(range_vals)}"
-        _msg += " - range_vals must be a list of numbers"
+    # check for a string in the contour label
+    if not isinstance(contour_lbl, str):
+        _msg = f"Invalid type input: {type(contour_lbl)}"
+        _msg += " - contour_lbl must be a string"
         raise ValueError(_msg)
 
-    # check for a string in the regression label
-    if not isinstance(range_label, str):
-        _msg = f"Invalid type input: {type(range_label)}"
-        _msg += " - range_label must be a string"
+    # check if the contour label is in the dataframe
+    if contour_lbl not in pi_coefs.columns.tolist():
+        _msg = f"Invalid contour label: {contour_lbl} "
+        _msg += "is not in coefficient data, provided labels: "
+        _msg += f"{pi_coefs.columns.tolist()}"
         raise ValueError(_msg)
 
-    # check for a list of strings for metrics labels
-    if not isinstance(metrics, list) or len(labels) != len(metrics):
-        _msg = f"Labels list length ({len(labels)}) "
-        _msg += f"must match DataFrames list length ({len(metrics)})"
-        raise ValueError(_msg)
-
-    # Setting default values
+    # Setting default numeric metric names
     if metrics is None:
-        metrics = pi_coefs[0].select_dtypes(include="number")
+        metrics = pi_coefs.select_dtypes(include="number")
         metrics = metrics.columns.tolist()
         if "node" in metrics:
             metrics.remove("node")
 
+    # set default labels
     if labels is None:
         labels = metrics
+
+    # check for metrics and labels to be useful
+    elif not isinstance(metrics, list) or len(labels) != len(metrics):
+        _msg = f"Labels list length ({len(labels)}) "
+        _msg += f"must match DataFrames list length ({len(metrics)})"
+        raise ValueError(_msg)
+
+    # if contour values is none create one based on the contour label
+    if contour_vals is None:
+        _start = pi_coefs[contour_lbl].min()
+        _end = pi_coefs[contour_lbl].max()
+        contour_vals = np.linspace(_start, _end, num=10).tolist()
+        print(f"Contour values not provided, using: {contour_vals}")
+
+    # check for a list of numbers for regresion range
+    elif all(not isinstance(x, (int, float)) for x in contour_vals):
+        _msg = f"Invalid type input: {type(contour_vals)}"
+        _msg += " - contour_vals must be a list of numbers"
+        raise ValueError(_msg)
 
     if title is None:
         title = "System's Performance Dimensionless Chart."
@@ -1046,6 +1068,139 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     # Figure setup with appropriate size, resolution and white background
     fig, ax = plt.subplots(figsize=(12, 9), dpi=300, facecolor="white")
     ax.set_facecolor("white")
+
+    # get x, y, and z coefficients
+    pi_x = metrics[0]       # occupancy coefficient for x-axis
+    pi_y = metrics[1]       # congestion coefficient for y-axis
+    pi_z = metrics[2]       # available buffer coefficient for z-axis, contour
+
+    # create color scale
+    _colors = plt.cm.coolwarm(np.linspace(0, 1, len(contour_vals)))
+    # alts: viridis_r, plasma, inferno, magma, cividis, coolwarm, Spectral
+
+    # Add hexbin background to show data density (like Moody chart)
+    # TODO is not wokung, fix!
+    hb = plt.hexbin(
+        pi_coefs[pi_x],
+        pi_coefs[pi_y],
+        gridsize=20,
+        cmap="Greens",
+        alpha=0.1,
+        mincnt=1,
+        reduce_C_function=np.mean
+    )
+
+    # colorbar to show point density
+    fig.colorbar(hb,
+                 ax=ax,
+                 shrink=0.8,
+                 label="Data Density")
+
+    # Plot characteristic curves for different utilization ranges
+    for i, ctr in enumerate(contour_vals):
+        # Filter data near this utilization value
+        _min = (pi_coefs[pi_z] >= ctr - 0.05)
+        _max = (pi_coefs[pi_z] <= ctr + 0.05)
+        subset = pi_coefs[(_min & _max)]
+
+        # Only draw if we have enough points
+        if len(subset) > 50:
+            # Sort by x-value for smooth curves
+            subset = subset.sort_values(by=pi_x)
+
+            # Create a polynomial fit at log scale
+            if len(subset) > 10:
+                log_x = np.log10(subset[pi_x])
+                log_y = np.log10(subset[pi_y])
+                # 3rd degree works well for most curves
+                z = np.polyfit(log_x, log_y, 3)
+                p = np.poly1d(z)
+
+                # Create smooth x values for the line
+                _min_log = np.log10(subset[pi_x].min())
+                _max_log = np.log10(subset[pi_x].max())
+                x_smooth = np.logspace(_min_log, _max_log, 100)
+
+                # Calculate predicted y values (convert back from log space)
+                y_smooth = 10**p(np.log10(x_smooth))
+
+                # Plot the trend line
+                plt.plot(x_smooth,
+                         y_smooth,
+                         "-",
+                         linewidth=1.25,
+                         alpha=1.0,
+                         color=_colors[i],
+                         label=f"{contour_lbl} = {ctr:.2f}")
+
+    # Set up log scales (standard for Moody-like charts)
+    plt.xscale("log")
+    plt.yscale("log")
+
+    # Adjust these values as needed to get the desired range
+    y_min = pi_coefs[pi_y].quantile(0.05)  # Use 5th percentile as min
+    y_max = pi_coefs[pi_y].quantile(0.95)  # Use 95th percentile as max
+    plt.ylim(y_min, y_max)
+
+    # Add grid with minor lines, lighter color for better visibility
+    plt.grid(True, which="both", ls="-", color="lightgray", alpha=0.75)
+    plt.grid(True, which="minor", ls=":", color="lightgray", alpha=0.75)
+    plt.minorticks_on()
+
+    # Format tick labels for better readability
+    formatter = ticker.LogFormatterMathtext(base=10)
+    plt.gca().xaxis.set_major_formatter(formatter)
+    plt.gca().yaxis.set_major_formatter(formatter)
+
+    # Make sure ticks and labels are black
+    ax.tick_params(axis="both", colors="black")
+
+    # Add descriptive labels and title in black
+    text_x = f"{labels[0]}: ${metrics[0]}$"
+    plt.xlabel(text_x, fontsize=14, color="black")
+    text_y = f"{labels[1]}: ${metrics[1]}$"
+    plt.ylabel(text_y, fontsize=14, color="black")
+    plt.title(title, fontsize=16, color="black")
+
+    # Add contour legend with clear styling
+    legend = plt.legend(title="System Utilization ($\\rho$)",
+                        # title=f"{labels[2]}: ${metrics[2]}$",
+                        loc="best",
+                        fontsize=12,
+                        framealpha=0.9)
+    legend.get_title().set_color("black")
+
+    # Bottom-Left (Low Y, Low X)
+    # bbox syle
+    _bbox_style = dict(
+        facecolor="white",
+        alpha=0.8,
+        boxstyle="round",
+        edgecolor="gray",
+    )
+
+    plt.text(
+        pi_coefs[pi_x].quantile(0.05),  # X position at 5th percentile
+        pi_coefs[pi_y].quantile(0.10),  # Y position at 10th percentile
+        "Low Congestion\nLow Occupancy",
+        fontsize=11,
+        ha="left",
+        va="bottom",
+        color="black",
+        bbox=_bbox_style
+    )
+
+    # Bottom-Right (Low Y, High X)
+    plt.text(
+        pi_coefs[pi_x].quantile(0.95),  # X position at 95th percentile
+        pi_coefs[pi_y].quantile(0.90),  # Y position at 90th percentile
+        "Low Congestion\nLow Occupancy",
+        fontsize=11,
+        ha="left",
+        va="bottom",
+        color="black",
+        bbox=_bbox_style
+    )
 
     # Save figure if requested
     if file_path and fname:
