@@ -1075,8 +1075,9 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
     # get x, y, and z coefficients
     pi_x = metrics[0]       # occupancy coefficient for x-axis
-    pi_y = metrics[1]       # congestion coefficient for y-axis
-    pi_z = metrics[2]       # available buffer coefficient for z-axis, contour
+    pi_y = metrics[1]       # stall coefficient for y-axis
+    pi_z = metrics[2]       # effectivness coefficient for z-axis, contour line
+    # print(f"inside plot!!!: {pi_x}, {pi_y}, {pi_z}")
     # create color scale
     _cmap = LinearSegmentedColormap.from_list("tricolor_cmap", COLORS)
     # create color scale
@@ -1113,14 +1114,14 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
         subset = pi_coefs[(_min & _max)]
 
         # Only draw if we have enough points
-        if len(subset) > int(pi_coefs.shape[0] * 0.01):
-            # if len(subset) > 100:
+        # if len(subset) > int(pi_coefs.shape[0] * 0.01):
+        if len(subset) > 100:
             # Sort by x-value for smooth curves
             subset = subset.sort_values(by=pi_x)
 
             # Create a polynomial fit at log scale
-            if len(subset) > int(pi_coefs.shape[0] * 0.001):
-                # if len(subset) > 10:
+            # if len(subset) > int(pi_coefs.shape[0] * 0.001):
+            if len(subset) > 10:
                 log_x = np.log10(subset[pi_x])
                 log_y = np.log10(subset[pi_y])
                 # 3rd degree works well for most curves
@@ -1153,19 +1154,20 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     y_max = pi_coefs[pi_y].quantile(0.95)  # Use 95th percentile as max
     plt.ylim(y_min, y_max)
 
-    # Add grid with minor lines, lighter color for better visibility
+    # Ensure minor ticks are displayed
+    ax.minorticks_on()
+
+    # Set up grid with both major and minor lines
     ax.grid(True,
             which="major",
-            # axis="both",
-            ls="-",
-            linewidth='0.9',
+            linestyle="-",
+            linewidth=0.9,
             color="black",
-            alpha=0.70)
+            alpha=0.7)
     ax.grid(True,
             which="minor",
-            # axis="both",
-            ls=":",
-            linewidth='0.7',
+            linestyle=":",
+            linewidth=0.7,
             color="black",
             alpha=0.70)
 
@@ -1177,8 +1179,17 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     # Make sure ticks and labels are black
     ax.tick_params(axis="both", colors="black")
 
-    # Ensure minor ticks are displayed
-    ax.minorticks_on()
+    # # Force consistent tick locations (add this)
+    # ax.xaxis.set_major_locator(ticker.LogLocator(base=10.0,
+    #                                              numticks=10))
+    # ax.xaxis.set_minor_locator(ticker.LogLocator(base=10.0,
+    #                                              subs=np.arange(0.1, 1.0, 0.1),
+    #                                              numticks=10))
+    # ax.yaxis.set_major_locator(ticker.LogLocator(base=10.0,
+    #                                              numticks=10))
+    # ax.yaxis.set_minor_locator(ticker.LogLocator(base=10.0,
+    #                                              subs=np.arange(0.1, 1.0, 0.1),
+    #                                              numticks=10))
 
     # Add descriptive legend x-axis
     text_x = f"{labels[0]}: ${metrics[0]}$"
