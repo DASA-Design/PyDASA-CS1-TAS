@@ -33,7 +33,7 @@ plt.rcParams.update({
 
 
 # Define the colors for the custom colormap (e.g., blue, white, red)
-COLORS = ["dodgerblue", "darkslateblue", "crimson"]
+COLORS = ["dodgerblue", "gold", "crimson"]
 
 
 # Plotting function for queue network
@@ -1085,22 +1085,22 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     # _colors = plt.cm.berlin(np.linspace(0, 1, len(contour_vals)))
     # alts: viridis_r, plasma, managua_r, magma, cividis, coolwarm, berlin
 
-    # Add hexbin background to show data density (like Moody chart)
-    hb = plt.hexbin(
-        pi_coefs[pi_x],
-        pi_coefs[pi_y],
-        gridsize=40,
-        cmap="Greens",    # YlGnBu, Greens, GnBu_r
-        alpha=0.30,
-        mincnt=1,
-        reduce_C_function=np.mean
-    )
+    # # Add hexbin background to show data density (like Moody chart)
+    # hb = plt.hexbin(
+    #     pi_coefs[pi_x],
+    #     pi_coefs[pi_y],
+    #     gridsize=40,
+    #     cmap="Greens",    # YlGnBu, Greens, GnBu_r
+    #     alpha=0.30,
+    #     mincnt=1,
+    #     reduce_C_function=np.mean
+    # )
 
-    # colorbar to show point density
-    fig.colorbar(hb,
-                 ax=ax,
-                 shrink=0.8,
-                 label="Data Density")
+    # # colorbar to show point density
+    # fig.colorbar(hb,
+    #              ax=ax,
+    #              shrink=0.8,
+    #              label="Data Density")
 
     # Add contour legend with clear styling
     # clean label, get first symbol name
@@ -1115,13 +1115,13 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
         # Only draw if we have enough points
         # if len(subset) > int(pi_coefs.shape[0] * 0.01):
-        if len(subset) > 100:
+        if len(subset) > 10:
             # Sort by x-value for smooth curves
             subset = subset.sort_values(by=pi_x)
 
             # Create a polynomial fit at log scale
             # if len(subset) > int(pi_coefs.shape[0] * 0.001):
-            if len(subset) > 10:
+            if len(subset) > 5:
                 log_x = np.log10(subset[pi_x])
                 log_y = np.log10(subset[pi_y])
                 # 3rd degree works well for most curves
@@ -1131,7 +1131,7 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
                 # Create smooth x values for the line
                 _min_log = np.log10(subset[pi_x].min())
                 _max_log = np.log10(subset[pi_x].max())
-                x_smooth = np.logspace(_min_log, _max_log, 100)
+                x_smooth = np.logspace(_min_log, _max_log, 50)
 
                 # Calculate predicted y values (convert back from log space)
                 y_smooth = 10**p(np.log10(x_smooth))
@@ -1140,8 +1140,8 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
                 plt.plot(x_smooth,
                          y_smooth,
                          "-",
-                         linewidth=1.25,
-                         alpha=1.0,
+                         linewidth=1.0,
+                         alpha=0.9,
                          color=_colors[i],
                          label=f"{contour_sym} = {ctr:.2f}")
 
@@ -1153,6 +1153,10 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     y_min = pi_coefs[pi_y].quantile(0.05)  # Use 5th percentile as min
     y_max = pi_coefs[pi_y].quantile(0.95)  # Use 95th percentile as max
     plt.ylim(y_min, y_max)
+
+    # x_min = pi_coefs[pi_x].quantile(0.05)  # Use 5th percentile as min
+    # x_max = pi_coefs[pi_x].quantile(0.95)  # Use 95th percentile as max
+    # plt.xlim(x_min, x_max)
 
     # Ensure minor ticks are displayed
     ax.minorticks_on()
@@ -1220,8 +1224,8 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
     plt.text(
         pi_coefs[pi_x].quantile(0.05),  # X position at 5th percentile
-        pi_coefs[pi_y].quantile(0.10),  # Y position at 10th percentile
-        "Low Congestion\nLow Occupancy",
+        pi_coefs[pi_y].quantile(0.05),  # Y position at 10th percentile
+        "Low Stall &\nLow Occupancy",
         fontsize=10,
         ha="left",
         va="bottom",
@@ -1232,8 +1236,8 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     # Bottom-Right (Low Y, High X)
     plt.text(
         pi_coefs[pi_x].quantile(0.95),  # X position at 95th percentile
-        pi_coefs[pi_y].quantile(0.90),  # Y position at 90th percentile
-        "High Congestion\nHigh Occupancy",
+        pi_coefs[pi_y].quantile(0.95),  # Y position at 90th percentile
+        "High Stall &\nHigh Occupancy",
         fontsize=10,
         ha="left",
         va="bottom",

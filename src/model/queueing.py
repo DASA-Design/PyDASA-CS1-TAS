@@ -35,7 +35,7 @@ INF = math.inf
 
 def Queue(model: str,
           _lambda: float,
-          miu: float,
+          mu: float,
           n_servers: int = 1,
           kapacity: Optional[int] = None) -> BasicQueue:
     """*Queue()* factory function to create different queue models.
@@ -45,7 +45,7 @@ def Queue(model: str,
     Args:
         model (str): Type of queue model to create. Options: 'M/M/1', 'M/M/s', 'M/M/1/K', 'M/M/s/K'.
         _lambda (float): Arrival rate ($\\lambda$) of the queue.
-        miu (float): Service rate ($\\mu$) of the queue.
+        mu (float): Service rate ($\\mu$) of the queue.
         n_servers (int, optional): Number of servers ($s$). Defaults to 1.
         kapacity (Optional[int], optional): Maximum capacity ($K$) of the queue. Defaults to None.
 
@@ -69,7 +69,7 @@ def Queue(model: str,
             _msg = "M/M/1 requires exactly 1 server and infinite capacity. "
             _msg += f"s={n_servers}, K={kapacity}"
             raise ValueError(_msg)
-        _queue = QueueMM1(_lambda, miu)
+        _queue = QueueMM1(_lambda, mu)
         # print(f"Created M/M/1 Queue Model: {type(_queue)}")
 
     # Multi-server, infinite capacity
@@ -78,7 +78,7 @@ def Queue(model: str,
             _msg = "M/M/s requires at least 1 server and infinite capacity. "
             _msg += f"s={n_servers}, K={kapacity}"
             raise ValueError(_msg)
-        _queue = QueueMMs(_lambda, miu, n_servers)
+        _queue = QueueMMs(_lambda, mu, n_servers)
         # print(f"Created M/M/s Queue Model: {type(_queue)}")
 
     # Single server, finite capacity
@@ -87,7 +87,7 @@ def Queue(model: str,
             _msg = "M/M/1/K requires exactly 1 server and finite capacity. "
             _msg += f"s={n_servers}, K={kapacity}"
             raise ValueError(_msg)
-        _queue = QueueMM1K(_lambda, miu, n_servers, kapacity)
+        _queue = QueueMM1K(_lambda, mu, n_servers, kapacity)
         # print(f"Created M/M/1/K Queue Model: {type(_queue)}")
 
     # Multi-server, finite capacity
@@ -100,7 +100,7 @@ def Queue(model: str,
             _msg = "M/M/s/K requires capacity K >= s. "
             _msg += f"K={kapacity}, s={n_servers}"
             raise ValueError(_msg)
-        _queue = QueueMMsK(_lambda, miu, n_servers, kapacity)
+        _queue = QueueMMsK(_lambda, mu, n_servers, kapacity)
         # print(f"Created M/M/s/K Queue Model: {type(_queue)}")
 
     # Add more conditions for other queue types. e.g., M/G/1, G/G/1, etc.
@@ -121,7 +121,7 @@ class BasicQueue(ABC):
     Attributes:
         Input parameters:
         _lambda (float): Arrival rate (λ: lambda).
-        miu (float): Service rate (μ: miu).
+        mu (float): Service rate (μ: mu).
         n_servers (int): Number of servers (s: servers).
         kapacity (Optional[int]): Maximum capacity (K: capacity).
 
@@ -137,9 +137,9 @@ class BasicQueue(ABC):
     _lambda: float
     """Arrival rate (λ: lambda)."""
 
-    # :attr: miu
-    miu: float
-    """Service rate (μ: miu)."""
+    # :attr: mu
+    mu: float
+    """Service rate (μ: mu)."""
 
     # :attr: n_servers
     n_servers: int = 1
@@ -195,7 +195,7 @@ class BasicQueue(ABC):
 
         if self._lambda < 0:
             raise ValueError("Arrival rate must be positive.")
-        if self.miu < 0:
+        if self.mu < 0:
             raise ValueError("Service rate must be positive.")
         if self.n_servers < 1:
             raise ValueError("Number of servers must be positive.")
@@ -272,7 +272,7 @@ class BasicQueue(ABC):
         # Add basic parameters
         params = [
             f"\tλ={self._lambda}",
-            f"\tμ={self.miu}",
+            f"\tμ={self.mu}",
             f"\tservers={self.n_servers}"
         ]
         output.extend(params)
@@ -335,7 +335,7 @@ class QueueMM1(BasicQueue):
             _msg = f"M/M/1 assumes infinite capacity. K={self.kapacity}"
             raise ValueError(_msg)
         if not self.is_stable():
-            _msg = f"System is unstable (λ ≥ μ). λ={self._lambda}, μ={self.miu}"
+            _msg = f"System is unstable (λ ≥ μ). λ={self._lambda}, μ={self.mu}"
             raise ValueError(_msg)
 
     def is_stable(self) -> bool:
@@ -345,7 +345,7 @@ class QueueMM1(BasicQueue):
             bool: True if the system is stable, False otherwise.
         """
 
-        return self._lambda / self.miu < 1.0
+        return self._lambda / self.mu < 1.0
 
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* Calculates the performance metrics for the M/M/1 queue.
@@ -361,7 +361,7 @@ class QueueMM1(BasicQueue):
         # self.p_n = self.calculate_prob_n(1)
 
         # Calculate utilization (rho: ρ)
-        self.rho = self._lambda / self.miu
+        self.rho = self._lambda / self.mu
 
         # Calculate average number of requests in the system (L)
         self.avg_len = self.rho / (1 - self.rho)
@@ -436,7 +436,7 @@ class QueueMMs(BasicQueue):
             raise ValueError(_msg)
         if not self.is_stable():
             _msg = f"System is unstable (λ ≥ s * μ). λ={self._lambda}, "
-            _msg += f"s={self.n_servers}, μ={self.miu}"
+            _msg += f"s={self.n_servers}, μ={self.mu}"
             raise ValueError(_msg)
 
     def is_stable(self) -> bool:
@@ -446,7 +446,7 @@ class QueueMMs(BasicQueue):
             bool: True if the system is stable, False otherwise.
         """
 
-        return self._lambda / (self.n_servers * self.miu)
+        return self._lambda / (self.n_servers * self.mu)
 
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* Calculates the performance metrics for the M/M/s queue.
@@ -459,10 +459,10 @@ class QueueMMs(BasicQueue):
             - Wq (avg_wait_q): Average time a request spends in the queue.
         """
         # Calculate utilization (rho)
-        self.rho = self._lambda / (self.n_servers * self.miu)
+        self.rho = self._lambda / (self.n_servers * self.mu)
 
         # Calculate traffic intensity (tau)
-        tau = self._lambda / self.miu
+        tau = self._lambda / self.mu
 
         # Calculate the probability of having 0 requests in the system
         _p_zero = self.calculate_prob_zero()
@@ -477,7 +477,7 @@ class QueueMMs(BasicQueue):
         self.avg_wait_q = self.avg_len_q / self._lambda
 
         # Calculate the average time spent in the system
-        self.avg_wait = self.avg_wait_q + 1 / self.miu
+        self.avg_wait = self.avg_wait_q + 1 / self.mu
 
     def calculate_prob_zero(self) -> float:
         """*calculate_prob_zero()* Calculates P(0) or the probability of having 0 requests in the system for M/M/s model.
@@ -486,7 +486,7 @@ class QueueMMs(BasicQueue):
             float: The probability of having 0 requests in the system.
         """
         # Calculate the traffic intensity (tau)
-        tau = self._lambda / self.miu
+        tau = self._lambda / self.mu
 
         # calculate probability of having up to s requests in the system
         p_under_s = sum((tau ** i) / gfactorial(i)
@@ -514,7 +514,7 @@ class QueueMMs(BasicQueue):
             float: The probability of having n requests in the system.
         """
         # calculate traffic intensity (tau)
-        tau = self._lambda / self.miu
+        tau = self._lambda / self.mu
         # calculate the probability of having 0 requests in the system
         _p_zero = self.calculate_prob_zero()
 
@@ -575,7 +575,7 @@ class QueueMM1K(BasicQueue):
             _msg = f"M/M/1/K requires a positive finite capacity. K={self.kapacity}"
             raise ValueError(_msg)
         if self.is_stable() is False:
-            _msg = f"System is unstable (λ ≥ μ). λ={self._lambda}, μ={self.miu}"
+            _msg = f"System is unstable (λ ≥ μ). λ={self._lambda}, μ={self.mu}"
             raise ValueError(_msg)
 
     def is_stable(self) -> bool:
@@ -584,7 +584,7 @@ class QueueMM1K(BasicQueue):
         Returns:
             bool: True if the system is stable, False otherwise.
         """
-        return self._lambda / self.miu <= 1.0
+        return self._lambda / self.mu <= 1.0
 
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* Calculates the performance metrics for the M/M/1/K queue model.
@@ -601,7 +601,7 @@ class QueueMM1K(BasicQueue):
         # Calculate the effective arrival rate
         _lambda_eff = self._lambda * (1 - _p_kapacity)
         # Calculate the utilization (rho) == traffic intensity (tau)
-        self.rho = self._lambda / self.miu
+        self.rho = self._lambda / self.mu
 
         # if utilization (rho) is less than 1
         if self.rho < 1.0:
@@ -641,7 +641,7 @@ class QueueMM1K(BasicQueue):
             float: The probability of having 0 requests in the system.
         """
         # Calculate the utilization (rho) == traffic intensity (tau)
-        _rho = self._lambda / self.miu
+        _rho = self._lambda / self.mu
 
         # use the probability of having n = 0 requests in the system.
         # p_zero = self.calculate_prob_n(0)
@@ -662,7 +662,7 @@ class QueueMM1K(BasicQueue):
             float: The probability of having n requests in the system.
         """
         # Calculate the utilization (rho) == traffic intensity (tau)
-        _rho = self._lambda / self.miu
+        _rho = self._lambda / self.mu
         # default values for checking errors
         p_n = -1.0
 
@@ -713,7 +713,7 @@ class QueueMMsK(BasicQueue):
             raise ValueError(_msg)
         if not self.is_stable():
             _msg = f"System is unstable (λ ≥ s * μ). λ={self._lambda}, "
-            _msg += f"s={self.n_servers}, μ={self.miu}"
+            _msg += f"s={self.n_servers}, μ={self.mu}"
             raise ValueError(_msg)
 
     def is_stable(self) -> bool:
@@ -722,7 +722,7 @@ class QueueMMsK(BasicQueue):
         Returns:
             bool: True if the system is stable, False otherwise.
         """
-        return self._lambda / (self.n_servers * self.miu) <= 1.0
+        return self._lambda / (self.n_servers * self.mu) <= 1.0
 
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* Calculates the performance metrics for the M/M/s/K queue.
@@ -735,10 +735,10 @@ class QueueMMsK(BasicQueue):
             - Wq (avg_wait_q): Average time a request spends in the queue.
         """
         # calculate the server utilization (rho)
-        self.rho = self._lambda / (self.n_servers * self.miu)
+        self.rho = self._lambda / (self.n_servers * self.mu)
 
         # # calculate the traffic intensity (tau)
-        # tau = self._lambda / self.miu
+        # tau = self._lambda / self.mu
 
         # calculate the probability to be at full capacity
         p_kap = self.calculate_prob_n(self.kapacity)
@@ -781,8 +781,7 @@ class QueueMMsK(BasicQueue):
         # self.avg_len_q = Lq
 
         # calculate the average number of requests in the system (L)
-        coef1 = sum(i * self.calculate_prob_n(i)
-                    for i in range(self.n_servers))
+        coef1 = sum(i * self.calculate_prob_n(i) for i in range(self.n_servers))
         coef2 = sum(self.calculate_prob_n(i) for i in range(self.n_servers))
         self.avg_len = coef1 + self.n_servers * (1 - coef2) + self.avg_len_q
 
@@ -804,9 +803,9 @@ class QueueMMsK(BasicQueue):
         p_zero = -1.0
 
         # Calculate the traffic intensity (tau)
-        tau = self._lambda / self.miu
+        tau = self._lambda / self.mu
         # Calculate the utilization (rho)
-        _rho = self._lambda / (self.miu * self.n_servers)
+        _rho = self._lambda / (self.mu * self.n_servers)
 
         # calculate the coefficient for n requests
         numerator = tau ** self.n_servers
@@ -847,7 +846,7 @@ class QueueMMsK(BasicQueue):
         p_n = -1.0
 
         # Calculate the traffic intensity (tau)
-        tau = self._lambda / self.miu
+        tau = self._lambda / self.mu
 
         # Calculate the probability of having 0 requests in the system
         _p_zero = self.calculate_prob_zero()
