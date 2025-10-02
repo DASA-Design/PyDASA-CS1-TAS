@@ -997,25 +997,25 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
                                 title: str = None,
                                 file_path: str = None,
                                 fname: str = None) -> None:
-    """*plot_performance_coef_chart()* _summary_
+    """*plot_performance_coef_chart()* plot a performance coefficient chart for a queueing system for FDU := {'T': 'Time', 'I': 'Intensity'}.
 
     Args:
-        pi_coefs (pd.DataFrame): _description_
-        contour_lbl (str): _description_
-        contour_vals (list[float], optional): _description_. Defaults to None.
-        metrics (list[str], optional): _description_. Defaults to None.
-        labels (list[str], optional): _description_. Defaults to None.
-        title (str, optional): _description_. Defaults to None.
-        file_path (str, optional): _description_. Defaults to None.
-        fname (str, optional): _description_. Defaults to None.
+        pi_coefs (pd.DataFrame): DataFrame containing the performance coefficients.
+        contour_lbl (str): Contour label for the chart.
+        contour_vals (list[float], optional): Contour values for the chart. Defaults to None.
+        metrics (list[str], optional): Metrics to plot. Defaults to None.
+        labels (list[str], optional): Labels for the metrics. Defaults to None.
+        title (str, optional): Title for the chart. Defaults to None.
+        file_path (str, optional): File path to save the chart. Defaults to None.
+        fname (str, optional): File name for the chart. Defaults to None.
 
     Raises:
-        ValueError: _description_
-        ValueError: _description_
-        ValueError: _description_
-        ValueError: _description_
-        ValueError: _description_
-        ValueError: _description_
+        ValueError: If the input types are incorrect.
+        ValueError: If the contour label is not a string.
+        ValueError: If the contour label is not in the DataFrame.
+        ValueError: If the metrics and labels are not valid.
+        ValueError: If the contour values are not valid.
+        ValueError: If the title is not a string.
     """
     # Input validation
     if not isinstance(pi_coefs, pd.DataFrame):
@@ -1115,13 +1115,13 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
         # Only draw if we have enough points
         # if len(subset) > int(pi_coefs.shape[0] * 0.01):
-        if len(subset) > 10:
+        if len(subset) > 5:
             # Sort by x-value for smooth curves
             subset = subset.sort_values(by=pi_x)
 
             # Create a polynomial fit at log scale
             # if len(subset) > int(pi_coefs.shape[0] * 0.001):
-            if len(subset) > 5:
+            if len(subset) > 3:
                 log_x = np.log10(subset[pi_x])
                 log_y = np.log10(subset[pi_y])
                 # 3rd degree works well for most curves
