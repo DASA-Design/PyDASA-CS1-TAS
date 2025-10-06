@@ -165,7 +165,7 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
         row = [
             nd_names[i],
             f"{nd_metrics['lambda'].iloc[i]:.2f}",
-            f"{nd_metrics['miu'].iloc[i]:.2f}",
+            f"{nd_metrics['mu'].iloc[i]:.2f}",
             f"{nd_metrics['rho'].iloc[i]:.2f}",
             f"{nd_metrics['L'].iloc[i]:.2f}",
             f"{nd_metrics['Lq'].iloc[i]:.2f}",
@@ -195,7 +195,7 @@ def plot_queue_network(rout_matrix: pd.DataFrame,
         net_info = []
         net_info.append("Network Metrics:")
         # service rate
-        mt = f"$\\overline{{{{\\mu}}}}: {net_metrics['avg_miu'].iloc[0]:.2f}$"
+        mt = f"$\\overline{{{{\\mu}}}}: {net_metrics['avg_mu'].iloc[0]:.2f}$"
         net_info.append(mt)
 
         # utilization
@@ -996,7 +996,11 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
                                 labels: list[str] = None,
                                 title: str = None,
                                 file_path: str = None,
-                                fname: str = None) -> None:
+                                fname: str = None,
+                                percentile={"x": [0.05, 0.95],
+                                            "y": [0.05, 0.95]},
+                                scale={"x": "linear", "y": "linear"},
+                                limits={"x": [0, 1], "y": [0, 1]}) -> None:
     """*plot_performance_coef_chart()* plot a performance coefficient chart for a queueing system for FDU := {'T': 'Time', 'I': 'Intensity'}.
 
     Args:
@@ -1008,6 +1012,7 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
         title (str, optional): Title for the chart. Defaults to None.
         file_path (str, optional): File path to save the chart. Defaults to None.
         fname (str, optional): File name for the chart. Defaults to None.
+        visible_pct (dict, optional): Percentage of the chart to be visible in x and y axes. Defaults to {"x": [0.05, 0.95], "y": [0.05, 0.95]}.
 
     Raises:
         ValueError: If the input types are incorrect.
@@ -1146,17 +1151,29 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
                          label=f"{contour_sym} = {ctr:.2f}")
 
     # Set up log scales (standard for Moody-like charts)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
+    # ax.set_xscale("log")
+    # ax.set_yscale("log")
+    ax.set_xscale(scale["x"])
+    ax.set_yscale(scale["y"])
 
     # Adjust these values as needed to get the desired range
-    y_min = pi_coefs[pi_y].quantile(0.05)  # Use 5th percentile as min
-    y_max = pi_coefs[pi_y].quantile(0.95)  # Use 95th percentile as max
+    # Use min-percentile in y
+    y_min = pi_coefs[pi_y].quantile(percentile["y"][0])
+    # Use max-percentile in y
+    y_max = pi_coefs[pi_y].quantile(percentile["y"][1])
     plt.ylim(y_min, y_max)
 
-    # x_min = pi_coefs[pi_x].quantile(0.05)  # Use 5th percentile as min
-    # x_max = pi_coefs[pi_x].quantile(0.95)  # Use 95th percentile as max
-    # plt.xlim(x_min, x_max)
+    # Use min-percentile in x
+    x_min = pi_coefs[pi_x].quantile(percentile["x"][0])
+    # Use max-percentile in x
+    x_max = pi_coefs[pi_x].quantile(percentile["x"][1])
+    plt.xlim(x_min, x_max)
+
+    # Override with user limits if provided
+    if limits["x"] != [0, 1]:
+        plt.xlim(limits["x"])
+    if limits["y"] != [0, 1]:
+        plt.ylim(limits["y"])
 
     # Ensure minor ticks are displayed
     ax.minorticks_on()
@@ -1167,7 +1184,7 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
             linestyle="-",
             linewidth=0.9,
             color="black",
-            alpha=0.7)
+            alpha=0.70)
     ax.grid(True,
             which="minor",
             linestyle=":",
@@ -1176,9 +1193,14 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
             alpha=0.70)
 
     # Format tick labels for better readability
-    formatter = ticker.LogFormatterMathtext(base=10)
-    plt.gca().xaxis.set_major_formatter(formatter)
-    plt.gca().yaxis.set_major_formatter(formatter)
+    if scale["x"] == "log" or scale["y"] == "log":
+        formatter = ticker.LogFormatterMathtext(base=10)
+        if scale["x"] == "log":
+            plt.gca().xaxis.set_major_formatter(formatter)
+        if scale["y"] == "log":
+            plt.gca().yaxis.set_major_formatter(formatter)
+        # plt.gca().xaxis.set_major_formatter(formatter)
+        # plt.gca().yaxis.set_major_formatter(formatter)
 
     # Make sure ticks and labels are black
     ax.tick_params(axis="both", colors="black")
@@ -1224,7 +1246,7 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
     plt.text(
         pi_coefs[pi_x].quantile(0.05),  # X position at 5th percentile
-        pi_coefs[pi_y].quantile(0.05),  # Y position at 10th percentile
+        pi_coefs[pi_y].quantile(0.10),  # Y position at 10th percentile
         "Low Stall &\nLow Occupancy",
         fontsize=10,
         ha="left",
@@ -1236,7 +1258,7 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     # Bottom-Right (Low Y, High X)
     plt.text(
         pi_coefs[pi_x].quantile(0.95),  # X position at 95th percentile
-        pi_coefs[pi_y].quantile(0.95),  # Y position at 90th percentile
+        pi_coefs[pi_y].quantile(0.90),  # Y position at 90th percentile
         "High Stall &\nHigh Occupancy",
         fontsize=10,
         ha="left",
