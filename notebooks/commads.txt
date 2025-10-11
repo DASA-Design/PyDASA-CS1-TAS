@@ -1,0 +1,24 @@
+﻿
+
+========================= DIST file =========================
+
+python setup.py sdist 
+
+python setup.py bdist_wheel sdist
+
+python setup.py bdist_wheel
+
+pip install .
+
+
+============= Virtual Enviroments ============
+
+python -m venv pydasavenv
+
+.\pydasavenv\Scripts\activate
+
+deactivate
+
+pip freeze > requirements.txt
+pip install -r requirements.txt
+python .\main.py
