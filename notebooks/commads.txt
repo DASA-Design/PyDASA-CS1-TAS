@@ -13,9 +13,9 @@ pip install .
 
 ============= Virtual Enviroments ============
 
-python -m venv pydasavenv
+python -m venv venv
 
-.\pydasavenv\Scripts\activate
+.\venv\Scripts\activate
 
 deactivate
 
