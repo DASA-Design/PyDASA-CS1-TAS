@@ -989,6 +989,288 @@ def plot_nodes_heatmap(net_metrics: list[pd.DataFrame],
     plt.close(fig)
 
 
+def plot_experiment_coef_chart(pi_coefs: pd.DataFrame,
+                               metrics: list[str] = None,
+                               labels: list[str] = None,
+                               title: str = None,
+                               file_path: str = None,
+                               fname: str = None,
+                               percentile={"x": [0.05, 0.95],
+                                           "y": [0.05, 0.95],
+                                           "z": [0.05, 0.95]},
+                               scale={"x": "linear",
+                                      "y": "linear",
+                                      "z": "linear"},
+                               limits={"x": [0, 1],
+                                       "y": [0, 1],
+                                       "z": [0, 1]}) -> None:
+    """plot_experiment_coef_chart _summary_
+
+    Args:
+        pi_coefs (pd.DataFrame): _description_
+        metrics (list[str], optional): _description_. Defaults to None.
+        labels (list[str], optional): _description_. Defaults to None.
+        title (str, optional): _description_. Defaults to None.
+        file_path (str, optional): _description_. Defaults to None.
+        fname (str, optional): _description_. Defaults to None.
+        percentile (dict, optional): _description_. Defaults to {"x": [0.05, 0.95], "y": [0.05, 0.95], "z": [0.05, 0.95]}.
+        scale (dict, optional): _description_. Defaults to {"x": "linear", "y": "linear", "z": "linear"}.
+        limits (dict, optional): _description_. Defaults to {"x": [0, 1], "y": [0, 1], "z": [0, 1]}.
+
+    Raises:
+        ValueError: _description_
+        ValueError: _description_
+        ValueError: _description_
+    """
+
+    # Input validation
+    if not isinstance(pi_coefs, pd.DataFrame):
+        _msg = f"Invalid type input: {type(pi_coefs)}"
+        _msg += " - pi_coefs must be a DataFrame"
+        raise ValueError(_msg)
+
+    # Setting default numeric metric names
+    if metrics is None:
+        metrics = pi_coefs.select_dtypes(include="number")
+        metrics = metrics.columns.tolist()
+        if "node" in metrics:
+            metrics.remove("node")
+
+    # set default labels
+    if labels is None:
+        labels = metrics
+
+    # check for metrics and labels to be useful
+    elif not isinstance(metrics, list) or len(labels) != len(metrics):
+        _msg = f"Labels list length ({len(labels)}) "
+        _msg += f"must match DataFrames list length ({len(metrics)})"
+        raise ValueError(_msg)
+
+    if title is None:
+        title = "System's Performance Analysis: Relationships Coefficients."
+
+    # Filter out extreme values to focus on the main distribution
+
+    _colour_map = "viridis"
+
+    # Get the column names from metrics parameter - THIS IS THE IMPORTANT FIX!
+    # Instead of assigning data values to these variables
+    pi_x_col = metrics[0]  # Column name for x axis
+    pi_y_col = metrics[1]  # Column name for y axis
+    pi_z_col = metrics[2]  # Column name for z axis (colorbar)
+
+    # Make a copy to avoid modifying the original DataFrame
+    plot_df = pd.DataFrame(pi_coefs)
+
+    pi_x = plot_df[pi_x_col]  # Get actual data for plotting
+    pi_y = plot_df[pi_y_col]  # Get actual data for plotting
+    pi_z = plot_df[pi_z_col]  # Get actual data for plotting
+
+    # Using percentiles to determine reasonable limits
+    for col, pctk in zip(plot_df.columns, percentile):
+        limit = percentile[pctk]
+        low_val = np.percentile(plot_df[col], limit[0] * 100)
+        high_val = np.percentile(plot_df[col], limit[1] * 100)
+        min_limit = (plot_df[col] >= low_val)
+        high_limit = (plot_df[col] <= high_val)
+        plot_df = plot_df[min_limit & high_limit]
+
+    # Create figure with subplots
+    fig = plt.figure(figsize=(18, 12))
+    gs = fig.add_gridspec(2, 2,
+                          width_ratios=[1.1, 1.1],
+                          height_ratios=[1.0, 1.0])
+
+    # Create 3D scatter plot
+    ax1 = fig.add_subplot(gs[0, 0], projection="3d")
+    scatter = ax1.scatter(pi_x,   # occupation
+                          pi_y,   # stall
+                          pi_z,   # efficiency
+                          c=pi_z,
+                          cmap=_colour_map,
+                          alpha=0.7,
+                          s=15)
+
+    # Adjust the position and padding of the 3D plot
+    ax1.dist = 12  # Increase camera distance
+    pos = ax1.get_position()
+    # Make room for colorbar
+    ax1.set_position([pos.x0, pos.y0, pos.width * 0.95, pos.height])
+
+    # # Add colorbar with better positioning
+    # cbar = fig.colorbar(scatter,
+    #                     ax=ax1,
+    #                     pad=0.1,
+    #                     shrink=0.8,
+    #                     label=labels[2])
+
+    ax1.set_xlabel(labels[0], fontsize=12)
+    ax1.set_ylabel(labels[1], fontsize=12)
+    ax1.set_zlabel(labels[2], fontsize=12)
+    ax1.set_title("3D Data Visualization",
+                  fontsize=14,
+                  color="black",
+                  fontweight="bold")
+    fig.colorbar(scatter,
+                 ax=ax1,
+                 pad=0.1,
+                 shrink=0.8,
+                 label=labels[2])
+
+    # Create pairwise scatter plots
+    # Occupation vs. Stall
+    ax2 = fig.add_subplot(gs[0, 1])
+    sns.scatterplot(data=plot_df,
+                    x=pi_x_col,
+                    y=pi_y_col,
+                    hue=pi_z_col,
+                    ax=ax2,
+                    palette=_colour_map,
+                    alpha=0.5,
+                    s=10)
+
+    # subtitle + labels
+    _subtitle = labels[0] + " vs. " + labels[1]
+    ax2.set_title(_subtitle, fontsize=14, color="black", fontweight="bold")
+    text_x = f"{labels[0]}: ${metrics[0]}$"
+    ax2.set_xlabel(text_x, fontsize=12, color="black")
+    text_y = f"{labels[1]}: ${metrics[1]}$"
+    ax2.set_ylabel(text_y, fontsize=12, color="black")
+    _label = f"{labels[2]}: ${metrics[2]}$"
+    ax2.legend(title=_label, fontsize=12)
+
+    # Occupation vs. Efficiency
+    ax3 = fig.add_subplot(gs[1, 0])
+    sns.scatterplot(data=plot_df,
+                    x=pi_x_col,
+                    y=pi_z_col,
+                    hue=pi_y_col,
+                    ax=ax3,
+                    palette=_colour_map,
+                    alpha=0.5,
+                    s=10)
+
+    # subtitle + labels
+    _subtitle = labels[0] + " vs. " + labels[2]
+    ax3.set_title(_subtitle, fontsize=14, color="black", fontweight="bold")
+    text_x = f"{labels[0]}: ${metrics[0]}$"
+    ax3.set_xlabel(text_x, fontsize=12, color="black")
+    text_y = f"{labels[2]}: ${metrics[2]}$"
+    ax3.set_ylabel(text_y, fontsize=12, color="black")
+    _label = f"{labels[1]}: ${metrics[1]}$"
+    ax3.legend(title=_label, fontsize=12)
+
+    # Stall vs. Efficiency
+    ax4 = fig.add_subplot(gs[1, 1])
+    sns.scatterplot(data=plot_df,
+                    x=pi_y_col,
+                    y=pi_z_col,
+                    hue=pi_x_col,
+                    ax=ax4,
+                    palette=_colour_map,
+                    alpha=0.5,
+                    s=10)
+
+    # subtitle + labels
+    _subtitle = labels[1] + " vs. " + labels[2]
+    ax4.set_title(_subtitle, fontsize=14, color="black", fontweight="bold")
+    text_x = f"{labels[1]}: ${metrics[1]}$"
+    ax4.set_xlabel(text_x, fontsize=12, color="black")
+    text_y = f"{labels[2]}: ${metrics[2]}$"
+    ax4.set_ylabel(text_y, fontsize=12, color="black")
+    _label = f"{labels[0]}: ${metrics[0]}$"
+    ax4.legend(title=_label, fontsize=12)
+
+    # # Add contour legend z-axis
+    # legend = plt.legend(title=f"{labels[2]}: ${metrics[2]}$",
+    #                     loc="best",
+    #                     fontsize=8,
+    #                     framealpha=0.8)
+    # legend.get_title().set_color("black")
+
+    # x=labels[0] + "$" + pi_x_col + "$",
+    # y=labels[1] + "$" + pi_y_col + "$",
+    # hue=labels[2] + "$" + pi_z_col + "$",
+
+    # Set up log scales (standard for Moody-like charts)
+    ax1.set_xscale(scale["x"])
+    ax1.set_yscale(scale["y"])
+    ax1.set_zscale(scale["z"])
+
+    # Fix these lines to reference column names not data values
+    # Use percentile limits in x
+    x_min = pi_coefs[pi_x_col].quantile(percentile["x"][0])
+    x_max = pi_coefs[pi_x_col].quantile(percentile["x"][1])
+
+    # Use percentile limits in y
+    y_min = pi_coefs[pi_y_col].quantile(percentile["y"][0])
+    y_max = pi_coefs[pi_y_col].quantile(percentile["y"][1])
+
+    # Use percentile limits in z
+    z_min = pi_coefs[pi_z_col].quantile(percentile["z"][0])
+    z_max = pi_coefs[pi_z_col].quantile(percentile["z"][1])
+    # ax4.set_zlim(z_min, z_max)  # THIS IS THE ERROR - ax4 has no z-axis!
+
+    ax2.set_ylim(y_min, y_max)
+    # Set y-axis limits for ax3 (which shows z on y-axis)
+    ax3.set_ylim(z_min, z_max)
+
+    ax2.set_xlim(x_min, x_max)
+    ax3.set_xlim(x_min, x_max)
+
+    ax4.set_ylim(z_min, z_max)  # For ax4, z is on the y-axis
+    ax4.set_xlim(y_min, y_max)  # For ax4, y is on the x-axis
+
+    # Set z limits for the 3D plot
+    ax1.set_zlim(z_min, z_max)  # Set z limits for 3D plot
+
+    # Set log scales for the 2D plots if specified
+    if scale["x"] == "log":
+        ax2.set_xscale("log")
+        ax3.set_xscale("log")
+    if scale["y"] == "log":
+        ax2.set_yscale("log")
+        ax4.set_xscale("log")
+    if scale["z"] == "log":
+        ax3.set_yscale("log")
+        ax4.set_yscale("log")
+
+    # # Also handle the hard-coded limits if provided
+    # if limits["x"] != [0, 1]:
+    #     ax2.set_xlim(limits["x"])
+    #     ax3.set_xlim(limits["x"])
+    #     ax1.set_xlim(limits["x"])
+    # if limits["y"] != [0, 1]:
+    #     ax2.set_ylim(limits["y"])
+    #     ax4.set_xlim(limits["y"])
+    #     ax1.set_ylim(limits["y"])
+    # if limits["z"] != [0, 1]:
+    #     ax3.set_ylim(limits["z"])
+    #     ax4.set_ylim(limits["z"])
+    #     ax1.set_zlim(limits["z"])
+
+    # Adjust layout
+    plt.tight_layout(pad=3.0, w_pad=4.0, h_pad=3.0)
+    plt.suptitle(title, fontsize=16, color="black", fontweight="bold")
+    plt.subplots_adjust(top=0.92)
+
+    # Save figure if requested
+    if file_path and fname:
+        os.makedirs(file_path, exist_ok=True)
+        full_file_path = os.path.join(file_path, fname)
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            _msg = f"Error saving plot: {e}. File path: "
+            _msg += f"{file_path}, fname: {fname}"
+            raise ValueError(_msg)
+
+    plt.show()
+    plt.close(fig)
+
+
 def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
                                 contour_lbl: str,
                                 contour_vals: list[float] = None,
