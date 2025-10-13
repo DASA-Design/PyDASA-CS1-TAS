@@ -79,7 +79,7 @@ prompt_toolkit==3.0.52
 psutil==7.1.0
 pure_eval==0.2.3
 pycparser==2.23
-pydasa @ file:///C:/Users/Felipe/OneDrive/Documents/GitHub/DASA-Design/PyDASA/dist/pydasa-0.1.9-py3-none-any.whl#sha256=713b1ec5d498b8a625f7373b84d310efc45c79a4f78b7d55c7a4a2bb5c21274d
+pydasa @ file:///C:/Users/Felipe/OneDrive/Documents/GitHub/DASA-Design/PyDASA/dist/pydasa-0.1.90-py3-none-any.whl#sha256=e1b48b9989d311f517c9b8471424b0947a3d80789cdd9cff68d6fb3ddb12fad3
 Pygments==2.19.2
 pyparsing==3.2.5
 python-dateutil==2.9.0.post0
@@ -98,7 +98,6 @@ rpds-py==0.27.1
 SALib==1.5.1
 scikit-learn==1.7.2
 scipy==1.16.2
-seaborn==0.13.2
 Send2Trash==1.8.3
 setuptools==80.9.0
 six==1.17.0
