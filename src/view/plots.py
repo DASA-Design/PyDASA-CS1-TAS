@@ -1526,9 +1526,10 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
         edgecolor="gray",
     )
 
+    # TODO maybe i need to remove it
     plt.text(
-        pi_coefs[pi_x].quantile(0.05),  # X position at 5th percentile
-        pi_coefs[pi_y].quantile(0.10),  # Y position at 10th percentile
+        pi_coefs[pi_x].quantile(0.20),  # X position at 10th percentile
+        pi_coefs[pi_y].quantile(0.20),  # Y position at 10th percentile
         "Low Stall &\nLow Occupancy",
         fontsize=10,
         ha="left",
@@ -1539,8 +1540,8 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
     # Bottom-Right (Low Y, High X)
     plt.text(
-        pi_coefs[pi_x].quantile(0.95),  # X position at 95th percentile
-        pi_coefs[pi_y].quantile(0.90),  # Y position at 90th percentile
+        pi_coefs[pi_x].quantile(0.65),  # X position at 65th percentile
+        pi_coefs[pi_y].quantile(0.65),  # Y position at 65th percentile
         "High Stall &\nHigh Occupancy",
         fontsize=10,
         ha="left",
