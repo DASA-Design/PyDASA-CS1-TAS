@@ -1528,8 +1528,8 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
 
     # TODO maybe i need to remove it
     plt.text(
-        pi_coefs[pi_x].quantile(0.20),  # X position at 10th percentile
-        pi_coefs[pi_y].quantile(0.20),  # Y position at 10th percentile
+        pi_coefs[pi_x].quantile(0.20),  # X position at 20th percentile
+        pi_coefs[pi_y].quantile(0.20),  # Y position at 20th percentile
         "Low Stall &\nLow Occupancy",
         fontsize=10,
         ha="left",
