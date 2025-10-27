@@ -982,8 +982,9 @@ def plot_nodes_heatmap(net_metrics: list[pd.DataFrame],
             fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
             print(f"Plot saved successfully to: {full_file_path}")
         except Exception as e:
-            raise ValueError(
-                f"Error saving plot: {e}. File path: {file_path}, fname: {fname}")
+            _msg = f"Error saving plot: {e}. "
+            _msg += f"File path: {file_path}, fname: {fname}"
+            raise ValueError(_msg)
 
     plt.show()
     plt.close(fig)
@@ -1527,9 +1528,10 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
     )
 
     # TODO maybe i need to remove it
+    # Bottom-Right (High Y, High X)
     plt.text(
-        pi_coefs[pi_x].quantile(0.20),  # X position at 20th percentile
-        pi_coefs[pi_y].quantile(0.20),  # Y position at 20th percentile
+        pi_coefs[pi_x].quantile(0.30),  # X position at 30th percentile
+        pi_coefs[pi_y].quantile(0.30),  # Y position at 30th percentile
         "Low Stall &\nLow Occupancy",
         fontsize=10,
         ha="left",
@@ -1538,10 +1540,10 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
         bbox=_bbox_style
     )
 
-    # Bottom-Right (Low Y, High X)
+    # Bottom-Right (High Y, High X)
     plt.text(
-        pi_coefs[pi_x].quantile(0.65),  # X position at 65th percentile
-        pi_coefs[pi_y].quantile(0.65),  # Y position at 65th percentile
+        pi_coefs[pi_x].quantile(0.70),  # X position at 70th percentile
+        pi_coefs[pi_y].quantile(0.70),  # Y position at 70th percentile
         "High Stall &\nHigh Occupancy",
         fontsize=10,
         ha="left",
@@ -1559,8 +1561,137 @@ def plot_performance_coef_chart(pi_coefs: pd.DataFrame,
             fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
             print(f"Plot saved successfully to: {full_file_path}")
         except Exception as e:
-            raise ValueError(
-                f"Error saving plot: {e}. File path: {file_path}, fname: {fname}")
+            _msg = f"Error saving plot: {e}. "
+            _msg += f"File path: {file_path}, fname: {fname}"
+            raise ValueError(_msg)
+
+    plt.show()
+    plt.close(fig)
+
+
+def plot_coef_histograms(pi_coefs: pd.DataFrame,
+                         col_limit: int,
+                         metrics: list[str] = None,
+                         labels: list[str] = None,
+                         title: str = None,
+                         file_path: str = None,
+                         fname: str = None,
+                         verbose: bool = False) -> None:
+    """*plot_coef_histogram()* plot histograms of performance coefficients for a queueing system.
+
+    Args:
+        pi_coefs (pd.DataFrame): DataFrame containing the performance coefficients.
+        col_limit (int): Maximum number of columns per row in the subplot grid.
+        metrics (list[str], optional): Metrics to plot. Defaults to None.
+        labels (list[str], optional): Labels for the metrics. Defaults to None.
+        title (str, optional): Title for the chart. Defaults to None.
+        file_path (str, optional): File path to save the chart. Defaults to None.
+        fname (str, optional): File name for the chart. Defaults to None.
+        verbose (bool, optional): Whether to print verbose output. Defaults to False.
+
+    Raises:
+        ValueError: if the input types are incorrect.
+        ValueError: if the metrics and labels are not valid.
+        ValueError: if there is an error saving the plot.
+    """
+    # Input validation
+    if not isinstance(pi_coefs, pd.DataFrame):
+        _msg = f"Invalid type input: {type(pi_coefs)}"
+        _msg += " - pi_coefs must be a DataFrame"
+        raise ValueError(_msg)
+
+    # Setting default numeric metric names
+    if metrics is None:
+        metrics = pi_coefs.select_dtypes(include="number")
+        metrics = metrics.columns.tolist()
+        if "node" in metrics:
+            metrics.remove("node")
+
+    # set default labels
+    if labels is None:
+        labels = metrics
+
+    # Add overall title
+    if title is None:
+        title = "System's Dimensionless Coefficient Histograms."
+
+    # check for metrics and labels to be useful
+    elif not isinstance(metrics, list) or len(labels) != len(metrics):
+        _msg = f"Labels list length ({len(labels)}) "
+        _msg += f"must match DataFrames list length ({len(metrics)})"
+        raise ValueError(_msg)
+
+    # Get all columns to plot
+    n_cols = len(metrics)
+
+    # Calculate grid dimensions: 3 columns, n rows
+    n_rows = int(np.ceil(n_cols / col_limit))
+
+    # Create figure with subplots
+    fig, axs = plt.subplots(n_rows,
+                            col_limit,
+                            figsize=(21, 5 * n_rows),
+                            constrained_layout=True)
+
+    # add plot tittle
+    fig.suptitle(title, fontsize=16, fontweight="bold")
+
+    # Flatten axes array for easier iteration
+    axs_flat = axs.flatten() if n_rows > 1 else [axs] if col_limit == 1 else axs
+
+    # Plot each metric
+    for idx, (col, lbl) in enumerate(zip(metrics, labels)):
+        # Select the appropriate subplot
+        ax = axs_flat[idx]
+
+        # Verbose output
+        if verbose:
+            print(f"\tPlotting Histogram {idx + 1}/{n_cols}: {col}")
+
+        # Plot histogram with KDE
+        # Remove invalid values (inf, nan)
+        data = pi_coefs[col].replace([np.inf, -np.inf], np.nan).dropna()
+
+        if len(data) > 0:
+            # Apply log transformation, if needed
+            # log_data = np.log1p(data)
+            log_data = data
+
+            # Plot histogram
+            sns.histplot(log_data, bins=50, kde=True, ax=ax)
+            ax.set_title(f"Histogram: {lbl}\n${col}$", fontsize=10, wrap=True)
+            ax.set_xlabel("Value", fontsize=8)
+            ax.set_ylabel("Frequency", fontsize=8)
+            ax.grid(True, alpha=0.3)
+            # setting log grid
+            # ax.loglog()
+            ax.tick_params(labelsize=7)
+        else:
+            ax.text(0.5, 0.5, "INVALID DATA",
+                    ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(f"Histogram: ${col}$", fontsize=10)
+            if verbose:
+                print(f"\tWARNING: Invalid data for: {col}")
+
+    # Hide unused subplots
+    for idx in range(n_cols, len(axs_flat)):
+        axs_flat[idx].set_visible(False)
+
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+
+    # Save figure if requested
+    if file_path and fname:
+        os.makedirs(file_path, exist_ok=True)
+        full_file_path = os.path.join(file_path, fname)
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            _msg = f"Error saving plot: {e}. "
+            _msg += f"File path: {file_path}, fname: {fname}"
+            raise ValueError(_msg)
 
     plt.show()
     plt.close(fig)
