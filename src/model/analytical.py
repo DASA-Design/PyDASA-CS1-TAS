@@ -54,6 +54,10 @@ def solve_jackson_network(mu: List[float],
         q._lambda = la
         # calculating metrics for the queue
         q.calculate_metrics()
+        # print("---------")
+        # print(q)
+        # print("---------")
+
         # append metric results
         rho.append(q.rho)
         L.append(q.avg_len)

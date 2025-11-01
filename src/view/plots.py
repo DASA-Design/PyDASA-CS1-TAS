@@ -1695,3 +1695,201 @@ def plot_coef_histograms(pi_coefs: pd.DataFrame,
 
     plt.show()
     plt.close(fig)
+
+
+def plot_calibration_curves(calib_df: pd.DataFrame,
+                            nodes: list[int],
+                            node_names: list[str] = None,
+                            title: str = None,
+                            file_path: str = None,
+                            fname: str = None,
+                            verbose=False) -> None:
+    """*plot_calibration_curves()* plot calibration curves for a queueing system showing Lambda vs L, Lambda vs W, and L vs W for all nodes.
+
+    Args:
+        calib_df (pd.DataFrame): Calibration DataFrame with columns like 'lambda_n0', 'L_n0', 'W_n0', etc.
+        nodes (list[int]): List of node IDs to plot (e.g., [0, 1, 2, 3, ...])
+        node_names (list[str], optional): List of node names for legend. Defaults to None.
+        title (str, optional): Main title for the figure.. Defaults to None.
+        file_path (str, optional): File path to save the chart. Defaults to None.
+        fname (str, optional): File name for the chart. Defaults to None.
+        verbose (bool, optional): Whether to print verbose output. Defaults to False.
+
+    Raises:
+        ValueError: If required columns are missing from the DataFrame.
+        ValueError: If the plot cannot be saved.
+    """
+
+    # Set default node names if not provided
+    if node_names is None:
+        node_names = [f"Node {i}" for i in nodes]
+
+    # Set default title if not provided
+    if title is None:
+        title = "Queue Network Calibration Curves"
+
+    # Verify required columns exist
+    required_cols = []
+    for idx in nodes:
+        required_cols.extend([f"lambda_n{idx}", f"L_n{idx}", f"W_n{idx}"])
+
+    missing_cols = [col for col in required_cols if col not in calib_df.columns]
+    if missing_cols:
+        _msg = f"Missing required columns: {missing_cols}"
+        raise ValueError(_msg)
+
+    # Create figure with 3 subplots
+    fig, axes = plt.subplots(1, 3, figsize=(24, 7))
+    fig.set_facecolor("white")
+
+    # Define color palette for nodes
+    colors = plt.cm.tab20(np.linspace(0, 1, len(nodes)))
+
+    # SUBPLOT 1: Lambda vs L (System Length)
+    ax1 = axes[0]
+    ax1.set_facecolor("white")
+
+    if verbose:
+        print("Plotting Lambda Vs. L (System Length) curves...")
+
+    for node_id, name, color in zip(nodes, node_names, colors):
+        lambda_col = f"lambda_n{node_id}"
+        L_col = f"L_n{node_id}"
+
+        # Extract data
+        lambda_vals = calib_df[lambda_col].values
+        L_vals = calib_df[L_col].values
+
+        # Plot line
+        ax1.plot(lambda_vals,
+                 L_vals,
+                 label=name,
+                 color=color,
+                 linewidth=2.0,
+                 alpha=0.8,
+                 marker="o",
+                 markersize=3,
+                 markevery=max(1, len(lambda_vals) // 20))
+
+    ax1.set_xlabel(r"$\lambda$ [req/s]",
+                   fontsize=14,
+                   fontweight="bold")
+    ax1.set_ylabel(r"$L$ (System Length) [req]",
+                   fontsize=14,
+                   fontweight="bold")
+    ax1.set_title("Arrival Rate vs System Length",
+                  fontsize=16,
+                  fontweight="bold",
+                  pad=15)
+    ax1.grid(True, alpha=0.7, linestyle="--")
+    ax1.legend(loc="best", fontsize=10, framealpha=0.9)
+
+    # SUBPLOT 2: Lambda vs W (Waiting Time)
+    ax2 = axes[1]
+    ax2.set_facecolor("white")
+
+    if verbose:
+        print("Plotting Lambda Vs.  W (Waiting Time) curves...")
+
+    for node_id, name, color in zip(nodes, node_names, colors):
+        lambda_col = f"lambda_n{node_id}"
+        W_col = f"W_n{node_id}"
+
+        # Extract data
+        lambda_vals = calib_df[lambda_col].values
+        W_vals = calib_df[W_col].values
+
+        # Plot line
+        ax2.plot(lambda_vals,
+                 W_vals,
+                 label=name,
+                 color=color,
+                 linewidth=2.0,
+                 alpha=0.8,
+                 marker="s",
+                 markersize=3,
+                 markevery=max(1, len(lambda_vals) // 20))
+
+    ax2.set_xlabel(r"$\lambda$ [req/s]",
+                   fontsize=14,
+                   fontweight="bold")
+    ax2.set_ylabel(r"$W$ (Time in System) [s/req]",
+                   fontsize=14,
+                   fontweight="bold")
+    ax2.set_title("Arrival Rate vs Time in System",
+                  fontsize=16,
+                  fontweight="bold",
+                  pad=15)
+    ax2.grid(True, alpha=0.7, linestyle="--")
+    ax2.legend(loc="best", fontsize=10, framealpha=0.9)
+
+    # Use log scale if values span multiple orders of magnitude
+    if W_vals.max() / W_vals.min() > 100:
+        ax2.set_yscale("log")
+
+    # SUBPLOT 3: L vs W (Operating Characteristic)
+    ax3 = axes[2]
+    ax3.set_facecolor("white")
+
+    if verbose:
+        print("Plotting L (System Length) Vs. W (Waiting time) curves...")
+
+    for node_id, name, color in zip(nodes, node_names, colors):
+        L_col = f"L_n{node_id}"
+        W_col = f"W_n{node_id}"
+
+        # Extract data
+        L_vals = calib_df[L_col].values
+        W_vals = calib_df[W_col].values
+
+        # Plot line
+        ax3.plot(L_vals,
+                 W_vals,
+                 label=name,
+                 color=color,
+                 linewidth=2.0,
+                 alpha=0.8,
+                 marker="^",
+                 markersize=3,
+                 markevery=max(1, len(L_vals) // 20))
+
+    ax3.set_xlabel(r"$L$ (System Length) [req]",
+                   fontsize=14,
+                   fontweight="bold")
+    ax3.set_ylabel(r"$W$ (Time in System) [s/req]",
+                   fontsize=14,
+                   fontweight="bold")
+    ax3.set_title("System Length vs Time in System",
+                  fontsize=16,
+                  fontweight="bold",
+                  pad=15)
+    ax3.grid(True, alpha=0.7, linestyle="--")
+    ax3.legend(loc="best", fontsize=10, framealpha=0.9)
+
+    # Use log scale if values span multiple orders of magnitude
+    if W_vals.max() / W_vals.min() > 100:
+        ax3.set_yscale("log")
+
+    # ========================================================================
+    # Add overall title
+    # ========================================================================
+    fig.suptitle(title, fontsize=20, fontweight="bold", y=0.98)
+
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+
+    # Save figure if requested
+    if file_path and fname:
+        os.makedirs(file_path, exist_ok=True)
+        full_file_path = os.path.join(file_path, fname)
+        print(f"Saving plot to: {full_file_path}")
+        try:
+            fig.savefig(full_file_path, bbox_inches="tight", dpi=300)
+            print(f"Plot saved successfully to: {full_file_path}")
+        except Exception as e:
+            _msg = f"Error saving plot: {e}. "
+            _msg += f"File path: {file_path}, fname: {fname}"
+            raise ValueError(_msg)
+
+    plt.show()
+    plt.close(fig)

@@ -181,6 +181,9 @@ class BasicQueue(ABC):
     avg_wait_q: float = field(default=0.0, init=False)
     """Average time a request spends waiting in the queue (Wq: mean waiting time in queue with the Little's Law)."""
 
+    _lambda_eff: float = field(default=0.0, init=False)
+    """Effective Arrival rate (λe: lambda_eff = lambda * (1 - ))."""
+
     def __post_init__(self):
         """*__post_init__()* Post-initialization processing to validate parameters and calculate metrics.
         """
@@ -388,8 +391,8 @@ class QueueMM1(BasicQueue):
         Returns:
             float: The probability of having 0 requests in the system.
         """
-        p_zero = 1.0 - self.rho
-        return p_zero
+        p_z = 1.0 - self.rho
+        return p_z
 
     def calculate_prob_n(self, n: int) -> float:
         """*calculate_prob_n()* calculates P(n), or the probability of having n requests in the system for M/M/1.
@@ -408,6 +411,7 @@ class QueueMM1(BasicQueue):
             p_n = -1.0
         elif n >= 0:
             p_n = (1 - self.rho) * (self.rho ** n)
+        self.p_n = p_n
         return p_n
 
 
@@ -504,8 +508,8 @@ class QueueMMs(BasicQueue):
         p_over_s = numerator / denominator
 
         # calculate the probability of having 0 requests in the system
-        p_zero = (p_under_s + p_over_s)**-1
-        return p_zero
+        p_z = (p_under_s + p_over_s)**-1
+        return p_z
 
     def calculate_prob_n(self, n: int) -> float:
         """*calculate_prob_n()* calculates P(n), or the probability of having n requests in the system for M/M/s.
@@ -540,6 +544,7 @@ class QueueMMs(BasicQueue):
 
         # finishing up calculations
         p_n = (numerator / denominator) * self.p_z
+        self.p_n = p_n
         return p_n
 
 
@@ -606,7 +611,7 @@ class QueueMM1K(BasicQueue):
         _p_kapacity = self.calculate_prob_n(self.kapacity)
 
         # Calculate the effective arrival rate
-        _lambda_eff = self._lambda * (1 - _p_kapacity)
+        self._lambda_eff = self._lambda * (1 - _p_kapacity)
 
         # if utilization (rho) is less than 1
         if self.rho < 1.0:
@@ -622,7 +627,7 @@ class QueueMM1K(BasicQueue):
             # Calculate average number of requests in the queue
             # aquivalent to:
             # self.avg_len_q = self.avg_len - self.rho * (1 - _p_kapacity)
-            self.avg_len_q = self.avg_len - _lambda_eff / self.mu
+            self.avg_len_q = self.avg_len - self._lambda_eff / self.mu
 
         # if utilization (rho) is equal to 1, saturation occurs
         if self.rho == 1.0:
@@ -634,10 +639,10 @@ class QueueMM1K(BasicQueue):
             self.avg_len_q = numerator / denominator
 
         # Calculate average time spent in the system
-        self.avg_wait = self.avg_len / _lambda_eff
+        self.avg_wait = self.avg_len / self._lambda_eff
 
         # Calculate average time spent in the queue
-        self.avg_wait_q = self.avg_len_q / _lambda_eff
+        self.avg_wait_q = self.avg_len_q / self._lambda_eff
 
     def calculate_prob_zero(self) -> float:
         """*calculate_prob_zero()* Calculates P(0) or the probability of having 0 requests in the system for M/M/1/k model.
@@ -650,10 +655,10 @@ class QueueMM1K(BasicQueue):
         # use the probability of having n = 0 requests in the system.
         numerator = 1 - self.rho
         denominator = 1 - self.rho ** (self.kapacity + 1)
-        p_zero = numerator / denominator
+        p_z = numerator / denominator
 
         # return the calculated probability of having 0 requests in the system
-        return p_zero
+        return p_z
 
     def calculate_prob_n(self, n: int) -> float:
         """*get_prob_n()* Calculates P(n) or the probability of having n requests in the system for M/M/1/k model.
@@ -679,6 +684,7 @@ class QueueMM1K(BasicQueue):
             p_n = (self.kapacity + 1)**-1
 
         # return the calculated probability of having 0 requests in the system
+        self.p_n = p_n
         return p_n
 
 
@@ -749,62 +755,24 @@ class QueueMMsK(BasicQueue):
         _p_kapacity = self.calculate_prob_n(self.kapacity)
 
         # Calculate effective arrival rate (λ_eff)
-        _lambda_eff = self._lambda * (1 - _p_kapacity)
+        self._lambda_eff = self._lambda * (1 - _p_kapacity)
 
         # calculate the average number of requests in the queue (Lq)
         K = self.kapacity
-        L = sum(i * self.calculate_prob_n(i) for i in range(K + 1))
+        L = sum([i * self.calculate_prob_n(i) for i in range(K + 1)])
         self.avg_len = L
 
         # Calculate average number of requests in the queue (Lq)
         s = self.n_servers
         Lq = sum([(i - s) * self.calculate_prob_n(i)
                   for i in range(s, K + 1)])
-        self.avg_len = Lq
-
-        # # opcion 1
-        # # if utilization (rho) is less than 1
-        # if self.rho < 1.0:
-        #     numerator = self.rho ** (self.n_servers + 1)
-        #     denominator = gfactorial(self.n_servers) * self.n_servers
-        #     adjust = numerator / denominator
-
-        #     coef1 = (self.kapacity - self.n_servers + 1) * \
-        #         (self.rho ** self.kapacity - self.n_servers)
-        #     coef2 = (self.kapacity - self.n_servers) * \
-        #         self.rho ** (self.kapacity - self.n_servers + 1)
-
-        #     numerator = 1 - coef1 + coef2
-        #     denominator = (1 - self.rho) ** 2
-        #     adjust = adjust * (numerator / denominator)
-        #     self.avg_len_q = adjust * self.p_z
-
-        # # if utilization (rho) is equal to 1, saturation occurs
-        # elif self.rho == 1.0:
-        #     # calculate the average number of requests in the queue (Lq)
-        #     adjust = self.n_servers ** self.n_servers
-        #     coef1 = self.kapacity - self.n_servers
-        #     coef2 = (self.kapacity - self.n_servers + 1)
-        #     numerator = adjust * coef1 * coef2
-        #     denominator = 2 * gfactorial(self.n_servers)
-        #     self.avg_len_q = numerator / denominator * self.p_z
-
-        # # # opcion 2, works but can be slower!!!
-        # # Lq = sum([(i - self.n_servers) * self.calculate_prob_n(i) for i in range(self.n_servers, self.kapacity + 1)])
-        # # self.avg_len_q = Lq
-
-        # # calculate the average number of requests in the system (L)
-        # coef1 = sum(i * self.calculate_prob_n(i) for i in range(self.n_servers))
-        # coef2 = sum(self.calculate_prob_n(i) for i in range(self.n_servers))
-        # self.avg_len = coef1 + self.n_servers * (1 - coef2) + self.avg_len_q
-
-        # # self.avg_len = self.avg_len_q + (1 - p_kap) * self.rho
+        self.avg_len_q = Lq
 
         # calculate the average time a request spends in the system (W)
-        self.avg_wait = self.avg_len / _lambda_eff
+        self.avg_wait = self.avg_len / self._lambda_eff
 
         # calculate the average time a request spends in the queue (Wq)
-        self.avg_wait_q = self.avg_len_q / _lambda_eff
+        self.avg_wait_q = self.avg_len_q / self._lambda_eff
 
     def calculate_prob_zero(self) -> float:
         """*get_prob_zero()* Calculates P(0) or the probability of having 0 requests in the system for M/M/s/K model.
@@ -813,7 +781,7 @@ class QueueMMsK(BasicQueue):
             float: The probability of having 0 requests in the system.
         """
         # default value, for error checking
-        p_zero = -1.0
+        p_z = -1.0
 
         # Calculate probability in servers
         tau = self.tau
@@ -823,38 +791,8 @@ class QueueMMsK(BasicQueue):
         _sum_q = sum((tau ** i) / (gfactorial(s) * (s ** (i - s)))
                      for i in range(s, K + 1))
 
-        p_zero = (_sum_s + _sum_q)**-1
-        # FIXME Old code, delete after testing the new one
-        # # Calculate the traffic intensity (tau)
-        # tau = self._lambda / self.mu
-        # # Calculate the utilization (rho)
-        # _rho = self._lambda / (self.mu * self.n_servers)
-
-        # # calculate the coefficient for n requests
-        # numerator = tau ** self.n_servers
-        # denominator = gfactorial(self.n_servers)
-        # coef1 = numerator / denominator
-
-        # # calculate probability of having up to s requests in system
-        # p_under_s = sum((tau ** i) / gfactorial(i)
-        #                 for i in range(self.n_servers))
-        # # define probability of having more than s requests in system
-        # p_over_s = 0.0
-
-        # # if utilization (rho) is less than 1
-        # if _rho < 1.0:
-        #     # calculate the probability of having n requests in the system
-        #     numerator = 1 - _rho ** (self.kapacity - self.n_servers + 1)
-        #     denominator = 1 - _rho
-        #     p_in_queue = numerator / denominator
-        #     p_over_s = coef1 * p_in_queue
-
-        # # if utilization (rho) is equal to 1, saturation occurs
-        # elif _rho == 1.0:
-        #     p_over_s = coef1 * (self.kapacity - self.n_servers + 1)
-
-        # p_zero = 1 / (p_under_s + p_over_s)
-        return p_zero
+        p_z = (_sum_s + _sum_q)**-1
+        return p_z
 
     def calculate_prob_n(self, n: int) -> float:
         """*calculate_prob_n()* Calculates P(n), or the probability of having n requests in the system for M/M/s/K model.
@@ -890,5 +828,5 @@ class QueueMMsK(BasicQueue):
             _pow = self.n_servers ** (n - self.n_servers)
             denominator = gfactorial(self.n_servers) * _pow
             p_n = (numerator / denominator) * self.p_z
-
+        self.p_n = p_n
         return p_n
