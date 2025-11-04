@@ -1731,7 +1731,9 @@ def plot_calibration_curves(calib_df: pd.DataFrame,
     # Verify required columns exist
     required_cols = []
     for idx in nodes:
-        required_cols.extend([f"lambda_n{idx}", f"L_n{idx}", f"W_n{idx}"])
+        required_cols.extend([f"\\lambda_{{{idx}}}",
+                              f"L_{{{idx}}}",
+                              f"W_{{{idx}}}"])
 
     missing_cols = [col for col in required_cols if col not in calib_df.columns]
     if missing_cols:
@@ -1753,8 +1755,8 @@ def plot_calibration_curves(calib_df: pd.DataFrame,
         print("Plotting Lambda Vs. L (System Length) curves...")
 
     for node_id, name, color in zip(nodes, node_names, colors):
-        lambda_col = f"lambda_n{node_id}"
-        L_col = f"L_n{node_id}"
+        lambda_col = f"\\lambda_{{{node_id}}}"
+        L_col = f"L_{{{node_id}}}"
 
         # Extract data
         lambda_vals = calib_df[lambda_col].values
@@ -1792,8 +1794,8 @@ def plot_calibration_curves(calib_df: pd.DataFrame,
         print("Plotting Lambda Vs.  W (Waiting Time) curves...")
 
     for node_id, name, color in zip(nodes, node_names, colors):
-        lambda_col = f"lambda_n{node_id}"
-        W_col = f"W_n{node_id}"
+        lambda_col = f"\\lambda_{{{node_id}}}"
+        W_col = f"W_{{{node_id}}}"
 
         # Extract data
         lambda_vals = calib_df[lambda_col].values
@@ -1835,8 +1837,8 @@ def plot_calibration_curves(calib_df: pd.DataFrame,
         print("Plotting L (System Length) Vs. W (Waiting time) curves...")
 
     for node_id, name, color in zip(nodes, node_names, colors):
-        L_col = f"L_n{node_id}"
-        W_col = f"W_n{node_id}"
+        L_col = f"L_{{{node_id}}}"
+        W_col = f"W_{{{node_id}}}"
 
         # Extract data
         L_vals = calib_df[L_col].values
