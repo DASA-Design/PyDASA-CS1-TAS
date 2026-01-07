@@ -187,6 +187,11 @@ class BasicQueue(ABC):
     def __post_init__(self):
         """*__post_init__()* Post-initialization processing to validate parameters and calculate metrics.
         """
+        # Ensure n_servers and kapacity are integers
+        self.n_servers = int(self.n_servers)
+        if self.kapacity is not None:
+            self.kapacity = int(self.kapacity)
+        
         self._validate_basic_params()
         self._validate_params()
         # self._calculate_metrics()
