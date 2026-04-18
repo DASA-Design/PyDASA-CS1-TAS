@@ -13,7 +13,6 @@ Configuration module for...
 # native python modules
 # forward references + postpone eval type hints
 from __future__ import annotations
-# dataclasses
 from dataclasses import dataclass, field
 
 # data types
@@ -21,8 +20,6 @@ from typing import Any, Dict, Optional
 
 # indicate it is an abstract base class
 from abc import ABC, abstractmethod
-# TODO: check if numpy is needed
-# import numpy as np
 import math
 
 # import custom factorial (gamma) function
