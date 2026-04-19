@@ -22,10 +22,10 @@ Reproducible DASA (Dimensional Analysis for Software Architecture) evaluation of
 
 | Value | Meaning | Loads |
 |---|---|---|
-| `baseline` | Before adaptation (MAPE-K inert) | `profile/dflt.json` only |
-| `s1` | S1 service-failure adaptation (Retry-style) | profile + `adaptation/s1.json` |
-| `s2` | S2 response-time adaptation (Select-Reliable-style) | profile + `adaptation/s2.json` |
-| `aggregate` | Both S1 and S2 applied together (realistic deployment) | profile + both overrides |
+| `baseline` | Before adaptation (MAPE-K inert) | `profile/dflt.json`, scenario `baseline` |
+| `s1` | S1 service-failure adaptation (Retry-style) | `profile/opti.json`, scenario `s1` (opti routing + dflt services) |
+| `s2` | S2 response-time adaptation (Select-Reliable-style) | `profile/opti.json`, scenario `s2` (dflt routing + opti services) |
+| `aggregate` | Both S1 and S2 applied together (realistic deployment) | `profile/opti.json`, scenario `aggregate` (opti routing + opti services) |
 
 ## Validation criteria (Cámara et al., 2023)
 
@@ -61,7 +61,8 @@ Full setup and the 20-run matrix in [notes/quickstart.md](notes/quickstart.md).
 │   ├── analytic/  stochastic/  dimensional/  experiment/
 │   └── view/  io/  utils/
 ├── data/
-│   ├── config/{profile,adaptation,method}/
+│   ├── config/{profile,method}/
+│   ├── reference/                                # authors' TAS 1.6 replication dump
 │   └── results/<method>/<adaptation>/<profile>.json + requirements.json
 ├── assets/
 │   └── img/<method>/<adaptation>/
