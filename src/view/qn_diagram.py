@@ -69,7 +69,7 @@ plt.rcParams.update({
 
 
 # -- Shared styling constants (reused across every plotter) --
-_GRID_STYLE = dict(axis="y", linestyle="--", alpha=0.7)
+_GRID_STYLE = dict(axis="y", linestyle="--", alpha=0.7, color="#555555")
 _LBL_STYLE = dict(fontweight="bold", color=_TEXT_BLACK)
 _TITLE_STYLE = dict(fontsize=14, fontweight="bold", pad=20)
 _SUPTITLE_STYLE = dict(fontsize=16, fontweight="bold")
@@ -1209,7 +1209,8 @@ def plot_net_bars(nets: List[pd.DataFrame],
         for _i in range(len(_metrics))
     ]
     _ax.set_xticks(_centers)
-    _ax.set_xticklabels(_labels, rotation=30, ha="right")
+    _ax.set_xticklabels(_labels, rotation=30, ha="right",
+                        fontweight="bold", color=_TEXT_BLACK)
 
     _ax.set_ylabel("Value" + (" (log scale)" if logscale else ""), **_LBL_STYLE)
     _ax.set_title(title or "Network Metrics Comparison", **_TITLE_STYLE)
@@ -1276,7 +1277,8 @@ def plot_net_delta(deltas: pd.DataFrame,
     # cosmetics: zero baseline, ticks, labels, grid, legend
     _ax.axhline(y=0, color="black", linestyle="-", alpha=0.3)
     _ax.set_xticks(range(len(_metrics)))
-    _ax.set_xticklabels(_labels, rotation=30, ha="right")
+    _ax.set_xticklabels(_labels, rotation=30, ha="right",
+                        fontweight="bold", color=_TEXT_BLACK)
     _ax.set_ylabel("Percent change (%)", **_LBL_STYLE)
     _ax.set_title(title or "Network Metrics Delta", **_TITLE_STYLE)
     _ax.grid(**_GRID_STYLE)
