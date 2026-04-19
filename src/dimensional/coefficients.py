@@ -1,70 +1,106 @@
-"""Config-driven derivation of operationally meaningful coefficients."""
+# -*- coding: utf-8 -*-
+"""
+Module coefficients.py
+======================
 
+Config-driven derivation of operationally meaningful coefficients (theta,
+sigma, eta, phi) from a post-`run_analysis` engine. Specs come from
+`data/config/method/dimensional.json` under `coefficients`:
+
+    {
+        "symbol": "theta",
+        "expr_pattern": "{pi[6]} * {pi[3]}**(-1)",
+        "name": "Occupancy",
+        "description": "theta = L/K - queue fill ratio"
+    }
+
+`{pi[i]}` placeholders resolve to the i-th Pi coefficient key as it sits in
+`engine.coefficients` after `run_analysis()`. Must be called AFTER analysis, else no Pi-groups exist yet.
+
+    - `derive_coefficients(engine, specs, artifact_key)` applies every spec in order and returns `{full_sym: Coefficient}` for the derived ones only.
+
+*IMPORTANT:* Pi-index ordering is stable across adaptations for a given
+artifact but can shift if the variable set changes. Re-verify with a spot
+test when the profile schema is edited.
+"""
+# native python modules
 from __future__ import annotations
 
+# text processing
 import re
+
+# data types
 from typing import Any
 
+# pydasa library
 from pydasa.workflows.phenomena import AnalysisEngine
 
-_PI_PATTERN = re.compile(r"\{pi\[(\d+)\]\}")
+
+# placeholder matcher for the `{pi[i]}` indices in expr_pattern strings
+_PI_PAT = re.compile(r"\{pi\[(\d+)\]\}")
 
 
 def _resolve_expr(expr_pattern: str, pi_keys: list[str]) -> str:
-    """Substitute `{pi[i]}` placeholders with the i-th Pi coefficient key.
-
-    Example: `"{pi[1]}**(-1) * {pi[2]}"` with pi_keys=["\\Pi_{0}", "\\Pi_{1}", "\\Pi_{2}"]
-    -> `"\\Pi_{1}**(-1) * \\Pi_{2}"`.
-    """
-    def _sub(match: re.Match[str]) -> str:
-        _i = int(match.group(1))
-        if _i >= len(pi_keys):
-            raise IndexError(
-                f"expr_pattern references pi[{_i}] but only {len(pi_keys)} "
-                "Pi-groups were derived; check variable/FDU counts."
-            )
-        return pi_keys[_i]
-
-    return _PI_PATTERN.sub(_sub, expr_pattern)
-
-
-def derive_coefficients(
-    engine: AnalysisEngine,
-    specs: list[dict[str, Any]],
-    *,
-    artifact_key: str,
-) -> dict[str, Any]:
-    """Derive named coefficients from an engine's Pi-groups per the spec list.
-
-    Must be called AFTER `engine.run_analysis()`.
+    """*_resolve_expr()* substitutes `{pi[i]}` tokens in `expr_pattern` with the i-th key in `pi_keys`.
 
     Args:
-        engine: AnalysisEngine with Pi-groups already derived.
-        specs: list of coefficient specs from `dimensional.json`. Each spec has
-            `symbol` (e.g. "theta"), `expr_pattern` (with `{pi[i]}` placeholders),
-            `name`, `description`. The symbol is suffixed with the artifact key
-            so the final coefficient symbol becomes `\\theta_{TAS_{1}}`.
-        artifact_key: artifact identifier in LaTeX subscript form.
+        expr_pattern (str): spec `expr_pattern` with `{pi[i]}` placeholders.
+        pi_keys (list[str]): Pi coefficient keys in the order returned by `run_analysis()`.
+
+    Raises:
+        IndexError: If any `{pi[i]}` references an index outside `pi_keys`.
 
     Returns:
-        Dict `{full_symbol: Coefficient}` for the derived coefficients only
-        (not the raw Pi-groups, which remain in `engine.coefficients`).
+        str: expression ready to pass to `engine.derive_coefficient(expr=...)`.
     """
-    _pi_keys = [k for k in engine.coefficients.keys() if k.startswith("\\Pi_")]
-    _derived: dict[str, Any] = {}
+    # substitute each placeholder or raise if the index is out of range
+    def _sub(m: re.Match[str]) -> str:
+        _i = int(m.group(1))
+        if _i >= len(pi_keys):
+            _msg = (f"expr_pattern references pi[{_i}] but only {len(pi_keys)} "
+                    "Pi-groups were derived; check variable/FDU counts.")
+            raise IndexError(_msg)
+        return pi_keys[_i]
 
-    for _spec in specs:
-        _symbol = _spec["symbol"]
-        _full_sym = f"\\{_symbol}_{{{artifact_key}}}"
-        _expr = _resolve_expr(_spec["expr_pattern"], _pi_keys)
+    return _PI_PAT.sub(_sub, expr_pattern)
 
-        _coeff = engine.derive_coefficient(
-            expr=_expr,
-            symbol=_full_sym,
-            name=f"{artifact_key} {_spec['name']} coefficient",
-            description=_spec["description"],
-            idx=-1,
-        )
-        _derived[_full_sym] = _coeff
 
-    return _derived
+def derive_coefficients(engine: AnalysisEngine,
+                        specs: list[dict[str, Any]],
+                        *,
+                        artifact_key: str) -> dict[str, Any]:
+    """*derive_coefficients()* applies named coefficient specs to a post-analysis engine.
+
+    Each spec's `symbol` is subscripted with `artifact_key` so the final
+    coefficient symbol becomes e.g. `\\theta_{TAS_{1}}`.
+
+    Args:
+        engine (AnalysisEngine): engine with Pi-groups already derived (`run_analysis()` must have been called).
+        specs (list[dict[str, Any]]): coefficient specs from `dimensional.json` with keys `symbol`, `expr_pattern`, `name`, `description`.
+        artifact_key (str): artifact identifier in LaTeX subscript form, e.g. `"TAS_{1}"`.
+
+    Returns:
+        dict[str, Any]: `{full_sym: Coefficient}` for the derived coefficients only; raw Pi-groups remain in `engine.coefficients`.
+    """
+    # collect the Pi-group keys in order so expr_pattern indices line up
+    _pi_keys = [_k for _k in engine.coefficients.keys() if _k.startswith("\\Pi_")]
+
+    # apply each spec in declaration order
+    _der: dict[str, Any] = {}
+    for _sp in specs:
+        # build the artifact-qualified coefficient symbol
+        _sym = _sp["symbol"]
+        _full = f"\\{_sym}_{{{artifact_key}}}"
+
+        # resolve the expression against the actual Pi-keys
+        _exp = _resolve_expr(_sp["expr_pattern"], _pi_keys)
+
+        # delegate to pydasa; `idx=-1` appends to the coefficient list
+        _coeff = engine.derive_coefficient(expr=_exp,
+                                           symbol=_full,
+                                           name=f"{artifact_key} {_sp['name']} coefficient",
+                                           description=_sp["description"],
+                                           idx=-1)
+        _der[_full] = _coeff
+
+    return _der

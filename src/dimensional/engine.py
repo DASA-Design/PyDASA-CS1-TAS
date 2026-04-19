@@ -1,49 +1,56 @@
-"""Per-artifact PyDASA AnalysisEngine construction for the TAS case study."""
+# -*- coding: utf-8 -*-
+"""
+Module engine.py
+================
 
+Per-artifact PyDASA `AnalysisEngine` construction for the TAS case study.
+One engine per artifact (`TAS_{1}..6`, `MAS_{1..4}`, `AS_{1..4}`, `DS_{1,3}`); `engine.run_analysis()` then derives Pi-groups from the attached variables.
+
+    - `build_engine(artifact_key, artifact_vars, schema)` instantiates an engine for the named artifact and attaches its `Variable` dict.
+
+*IMPORTANT:* pydasa takes ownership of the Variables on assignment. If the
+caller mutates the source dict after, the engine does not re-sync.
+"""
+# native python modules
 from __future__ import annotations
 
+# data types
 from typing import Any
 
+# pydasa library
 from pydasa.dimensional.vaschy import Schema
 from pydasa.elements.parameter import Variable
 from pydasa.workflows.phenomena import AnalysisEngine
 
 
-def build_engine(
-    artifact_key: str,
-    artifact_vars: dict[str, dict[str, Any]],
-    schema: Schema,
-    *,
-    fwk: str = "CUSTOM",
-    idx: int = 0,
-) -> AnalysisEngine:
-    """Build and configure an AnalysisEngine for one TAS artifact.
+def build_engine(artifact_key: str,
+                 artifact_vars: dict[str, dict[str, Any]],
+                 schema: Schema,
+                 *,
+                 fwk: str = "CUSTOM",
+                 idx: int = 0) -> AnalysisEngine:
+    """*build_engine()* builds a configured `AnalysisEngine` for one TAS artifact.
 
     Args:
-        artifact_key: artifact identifier in LaTeX subscript form, e.g.
-            `"TAS_{1}"`. Used in the engine name / description.
-        artifact_vars: dict of variable dicts from the PACS envelope
-            (`config["artifacts"][artifact_key]["vars"]`). Each value must
-            match `Variable(**params)` signature.
-        schema: pre-built Schema (see `build_schema`).
-        fwk: framework name; must match the Schema's `_fwk`.
-        idx: engine index (informational).
+        artifact_key (str): artifact identifier in LaTeX subscript form, e.g. `"TAS_{1}"`. Used in the engine name and description.
+        artifact_vars (dict[str, dict[str, Any]]): per-variable param dicts from the PACS envelope (`config["artifacts"][artifact_key]["vars"]`). Each value must match `Variable(**params)` signature.
+        schema (Schema): framework schema built by `build_schema()`.
+        fwk (str): framework name; must match the schema. Defaults to `"CUSTOM"`.
+        idx (int): engine index (informational).
 
     Returns:
-        An `AnalysisEngine` with `engine.variables` already assigned.
-        Call `engine.run_analysis()` to derive Pi-groups.
+        AnalysisEngine: engine with `engine.variables` already populated. Call `engine.run_analysis()` next to derive Pi-groups.
     """
-    _variables = {sym: Variable(**params) for sym, params in artifact_vars.items()}
+    # wrap each param dict into a pydasa Variable
+    _vars = {_s: Variable(**_p) for _s, _p in artifact_vars.items()}
 
-    _engine = AnalysisEngine(
-        _idx=idx,
-        _fwk=fwk,
-        _schema=schema,
-        _name=f"TAS {artifact_key} dimensional analysis",
-        description=(
-            f"Dimensional analysis for artifact {artifact_key} "
-            "(M/M/c/K queueing node)."
-        ),
-    )
-    _engine.variables = _variables
-    return _engine
+    # spin up the engine with the schema and descriptive metadata
+    _eng = AnalysisEngine(_idx=idx,
+                          _fwk=fwk,
+                          _schema=schema,
+                          _name=f"TAS {artifact_key} dimensional analysis",
+                          description=(f"Dimensional analysis for artifact {artifact_key} " + "(M/M/c/K queueing node)."))
+
+    # attach variables; pydasa takes ownership from here
+    _eng.variables = _vars
+    return _eng
