@@ -1,0 +1,18 @@
+{
+  "method": "experiment",
+  "description": "ReSeP-lite + ActivFORMS-lite reference implementation for the architectural experiment.",
+  "seed": 42,
+  "duration_invocations": 500,
+  "replications": 6,
+  "fault_injection": {
+    "enabled": true,
+    "model": "per_service_profile",
+    "notes": "Each atomic service's preInvokeOperation hook draws a Bernoulli with p=err from the profile to inject a failure."
+  },
+  "services": {
+    "medical_analysis_count": 3,
+    "alarm_count": 3,
+    "drug_count": 1
+  },
+  "notes": "Six-step experiment matches Table IV of [1]: 500-invocation runs over baseline/s1/s2/aggregate. Acceptance: reproduce baseline ≈ 0.18 fail rate, s1 ≈ 0.11, s2 ≈ 0.00."
+}

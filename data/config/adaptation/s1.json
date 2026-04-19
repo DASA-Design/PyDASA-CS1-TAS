@@ -1,0 +1,12 @@
+{
+  "adaptation": "s1",
+  "name": "S1 — Service-Failure Adaptation",
+  "source": "Weyns & Calinescu 2015 [1] Table I, scenario S1",
+  "mechanics": "Retry-style: switch to equivalent service on failure (Exception + Removal from Service + Dynamic Lookup composition, per Bass 3rd ed.)",
+  "parameters": {
+    "MAX_TIMEOUTS": 2,
+    "timeout_length_ms": 50
+  },
+  "variables": {
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(/.claude/skills/analyze/**)",
+      "Edit(/.claude/skills/code/**)",
+      "Edit(/.claude/skills/design/**)",
+      "Edit(/.claude/skills/develop/**)",
+      "Edit(/.claude/skills/write/**)",
+      "Bash(venv/Scripts/python.exe -c :*)",
+      "Bash(venv/Scripts/python.exe -m:*)",
+      "Bash(venv/Scripts/pip.exe install:*)",
+      "Bash(venv/Scripts/pip.exe freeze:*)",
+      "Bash(python -m venv venv)",
+      "Bash(jupyter lab:*)",
+      "Bash(jupyter nbconvert:*)",
+      "Bash(pytest:*)"
+    ]
+  }
+}
