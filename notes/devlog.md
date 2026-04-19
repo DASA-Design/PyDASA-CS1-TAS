@@ -10,6 +10,26 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-19 — Analytic method reproduces __OLD__ CSV to 6 decimals
+
+**Delivered.** Silent config drift found and fixed; baseline Jackson solution now matches `__OLD__/data/results/cs1/data/dflt_analytical_{node,net}_metrics.csv` to the 6th decimal place on every per-node row and every network-wide aggregate.
+
+- **`c=1`, `K=10` canonical values restored** across every artifact in both `data/config/profile/dflt.json` and `opti.json`. `dflt.json` had silently drifted to `c=2` (halving every utilisation); `opti.json` also had `K=6` (tightened during some earlier test). One-shot repair utility at `src/utils/fix_c_k.py` — ran once, left in place as a frozen record.
+- **Artifact + variable keys migrated to LaTeX form.** Artifact JSON keys: `TAS_1` -> `TAS_{1}`, `MAS_3` -> `MAS_{3}`, etc. Variable keys with q-subscripts split correctly: `Lq_{TAS_{1}}` -> `L_{q, TAS_{1}}`, `Wq_{TAS_{1}}` -> `W_{q, TAS_{1}}`. One-shot migration utility at `src/utils/rename_keys.py`. `ArtifactSpec._sub()` collapsed to identity (key IS the LaTeX subscript now).
+- **Baseline headline numbers** (exact match with OLD CSV): `avg_mu=653.85`, `avg_rho=0.29728`, `L_net=6.98730`, `Lq_net=3.12884`, `W_net=3.437 ms`, `Wq_net=1.541 ms`, `TP_net=2038.50`. Per-node rows also match (MAS_3: rho=0.694, L=2.068, W_q=0.01336).
+
+**`src/view/qn_diagram.py` grew to six plotters** with a uniform signature contract (keyword-only after required positionals, return `Figure`, save both PNG+SVG via `_save_figure`): `plot_qn_topology`, `plot_qn_topology_grid`, `plot_nd_heatmap`, `plot_nd_diffmap`, `plot_net_bars`, `plot_net_delta`. Ported `_generate_color_map` from `__OLD__/src/notebooks/src/display.py` for the multi-scenario palette. Fixed the SVG-dark-theme text-invisibility gotcha: `_TEXT_BLACK = "#010101"` (not pure `"black"`) forces matplotlib to emit an explicit `fill` attribute that dark-theme viewers cannot override.
+
+**Notebook** (`analytic.ipynb`, 17 cells under the 30-cell budget) produces one standalone topology per adaptation + per-node heatmap + per-node diffmap + network-wide bars + network-wide delta bars — 20 figures total under `data/img/analytic/<scenario>/` (PNG + SVG for each of 10 figure types). Outputs cleared before commit.
+
+**Tests:** 51 green (11 queues, 4 jackson, 12 metrics, 11 io/config, 13 methods/analytic).
+
+**Pitfalls captured in memory** (so they do not return): `c=1, K=10` canonical values; LaTeX key format; uniform `arc3,rad=0.2` for self-loops (custom `rad=1.0` overlaps cross-edges); `#010101` text colour. See `CLAUDE.md` §`View (Plotting) Conventions` and Claude memory project entries.
+
+**Next method in the pipeline**: `src/stochastic/` (SimPy DES). Config already at `data/config/method/stochastic.json`.
+
+---
+
 ## 2026-04-18 — Analytic method complete (5/5 milestones)
 
 **Delivered.** First end-to-end evaluation method is green across the full 4-adaptation axis; `analytic.ipynb` reproduces the metrics table and 11 figures from a cold clone.

@@ -43,7 +43,8 @@ _RESULTS_DIR = _ROOT / "data" / "results" / "stochastic"
 def run(adp: Optional[str] = None,
         prf: Optional[str] = None,
         scn: Optional[str] = None,
-        wrt: bool = True) -> Dict[str, Any]:
+        wrt: bool = True,
+        method_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """*run()* solve the stochastic Jackson network for one (profile, scenario) pair and optionally write its JSON artifacts.
 
     Args:
@@ -51,6 +52,7 @@ def run(adp: Optional[str] = None,
         prf (Optional[str]): profile file stem (`dflt` or `opti`). Overrides `adp`'s implied profile if given with `scn`.
         scn (Optional[str]): explicit scenario name within the profile.
         wrt (bool): if True, write JSON artifacts under `data/results/stochastic/<scenario>/`. Defaults to True.
+        method_cfg (Optional[Dict[str, Any]]): inline override for the stochastic method parameters (seed, horizon_invocations, warmup_invocations, replications, ...). When None, loads `data/config/method/stochastic.json`. Useful for tests that want a tiny horizon so the run finishes in seconds.
 
     Returns:
         Dict[str, Any]: a result dict with keys:
@@ -61,12 +63,11 @@ def run(adp: Optional[str] = None,
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
             - `paths` (Dict[str, str]): written file paths (only when `wrt=True`).
     """
-    # load the profile (artifact nodes + routing) and the method
-    # config (SimPy parameters). The two files have cleanly separated
-    # responsibilities so each method can tune its own knobs without
-    # touching the shared network topology.
+    # load the profile (artifact nodes + routing); method config is
+    # either passed in (tests) or loaded from disk (CLI / notebook).
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
-    _method_cfg = load_method_config("stochastic")
+    _method_cfg = (method_cfg if method_cfg is not None
+                   else load_method_config("stochastic"))
 
     # run the DES engine end-to-end
     _nds = solve_network(_cfg, _method_cfg)
