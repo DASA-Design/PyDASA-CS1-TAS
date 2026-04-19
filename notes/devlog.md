@@ -10,6 +10,31 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-19 — Stochastic method complete (2/5); dimensional split into two notebooks
+
+**Delivered.** Second of five evaluation methods in place; SimPy DES engine + NetworkConfig wrapper agrees with the closed-form analytic solution within Monte-Carlo noise across every adaptation.
+
+- **`src/stochastic/simulation.py`** — engine (`QueueNode`, `simulate_network`, `job`, `job_generator`) + `solve_network(cfg, method_cfg)` adapter in a single file (mirrors `src/analytic/jackson.py`). Seeds both `random` and `numpy.random` at the start of each multi-rep call for reproducibility.
+- **`src/methods/stochastic.py`** — `run(adp, prf, scn, wrt, method_cfg=None)` orchestrator + CLI. The `method_cfg` kwarg lets tests inject an abbreviated config without touching disk.
+- **`src/view/qn_diagram.py`** — seventh plotter, `plot_nd_ci(nds, *, metric, reference=None, reps=N, confidence=0.95, ...)`. Errorbar-on-points chart with optional analytic overlay as red `x` markers. Used in §6 of `stochastic.ipynb`.
+- **`stochastic.ipynb`** — nine sections, thin notebook; renders topology / heatmap / diffmap / CI (ρ + W) / net_bars / net_delta under `data/img/stochastic/<scenario>/` (22 figure files, PNG + SVG each).
+- **Tests** — 19 new (9 engine, 10 orchestrator) using `_QUICK_CFG` (3 reps × 1000 invocations / 100 warmup) for ~30x speedup. 70 total pass in ~9s.
+
+**Invocation → seconds bridge.** Method config declares `horizon_invocations` / `warmup_invocations` (unitless counts); the SimPy engine runs in time. Conversion `seconds = invocations / sum(lambda_z)` lives in `solve_network`. Don't move it — keeps `simulate_network` unit-agnostic.
+
+**Cross-method sanity.** Every analytic per-node ρ falls INSIDE the stochastic 95% CI band on the baseline figures (`data/img/stochastic/baseline/nd_ci_rho.png`). Aggregate W_net: analytic 3.09 ms, stochastic 3.10 ms. The two methods mutually validate.
+
+**Data/reference housekeeping.** Merged `data/reference/version.txt` + `data/reference/profile.md` into a single `summary.md`; dropped the sources.
+
+**Dimensional method split into TWO notebooks (user decision 2026-04-19):**
+- `dimensional.ipynb` — pre/post adaptation solution, but plotting **coefficients** (θ, σ, η, φ) not queue metrics, reusing the existing heatmap / diffmap / bars / delta plotters with coefficient columns.
+- `yoly.ipynb` — configuration-sweep diagram (`plot_yoly_*` family ported from `__OLD__/src/notebooks/src/display.py`), shows how TAS behaves across a sweep of configurations. New sibling view module `src/view/yoly_diagram.py` to keep queue-network and yoly visuals separate.
+- Plan captured in memory (`project_dimensional_plan.md`) for the next session to pick up.
+
+**Next**: start `src/dimensional/` engine + two notebooks.
+
+---
+
 ## 2026-04-19 — Analytic method reproduces __OLD__ CSV to 6 decimals
 
 **Delivered.** Silent config drift found and fixed; baseline Jackson solution now matches `__OLD__/data/results/cs1/data/dflt_analytical_{node,net}_metrics.csv` to the 6th decimal place on every per-node row and every network-wide aggregate.
