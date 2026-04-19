@@ -101,7 +101,7 @@ protobuf==6.32.1
 psutil==7.1.0
 pure_eval==0.2.3
 pycparser==2.23
-pydasa @ file:///C:/Users/Felipe/OneDrive/Documents/GitHub/DASA-Design/PyDASA/dist/pydasa-0.3.2-py3-none-any.whl#sha256=4ab83b61ac6b89cdb10fe9e8d7a370cc04ca8a4377488d1021083e77d3496d4c
+pydasa==0.7.1
 Pygments==2.19.2
 pyparsing==3.2.5
 python-dateutil==2.9.0.post0

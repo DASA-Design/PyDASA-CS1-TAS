@@ -1,0 +1,28 @@
+{
+    "source": "Camara et al. 2023",
+    "case_study": "TAS (Tele Assistance System)",
+    "notes": "R1 / R2 / R3 validation targets for the CS-01 TAS case study. Consumed by src.analytic.metrics.check_requirements(). Edit here, not in the Python.",
+    "requirements": {
+        "R1": {
+            "metric": "fail_rate",
+            "threshold": 0.0003,
+            "operator": "<=",
+            "units": "fraction",
+            "notes": "Availability: failure rate <= 0.03 percent"
+        },
+        "R2": {
+            "metric": "resp_time",
+            "threshold": 0.026,
+            "operator": "<=",
+            "units": "seconds",
+            "notes": "Performance: response time <= 26 ms (throughput-weighted)"
+        },
+        "R3": {
+            "metric": "cost",
+            "threshold": null,
+            "operator": "minimise",
+            "units": "currency",
+            "notes": "Minimise cost subject to (R1 and R2); pass iff R1 and R2 hold"
+        }
+    }
+}
