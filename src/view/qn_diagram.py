@@ -5,18 +5,17 @@ Module qn_diagram.py
 
 Queue-network visualisation for the CS-01 TAS case study.
 
-Five plotters with a uniform parameter-IO convention (keyword-only args after the required positional inputs; every plotter returns the `matplotlib.figure.Figure` and persists to disk when both `file_path` and `fname` are supplied):
+Six plotters with a uniform parameter-IO convention (keyword-only args after the required positional inputs; every plotter returns the `matplotlib.figure.Figure` and persists to disk when both `file_path` and `fname` are supplied):
 
     - `plot_qn_topology(rout, nds, ...)` single-scenario architecture diagram (topology + rho colouring + edge labels).
     - `plot_qn_topology_grid(routs, ndss, names, ...)` N scenarios arranged in a row of topologies with a shared rho colourbar.
     - `plot_nd_heatmap(ndss, names, nodes, ...)` per-node heatmap across N scenarios; one subplot per scenario.
+    - `plot_nd_diffmap(deltas, nodes, ...)` per-node delta heatmap (single panel) with a symmetric colour scale centred on 0 %.
     - `plot_net_bars(nets, names, ...)` network-wide grouped-bar chart across N scenarios.
     - `plot_net_delta(deltas, ...)` network-wide percent-change bar chart between two scenarios.
 
 *IMPORTANT:* node colouring uses `coolwarm` (cool = low rho, warm = high rho) so the hottest node is visually obvious; the heatmap uses `viridis` for per-metric normalised comparison across scenarios.
 
-# TODO: port `plot_nd_diffmap` (per-node delta heatmap) from
-#       `__OLD__/src/view/plots.py` once the comparison method needs it.
 """
 # native python modules
 # forward references + postpone eval type hints
@@ -34,7 +33,8 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib import cm
+from matplotlib import cm, colormaps
+from matplotlib import colors as mcolors
 from matplotlib.figure import Figure
 
 
@@ -79,8 +79,7 @@ _BAR_RED = "#FF5252"     # degradation
 
 # colourmaps
 _TOPOLOGY_CMAP = cm.coolwarm
-_HEATMAP_CMAP = "viridis"
-_BARS_CMAP_NAME = "tab10"
+_HEATMAP_CMAP = "coolwarm"   # same family as topology node colouring
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +167,47 @@ def _format_value(value: float) -> str:
     if _abs > 10000:
         return f"{value:.2e}"
     return f"{value:.2f}"
+
+
+def _generate_color_map(values: List) -> List[str]:
+    """*_generate_color_map()* build a vibrant colour palette for N distinct values using the same recipe as
+    `__OLD__/src/notebooks/src/display.py::_generate_color_map`:
+
+        - n <= 12  -> `rainbow`   (high saturation, wide hue spread)
+        - n <= 20  -> `Spectral`  (perceptually smoother)
+        - n >  20  -> `turbo`     (dense distinct steps)
+
+    The RGB tuples round-trip through HSV as a hook for future saturation / value boosting; the alpha channel is preserved.
+
+    Args:
+        values (List): list of items (strings, ints, ...) needing
+            one distinct colour each. Length drives the colormap
+            choice.
+
+    Returns:
+        List[str]: hex colour strings aligned 1:1 with `values` (same
+            order the caller supplied).
+    """
+    _n = len(values)
+    if _n <= 12:
+        _cmap = colormaps["rainbow"]
+    elif _n <= 20:
+        _cmap = colormaps["Spectral"]
+    else:
+        _cmap = colormaps["turbo"]
+
+    # spread N samples across the full colormap range; reversed so the
+    # first item gets the warm end (matches the old display.py spacing)
+    _rgba = _cmap(np.linspace(1.0, 0.0, max(_n, 1)))
+
+    # RGB -> HSV -> RGB pass (no-op today; left as a hook for future
+    # saturation boosting, mirroring the old helper's comment)
+    _rgb = mcolors.rgb_to_hsv(_rgba[:, :3])
+    _boosted = mcolors.hsv_to_rgb(_rgb)
+
+    # re-attach the alpha channel + emit hex strings
+    _rgba_out = np.column_stack([_boosted, _rgba[:, 3]])
+    return [mcolors.rgb2hex(_c) for _c in _rgba_out]
 
 
 def _bfs_layout_shared(routs: List[np.ndarray]) -> dict:
@@ -259,71 +299,41 @@ def _draw_topology_axis(ax,
                            alpha=0.9,
                            ax=ax)
 
-    # separate self-loops from regular edges; each needs different
-    # `connectionstyle` + label positioning so the self-loop arc is
-    # visible outside the node and its label doesn't sit on top of it
-    _self_edges = [(_u, _v) for _u, _v in graph.edges() if _u == _v]
-    _cross_edges = [(_u, _v) for _u, _v in graph.edges() if _u != _v]
-
-    # regular cross-edges: gentle curve so bi-directional pairs don't overlap
+    # draw all edges with one uniform connection style (matches
+    # `__OLD__/src/view/plots.py::plot_queue_network`). Networkx
+    # renders self-loops as compact loops right on the node, so they
+    # never overlap with cross-edges that pass through adjacent
+    # regions of the diagram.
     nx.draw_networkx_edges(graph, pos,
-                           edgelist=_cross_edges,
                            width=1.5,
                            alpha=0.7,
                            edge_color=_TEXT_BLACK,
                            arrows=True,
-                           arrowsize=18,
+                           arrowsize=20,
                            arrowstyle="-|>",
                            connectionstyle="arc3,rad=0.2",
                            ax=ax)
-    # self-loops: larger rad keeps the arc outside the node circle
-    if _self_edges:
-        nx.draw_networkx_edges(graph, pos,
-                               edgelist=_self_edges,
-                               width=1.5,
-                               alpha=0.7,
-                               edge_color=_TEXT_BLACK,
-                               arrows=True,
-                               arrowsize=18,
-                               arrowstyle="-|>",
-                               connectionstyle="arc3,rad=1.0",
-                               node_size=1500,
-                               ax=ax)
 
-    # edge labels only when the routing weight is visually meaningful.
-    # Separate cross-edge labels (positioned near the source) from
-    # self-loop labels (positioned further from the node center).
-    _cross_lbl = {
+    # edge labels: keep only weights above the visual-noise threshold.
+    # One dict covers both cross-edges and self-loops since every
+    # edge now shares the same connection style.
+    _edge_lbl = {
         (_u, _v): f"{_d['weight']:.2f}"
         for _u, _v, _d in graph.edges(data=True)
-        if _u != _v and _d["weight"] >= edge_label_threshold
+        if _d["weight"] >= edge_label_threshold
     }
-    _self_lbl = {
-        (_u, _v): f"{_d['weight']:.2f}"
-        for _u, _v, _d in graph.edges(data=True)
-        if _u == _v and _d["weight"] >= edge_label_threshold
-    }
-    _label_bbox = dict(facecolor="white", edgecolor="none",
-                       alpha=0.9, pad=0.3)
     nx.draw_networkx_edge_labels(graph, pos,
-                                 edge_labels=_cross_lbl,
-                                 font_size=10,
+                                 edge_labels=_edge_lbl,
+                                 font_size=11,
                                  font_color=_TEXT_BLACK,
                                  font_weight="light",
-                                 bbox=_label_bbox,
-                                 label_pos=0.4,
+                                 bbox=dict(facecolor="white",
+                                           edgecolor="none",
+                                           alpha=0.9,
+                                           pad=0.3),
+                                 label_pos=0.5,
+                                 connectionstyle="arc3,rad=0.2",
                                  ax=ax)
-    # self-loop labels use networkx's dedicated kwarg so they land
-    # OUTSIDE the node circle (positioned at the top of the loop)
-    if _self_lbl:
-        nx.draw_networkx_edge_labels(graph, pos,
-                                     edge_labels=_self_lbl,
-                                     font_size=10,
-                                     font_color=_TEXT_BLACK,
-                                     font_weight="light",
-                                     bbox=_label_bbox,
-                                     connectionstyle="arc3,rad=1.0",
-                                     ax=ax)
 
     # node labels on top. Format matches the reference diagram:
     #   "Name (c)\n<rho>"
@@ -333,15 +343,19 @@ def _draw_topology_axis(ax,
     # table.
     _labels = {}
     for _i in range(_n):
-        _display = nd_names[_i].replace("_", " ")
-        if "c" in nds.columns:
-            _display += f" ({int(nds['c'].iloc[_i])})"
+        # Two-line node label, everything rendered bold via
+        # `\mathbf{...}` inside `$...$` so the subscript shows as a
+        # proper math subscript instead of literal `{1}`:
+        #   line 1: the artifact key (e.g. $\mathbf{TAS_{1}}$)
+        #   line 2: $\mathbf{\rho = 0.38}$
+        _name = nd_names[_i]
+        _parts = [rf"$\mathbf{{{_name}}}$"]
         if "rho" in nds.columns:
-            _display += f"\n{nds['rho'].iloc[_i]:.2f}"
-        _labels[_i] = _display
+            _parts.append(rf"$\mathbf{{\rho = {nds['rho'].iloc[_i]:.2f}}}$")
+        _labels[_i] = "\n".join(_parts)
     nx.draw_networkx_labels(graph, pos,
                             labels=_labels,
-                            font_size=10,
+                            font_size=12,
                             font_weight="bold",
                             font_color=_TEXT_BLACK,
                             ax=ax)
@@ -392,7 +406,8 @@ def _add_param_glossary(ax,
                   alpha=0.85, edgecolor="gray")
     ax.text(_x, _y, _text,
             transform=ax.transAxes,
-            fontsize=10,
+            fontsize=14,
+            color=_TEXT_BLACK,
             verticalalignment=_va,
             horizontalalignment=_ha,
             bbox=_props)
@@ -411,15 +426,18 @@ def _add_network_summary(ax,
         net (pd.Series): single row from `aggregate_network()`.
         corner (str): anchor corner; see `_add_param_glossary()`.
     """
+    # Each line renders the symbol in bold via `\mathbf{...}` while
+    # the numeric value + [unit] stay at normal weight (outside the
+    # `$...$`).
     _lines = [
-        "NETWORK",
-        rf"$\overline{{\mu}}$: {net['avg_mu']:.2f}",
-        rf"$\overline{{\rho}}$: {net['avg_rho']:.3f}",
-        rf"$L_{{net}}$: {net['L_net']:.2f}",
-        rf"$L_{{q,net}}$: {net['Lq_net']:.2f}",
-        rf"$\overline{{W}}$: {net['W_net']:.4e}",
-        rf"$\overline{{W_q}}$: {net['Wq_net']:.4e}",
-        rf"$TP_{{net}}$: {net['total_throughput']:.2f}",
+        r"$\mathbf{NETWORK}$",
+        rf"$\mathbf{{\overline{{\mu}}}}$: {net['avg_mu']:.2f} [req/s]",
+        rf"$\mathbf{{\overline{{\rho}}}}$: {net['avg_rho']:.3f}",
+        rf"$\mathbf{{L_{{net}}}}$: {net['L_net']:.2f} [req]",
+        rf"$\mathbf{{L_{{q,net}}}}$: {net['Lq_net']:.2f} [req]",
+        rf"$\mathbf{{\overline{{W}}}}$: {net['W_net']:.4e} [s/req]",
+        rf"$\mathbf{{\overline{{W_q}}}}$: {net['Wq_net']:.4e} [s/req]",
+        rf"$\mathbf{{TP_{{net}}}}$: {net['total_throughput']:.2f} [req/s]",
     ]
     _text = "\n".join(_lines)
     _y = 0.98 if "upper" in corner else 0.02
@@ -430,7 +448,8 @@ def _add_network_summary(ax,
                   alpha=0.85, edgecolor="steelblue")
     ax.text(_x, _y, _text,
             transform=ax.transAxes,
-            fontsize=10, fontweight="bold",
+            fontsize=14,
+            color=_TEXT_BLACK,
             verticalalignment=_va,
             horizontalalignment=_ha,
             bbox=_props)
@@ -449,13 +468,21 @@ def _add_node_table(ax, nds: pd.DataFrame, nd_names: List[str]) -> None:
 
     # header row + one data row per node; LaTeX-mathtext labels mirror
     # the glossary ordering so table and legend line up.
-    _header = ["node", r"$\lambda$", r"$\mu$", r"$\rho$",
-               "L", r"$L_q$", "W", r"$W_q$"]
+    _header = ["Component",
+               r"$\lambda$ [req/s]",
+               r"$\mu$ [req/s]",
+               r"$\rho$",
+               r"$L$ [req]",
+               r"$L_q$ [req]",
+               r"$W$ [s/req]",
+               r"$W_q$ [s/req]"]
     _rows = [_header]
     for _i in range(len(nd_names)):
         _row = nds.iloc[_i]
         _rows.append([
-            nd_names[_i],
+            # wrap the artifact key in `$...$` so mathtext renders the
+            # subscript (e.g. `TAS_{1}` -> proper `TAS` + subscript `1`)
+            f"${nd_names[_i]}$",
             f"{_row['lambda']:.2f}",
             f"{_row['mu']:.2f}",
             f"{_row['rho']:.3f}",
@@ -468,7 +495,7 @@ def _add_node_table(ax, nds: pd.DataFrame, nd_names: List[str]) -> None:
     _table = ax.table(cellText=_rows, loc="center", cellLoc="center",
                       colWidths=[0.14] + [0.11] * 7)
     _table.auto_set_font_size(False)
-    _table.set_fontsize(10)
+    _table.set_fontsize(12)
     _table.scale(1, 1.25)
 
     # header row styling
@@ -520,8 +547,11 @@ def plot_qn_topology(rout: np.ndarray,
     _graph = _build_topology_graph(rout, nd_names)
     _pos = nx.bfs_layout(_graph, start=0)
 
-    # two stacked subplots: graph on top (3/4) + metrics table below (1/4)
-    _fig = plt.figure(figsize=(16, 14), facecolor="white")
+    # two stacked subplots (matches __OLD__/src/view/plots.py
+    # `plot_queue_network`): graph 3/4, metrics table 1/4. figsize and
+    # the (4,1) split are chosen so the table has room for 13 rows
+    # without overlapping the graph.
+    _fig = plt.figure(figsize=(18, 22), facecolor="white")
     _ax_graph = plt.subplot2grid((4, 1), (0, 0), rowspan=3)
     _ax_table = plt.subplot2grid((4, 1), (3, 0), rowspan=1)
     _ax_graph.set_facecolor("white")
@@ -530,29 +560,42 @@ def plot_qn_topology(rout: np.ndarray,
     # draw the topology into the graph axis
     _draw_topology_axis(_ax_graph, _graph, _pos, nds, nd_names)
 
-    # rho colourbar anchored to the right of the graph axis.
-    # vmax tracks the max rho in the frame so the hottest node always
-    # saturates to red; matches the reference diagram's scaling.
+    # rho colourbar anchored to the right of the graph axis. vmax
+    # tracks the frame's max rho (matches the reference diagram).
     if "rho" in nds.columns:
         _max_rho = max(float(nds["rho"].max()), 1e-9)
         _sm = cm.ScalarMappable(cmap=_TOPOLOGY_CMAP,
                                 norm=plt.Normalize(vmin=0.0, vmax=_max_rho))
         _sm.set_array([])
-        _cbar = _fig.colorbar(_sm, ax=_ax_graph, shrink=0.75, pad=0.02)
-        _cbar.set_label(r"Utilization $(\rho)$", **_LBL_STYLE)
+        _cbar = _fig.colorbar(_sm, ax=_ax_graph, shrink=0.6, pad=0.02)
+        _cbar.set_label(r"Utilization $(\rho)$",
+                        color=_TEXT_BLACK, fontsize=14, fontweight="bold")
+        _cbar.ax.tick_params(colors=_TEXT_BLACK)
 
-    # glossary defaults to the module-level QN_GLOSSARY_DEFAULT when the
-    # caller doesn't pass one; pass `glossary=[]` to suppress the overlay
+    # overlays (positions match __OLD__/src/view/plots.py exactly):
+    #   - network summary at top-center of the graph axis
+    #   - parameter glossary at bottom-right of the graph axis
+    if net is not None:
+        _add_network_summary(_ax_graph, net.iloc[0], corner="upper right")
     _gloss = glossary if glossary is not None else QN_GLOSSARY_DEFAULT
     if _gloss:
         _add_param_glossary(_ax_graph, _gloss, corner="lower right")
-    if net is not None:
-        _add_network_summary(_ax_graph, net.iloc[0], corner="upper right")
 
-    # per-node metrics table
+    # per-node metrics table at the bottom of the figure
     _add_node_table(_ax_table, nds, nd_names)
 
-    _ax_graph.set_title(title or "Queue-Network Topology", **_TITLE_STYLE)
+    # graph axis title (large, bold; matches `Queue Network
+    # Visualization` from the old function but lets the caller override)
+    _ax_graph.set_title(title or "Queue Network Visualization",
+                        fontsize=24, fontweight="bold", color=_TEXT_BLACK,
+                        va="center", ha="center", pad=20)
+
+    # subtitle above the metrics table; figtext (not ax) so it sits in
+    # the gap between the two subplots
+    plt.figtext(0.50, 0.27, "Node Metrics Table",
+                fontsize=18, fontweight="bold",
+                va="center", ha="center", color=_TEXT_BLACK)
+
     _fig.tight_layout()
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
@@ -777,11 +820,140 @@ def plot_nd_heatmap(ndss: List[pd.DataFrame],
 
         _ax.set_title(f"{_name} per-node metrics",
                       fontsize=13, **_LBL_STYLE)
-        _ax.set_xticklabels(_labels, rotation=45, ha="right")
+        _ax.set_xticklabels(_labels, rotation=45, ha="right",
+                            fontweight="bold", color=_TEXT_BLACK)
+        # Wrap y-tick labels in `$...$` so keys like `TAS_{1}` render
+        # as math-subscripts (TAS_{1}) via matplotlib mathtext instead
+        # of showing the curly braces literally.
+        _ax.set_yticklabels(
+            [f"${_t.get_text()}$" for _t in _ax.get_yticklabels()],
+            color=_TEXT_BLACK,
+        )
 
     if title:
         _fig.suptitle(title, **_SUPTITLE_STYLE)
 
+    _save_figure(_fig, file_path, fname, verbose=verbose)
+    return _fig
+
+
+def plot_nd_diffmap(deltas: pd.DataFrame,
+                    nodes: List[str],
+                    *,
+                    metrics: Optional[List[str]] = None,
+                    labels: Optional[List[str]] = None,
+                    cname: str = "key",
+                    title: Optional[str] = None,
+                    file_path: Optional[str] = None,
+                    fname: Optional[str] = None,
+                    verbose: bool = False) -> Figure:
+    """*plot_nd_diffmap()* per-node delta heatmap (single panel). One cell per `(node, metric)` pair, coloured by the delta value on a diverging symmetric colour scale so 0 % sits at the colormap midpoint and equal-magnitude positive / negative changes read as equal-intensity colours.
+
+    Args:
+        deltas (pd.DataFrame): delta frame with one row per node; the `cname` column identifies the node and the metric columns hold per-node percent changes.
+        nodes (List[str]): node identifiers to include (ordered by row).
+        metrics (Optional[List[str]]): columns to plot. Defaults to every numeric column.
+        labels (Optional[List[str]]): display labels for the metric columns. Defaults to the metric names.
+        cname (str): column holding the node identifier. Defaults to `"key"`.
+        title (Optional[str]): figure title.
+        file_path (Optional[str]): directory to save into.
+        fname (Optional[str]): filename (with extension).
+        verbose (bool): if True, prints one save message per format.
+
+    Raises:
+        ValueError: If `cname` or any of `metrics` is missing from `deltas`.
+
+    Returns:
+        Figure: the matplotlib figure.
+    """
+    # validate required columns up front
+    if cname not in deltas.columns:
+        _msg = f"Node-name column {cname!r} not found in deltas"
+        raise ValueError(_msg)
+
+    # resolve metric / label defaults, then check they are present
+    _metrics = _resolve_metrics(deltas, metrics)
+    if cname in _metrics:
+        _metrics.remove(cname)
+    _missing = [_m for _m in _metrics if _m not in deltas.columns]
+    if _missing:
+        _msg = f"Missing metric columns in deltas: {_missing}"
+        raise ValueError(_msg)
+    _labels = _resolve_labels(_metrics, labels)
+
+    # filter + order rows by the caller's node list
+    _rows = []
+    for _k_node in nodes:
+        _sub = deltas[deltas[cname] == _k_node]
+        if not _sub.empty:
+            _rows.append(_sub.iloc[0])
+    if not _rows:
+        _msg = "No matching nodes found in deltas; "
+        _msg += f"available: {list(deltas[cname].unique())}"
+        raise ValueError(_msg)
+
+    _plot_df = pd.DataFrame(_rows).reset_index(drop=True)
+    _nd_names = _plot_df[cname].tolist()
+    _matrix = _plot_df[_metrics].to_numpy(dtype=float)
+
+    # symmetric colour scale centred on 0 so positive / negative deltas
+    # read as equal-intensity; fall back to 1.0 if the frame is empty
+    _vmax = float(np.nanmax(np.abs(_matrix)))
+    if np.isnan(_vmax) or _vmax == 0:
+        _vmax = 1.0
+    _vmin = -_vmax
+
+    # figure height scales with the node count so 13-row cases stay
+    # readable without tiny cells
+    _fig, _ax = plt.subplots(
+        figsize=(max(10, len(_metrics) * 1.6), len(_nd_names) * 0.55 + 2),
+        facecolor="white")
+    _ax.set_facecolor("white")
+
+    # draw the heatmap with a diverging cmap; NaN cells get masked
+    _mask = np.isnan(_matrix)
+    _im = _ax.imshow(_matrix, cmap=_HEATMAP_CMAP, aspect="auto",
+                     vmin=_vmin, vmax=_vmax)
+
+    # colourbar on the right
+    _cbar = _fig.colorbar(_im, ax=_ax, pad=0.02)
+    _cbar.set_label("Relative Change (%)",
+                    rotation=270, labelpad=18,
+                    color=_TEXT_BLACK, fontsize=12, fontweight="bold")
+    _cbar.ax.tick_params(colors=_TEXT_BLACK)
+
+    # annotate each cell with its numeric delta; skip NaN cells
+    for _i in range(len(_nd_names)):
+        for _j in range(len(_metrics)):
+            if _mask[_i, _j]:
+                continue
+            _v = _matrix[_i, _j]
+            _text = f"{_v:.2f}" if abs(_v) >= 0.1 else f"{_v:.3f}"
+            _ax.text(_j, _i, _text,
+                     ha="center", va="center",
+                     color=_TEXT_BLACK, fontweight="bold", fontsize=10)
+
+    # tick labels: metric names on x, node names on y
+    _ax.set_xticks(np.arange(len(_metrics)))
+    _ax.set_yticks(np.arange(len(_nd_names)))
+    _ax.set_xticklabels(_labels, rotation=45, ha="right",
+                        fontweight="bold", color=_TEXT_BLACK)
+    # Wrap y-tick labels in `$...$` so keys like `TAS_{1}` render as
+    # math-subscripts via matplotlib mathtext (instead of printing the
+    # curly braces literally).
+    _ax.set_yticklabels([f"${_n}$" for _n in _nd_names],
+                        color=_TEXT_BLACK)
+
+    # minor grid lines between cells to separate them visually
+    _ax.set_xticks(np.arange(-0.5, len(_metrics), 1), minor=True)
+    _ax.set_yticks(np.arange(-0.5, len(_nd_names), 1), minor=True)
+    _ax.grid(which="minor", color="white", linestyle="-", linewidth=1.5)
+    _ax.tick_params(which="minor", length=0)
+
+    _ax.set_title(title or "Per-node Delta Heatmap",
+                  fontsize=14, fontweight="bold", color=_TEXT_BLACK, pad=20)
+
+    _fig.tight_layout()
     _save_figure(_fig, file_path, fname, verbose=verbose)
     return _fig
 
@@ -843,7 +1015,10 @@ def plot_net_bars(nets: List[pd.DataFrame],
         else:
             _positions.append([_x + _bar_w + _bar_space for _x in _positions[_i - 1]])
 
-    _cmap = plt.get_cmap(_BARS_CMAP_NAME, _k)
+    # vibrant per-scenario palette (rainbow / Spectral / turbo, picked
+    # based on scenario count; ported from __OLD__/src/notebooks/src/
+    # display.py::_generate_color_map)
+    _scenario_colors = _generate_color_map(names)
 
     _fig, _ax = plt.subplots(figsize=(max(12, len(_metrics) * 1.5), 8),
                              facecolor="white")
@@ -858,7 +1033,7 @@ def plot_net_bars(nets: List[pd.DataFrame],
         _ax.bar(_positions[_i], _values,
                 width=_bar_w,
                 label=_name,
-                color=_cmap(_i),
+                color=_scenario_colors[_i],
                 alpha=0.85,
                 edgecolor="black",
                 linewidth=0.5)
@@ -928,17 +1103,12 @@ def plot_net_delta(deltas: pd.DataFrame,
     # pull the delta values as percentages
     _values = [float(deltas[_m].iloc[0]) * 100 for _m in _metrics]
 
-    # semantic colour rule: lower is better for cost metrics
-    # (rho, L, Lq, W, Wq), so a NEGATIVE delta is an improvement;
-    # higher is better for rate metrics (mu, throughput), so a POSITIVE
-    # delta is an improvement. Everything else defaults to cost-like.
-    _RATE_METRICS = {"total_throughput", "avg_mu"}
-    _colors: List[str] = []
-    for _m, _v in zip(_metrics, _values):
-        if _m in _RATE_METRICS:
-            _colors.append(_BAR_GREEN if _v >= 0 else _BAR_RED)
-        else:
-            _colors.append(_BAR_GREEN if _v < 0 else _BAR_RED)
+    # uniform colour rule (matches `__OLD__/src/view/plots.py`):
+    # negative delta (below the zero baseline) -> improvement -> green;
+    # positive delta -> degradation -> red. Purely sign-based, no
+    # per-metric special cases, so the caller-supplied metric order
+    # does not change the colouring.
+    _colors = [_BAR_GREEN if _v < 0 else _BAR_RED for _v in _values]
 
     _fig, _ax = plt.subplots(figsize=(12, 7), facecolor="white")
     _ax.set_facecolor("white")

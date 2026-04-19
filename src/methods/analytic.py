@@ -62,16 +62,19 @@ def _nodes_to_variables(nds: pd.DataFrame,
         # copy the config variables so we do not mutate the input dict
         _vars = {_sym: dict(_var) for _sym, _var in _a.vars.items()}
 
-        # LaTeX subscript form of the artifact key (TAS_1 -> TAS_{1})
+        # LaTeX subscript form of the artifact key (after the key
+        # migration this is just `_a.key` verbatim, e.g. `TAS_{1}`)
         _sub = _a._sub()
 
-        # Calculate output-variable refresh values from the solver row
+        # Calculate output-variable refresh values from the solver row.
+        # Variable names follow the post-migration convention:
+        # `L_{q, ...}` / `W_{q, ...}` (split q-subscript, valid LaTeX).
         _updates = {
             f"\\lambda_{{{_sub}}}": float(_row["lambda"]),
             f"L_{{{_sub}}}": float(_row["L"]),
-            f"Lq_{{{_sub}}}": float(_row["Lq"]),
+            f"L_{{q, {_sub}}}": float(_row["Lq"]),
             f"W_{{{_sub}}}": float(_row["W"]),
-            f"Wq_{{{_sub}}}": float(_row["Wq"]),
+            f"W_{{q, {_sub}}}": float(_row["Wq"]),
         }
 
         # chi = lambda * (1 - epsilon) — effective throughput under faults

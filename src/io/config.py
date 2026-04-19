@@ -107,14 +107,17 @@ class ArtifactSpec:
         raise KeyError(f"no variable with prefix {prefix!r} on {self.key}")
 
     def _sub(self) -> str:
-        """*_sub()* converts the artifact key into its nested-bracket LaTeX subscript form (e.g. `TAS_1` -> `TAS_{1}`).
+        """*_sub()* returns the LaTeX subscript form of the artifact key.
+
+        Since `data/config/profile/*.json` was migrated to store keys
+        already in LaTeX form (e.g. `TAS_{1}`), this is just an identity
+        pass-through kept for API compatibility with callers that were
+        written against the old `TAS_1` flat-key convention.
 
         Returns:
-            str: LaTeX subscript form of the artifact key.
+            str: the artifact key verbatim (already a LaTeX subscript).
         """
-        # split on the rightmost underscore: "TAS_1" -> ("TAS", "_", "1")
-        _prefix, _, _idx = self.key.rpartition("_")
-        return f"{_prefix}_{{{_idx}}}"
+        return self.key
 
     @property
     def mu(self) -> float:

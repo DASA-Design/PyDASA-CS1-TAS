@@ -4,7 +4,7 @@
     "source": "Optimal catalogue from __OLD__/data/config/cs1/optimal_qn_model.csv and __OLD__/data/config/cs1/optimal_dim_variables.csv. Baseline (dflt) routing and swap-source services (MAS_3, AS_3, DS_3) carried over from __OLD__/data/config/cs1/default_*.csv for scenario s1.",
     "notes": "Three after-adaptation scenarios. The `artifacts` block carries both dflt-variant and opti-variant entries for the three swap slots (MAS_3 vs MAS_4 at node 6, AS_3 vs AS_4 at node 9, DS_3 vs DS_1 at node 11). Each scenario's `_nodes` list names the 13 artifact keys active for that scenario, in routing-matrix order.",
     "artifacts": {
-        "TAS_1": {
+        "TAS_{1}": {
             "name": "TAS composite stage 1 (dispatch)",
             "type": "M/M/s/K",
             "lambda_z": 345.0,
@@ -133,7 +133,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -147,7 +147,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{TAS_{1}}": {
                     "_sym": "K_{TAS_{1}}",
@@ -161,7 +163,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -177,7 +179,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{TAS_{1}}": {
                     "_sym": "\\delta_{TAS_{1}}",
@@ -237,7 +241,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{TAS_{1}}": {
+                "L_{q, TAS_{1}}": {
                     "_sym": "Lq_{TAS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_TAS_1",
@@ -295,7 +299,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{TAS_{1}}": {
+                "W_{q, TAS_{1}}": {
                     "_sym": "Wq_{TAS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_TAS_1",
@@ -325,7 +329,7 @@
                 }
             }
         },
-        "TAS_2": {
+        "TAS_{2}": {
             "name": "TAS composite stage 2 (medical dispatch)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -454,7 +458,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -468,7 +472,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{TAS_{2}}": {
                     "_sym": "K_{TAS_{2}}",
@@ -482,7 +488,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -498,7 +504,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{TAS_{2}}": {
                     "_sym": "\\delta_{TAS_{2}}",
@@ -558,7 +566,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{TAS_{2}}": {
+                "L_{q, TAS_{2}}": {
                     "_sym": "Lq_{TAS_{2}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_TAS_2",
@@ -616,7 +624,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{TAS_{2}}": {
+                "W_{q, TAS_{2}}": {
                     "_sym": "Wq_{TAS_{2}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_TAS_2",
@@ -646,7 +654,7 @@
                 }
             }
         },
-        "TAS_3": {
+        "TAS_{3}": {
             "name": "TAS composite stage 3 (alarm dispatch)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -775,7 +783,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -789,7 +797,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{TAS_{3}}": {
                     "_sym": "K_{TAS_{3}}",
@@ -803,7 +813,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -819,7 +829,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{TAS_{3}}": {
                     "_sym": "\\delta_{TAS_{3}}",
@@ -879,7 +891,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{TAS_{3}}": {
+                "L_{q, TAS_{3}}": {
                     "_sym": "Lq_{TAS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_TAS_3",
@@ -937,7 +949,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{TAS_{3}}": {
+                "W_{q, TAS_{3}}": {
                     "_sym": "Wq_{TAS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_TAS_3",
@@ -967,7 +979,7 @@
                 }
             }
         },
-        "MAS_1": {
+        "MAS_{1}": {
             "name": "Medical Analysis Service 1",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -1096,7 +1108,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -1110,7 +1122,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{MAS_{1}}": {
                     "_sym": "K_{MAS_{1}}",
@@ -1124,7 +1138,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -1140,7 +1154,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{MAS_{1}}": {
                     "_sym": "\\delta_{MAS_{1}}",
@@ -1200,7 +1216,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{MAS_{1}}": {
+                "L_{q, MAS_{1}}": {
                     "_sym": "Lq_{MAS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_MAS_1",
@@ -1258,7 +1274,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{MAS_{1}}": {
+                "W_{q, MAS_{1}}": {
                     "_sym": "Wq_{MAS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_MAS_1",
@@ -1288,7 +1304,7 @@
                 }
             }
         },
-        "MAS_2": {
+        "MAS_{2}": {
             "name": "Medical Analysis Service 2",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -1417,7 +1433,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 1.5,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 2.0,
                     "_mean": 1.5,
@@ -1431,7 +1447,9 @@
                         "low": 1,
                         "high": 2
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{MAS_{2}}": {
                     "_sym": "K_{MAS_{2}}",
@@ -1445,7 +1463,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -1461,7 +1479,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{MAS_{2}}": {
                     "_sym": "\\delta_{MAS_{2}}",
@@ -1521,7 +1541,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{MAS_{2}}": {
+                "L_{q, MAS_{2}}": {
                     "_sym": "Lq_{MAS_{2}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_MAS_2",
@@ -1579,7 +1599,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{MAS_{2}}": {
+                "W_{q, MAS_{2}}": {
                     "_sym": "Wq_{MAS_{2}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_MAS_2",
@@ -1609,7 +1629,7 @@
                 }
             }
         },
-        "MAS_4": {
+        "MAS_{4}": {
             "name": "Medical Analysis Service 4 (opti upgrade of MAS_3)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -1738,7 +1758,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -1752,7 +1772,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{MAS_{4}}": {
                     "_sym": "K_{MAS_{4}}",
@@ -1766,7 +1788,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -1782,7 +1804,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{MAS_{4}}": {
                     "_sym": "\\delta_{MAS_{4}}",
@@ -1842,7 +1866,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{MAS_{4}}": {
+                "L_{q, MAS_{4}}": {
                     "_sym": "Lq_{MAS_{4}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_MAS_4",
@@ -1900,7 +1924,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{MAS_{4}}": {
+                "W_{q, MAS_{4}}": {
                     "_sym": "Wq_{MAS_{4}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_MAS_4",
@@ -1930,7 +1954,7 @@
                 }
             }
         },
-        "AS_1": {
+        "AS_{1}": {
             "name": "Alarm Service 1",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -2059,7 +2083,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 1.5,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 2.0,
                     "_mean": 1.5,
@@ -2073,7 +2097,9 @@
                         "low": 1,
                         "high": 2
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{AS_{1}}": {
                     "_sym": "K_{AS_{1}}",
@@ -2087,7 +2113,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -2103,7 +2129,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{AS_{1}}": {
                     "_sym": "\\delta_{AS_{1}}",
@@ -2163,7 +2191,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{AS_{1}}": {
+                "L_{q, AS_{1}}": {
                     "_sym": "Lq_{AS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_AS_1",
@@ -2221,7 +2249,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{AS_{1}}": {
+                "W_{q, AS_{1}}": {
                     "_sym": "Wq_{AS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_AS_1",
@@ -2251,7 +2279,7 @@
                 }
             }
         },
-        "AS_2": {
+        "AS_{2}": {
             "name": "Alarm Service 2",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -2380,7 +2408,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 1.5,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 2.0,
                     "_mean": 1.5,
@@ -2394,7 +2422,9 @@
                         "low": 1,
                         "high": 2
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{AS_{2}}": {
                     "_sym": "K_{AS_{2}}",
@@ -2408,7 +2438,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -2424,7 +2454,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{AS_{2}}": {
                     "_sym": "\\delta_{AS_{2}}",
@@ -2484,7 +2516,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{AS_{2}}": {
+                "L_{q, AS_{2}}": {
                     "_sym": "Lq_{AS_{2}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_AS_2",
@@ -2542,7 +2574,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{AS_{2}}": {
+                "W_{q, AS_{2}}": {
                     "_sym": "Wq_{AS_{2}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_AS_2",
@@ -2572,7 +2604,7 @@
                 }
             }
         },
-        "AS_4": {
+        "AS_{4}": {
             "name": "Alarm Service 4 (opti upgrade of AS_3)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -2701,7 +2733,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -2715,7 +2747,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{AS_{4}}": {
                     "_sym": "K_{AS_{4}}",
@@ -2729,7 +2763,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -2745,7 +2779,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{AS_{4}}": {
                     "_sym": "\\delta_{AS_{4}}",
@@ -2805,7 +2841,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{AS_{4}}": {
+                "L_{q, AS_{4}}": {
                     "_sym": "Lq_{AS_{4}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_AS_4",
@@ -2863,7 +2899,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{AS_{4}}": {
+                "W_{q, AS_{4}}": {
                     "_sym": "Wq_{AS_{4}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_AS_4",
@@ -2893,7 +2929,7 @@
                 }
             }
         },
-        "TAS_4": {
+        "TAS_{4}": {
             "name": "TAS composite stage 4 (drug dispatch)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -3022,7 +3058,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -3036,7 +3072,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{TAS_{4}}": {
                     "_sym": "K_{TAS_{4}}",
@@ -3050,7 +3088,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -3066,7 +3104,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{TAS_{4}}": {
                     "_sym": "\\delta_{TAS_{4}}",
@@ -3126,7 +3166,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{TAS_{4}}": {
+                "L_{q, TAS_{4}}": {
                     "_sym": "Lq_{TAS_{4}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_TAS_4",
@@ -3184,7 +3224,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{TAS_{4}}": {
+                "W_{q, TAS_{4}}": {
                     "_sym": "Wq_{TAS_{4}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_TAS_4",
@@ -3214,7 +3254,7 @@
                 }
             }
         },
-        "DS_1": {
+        "DS_{1}": {
             "name": "Drug Service 1 (opti replacement for DS_3)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -3343,7 +3383,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -3357,7 +3397,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{DS_{1}}": {
                     "_sym": "K_{DS_{1}}",
@@ -3371,7 +3413,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -3387,7 +3429,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{DS_{1}}": {
                     "_sym": "\\delta_{DS_{1}}",
@@ -3447,7 +3491,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{DS_{1}}": {
+                "L_{q, DS_{1}}": {
                     "_sym": "Lq_{DS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_DS_1",
@@ -3505,7 +3549,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{DS_{1}}": {
+                "W_{q, DS_{1}}": {
                     "_sym": "Wq_{DS_{1}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_DS_1",
@@ -3535,7 +3579,7 @@
                 }
             }
         },
-        "TAS_5": {
+        "TAS_{5}": {
             "name": "TAS composite stage 5",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -3664,7 +3708,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -3678,7 +3722,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{TAS_{5}}": {
                     "_sym": "K_{TAS_{5}}",
@@ -3692,7 +3738,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -3708,7 +3754,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{TAS_{5}}": {
                     "_sym": "\\delta_{TAS_{5}}",
@@ -3768,7 +3816,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{TAS_{5}}": {
+                "L_{q, TAS_{5}}": {
                     "_sym": "Lq_{TAS_{5}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_TAS_5",
@@ -3826,7 +3874,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{TAS_{5}}": {
+                "W_{q, TAS_{5}}": {
                     "_sym": "Wq_{TAS_{5}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_TAS_5",
@@ -3856,7 +3904,7 @@
                 }
             }
         },
-        "TAS_6": {
+        "TAS_{6}": {
             "name": "TAS composite stage 6",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -3985,7 +4033,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -3999,7 +4047,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{TAS_{6}}": {
                     "_sym": "K_{TAS_{6}}",
@@ -4013,7 +4063,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 6.0,
+                    "_setpoint": 10,
                     "_min": 1.0,
                     "_max": 11.0,
                     "_mean": 6.0,
@@ -4029,7 +4079,9 @@
                         "low": 1,
                         "high": 11
                     },
-                    "_data": []
+                    "_data": [
+                        10
+                    ]
                 },
                 "\\delta_{TAS_{6}}": {
                     "_sym": "\\delta_{TAS_{6}}",
@@ -4089,7 +4141,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{TAS_{6}}": {
+                "L_{q, TAS_{6}}": {
                     "_sym": "Lq_{TAS_{6}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_TAS_6",
@@ -4147,7 +4199,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{TAS_{6}}": {
+                "W_{q, TAS_{6}}": {
                     "_sym": "Wq_{TAS_{6}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_TAS_6",
@@ -4177,7 +4229,7 @@
                 }
             }
         },
-        "MAS_3": {
+        "MAS_{3}": {
             "name": "Medical Analysis Service 3",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -4306,7 +4358,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -4320,7 +4372,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{MAS_{3}}": {
                     "_sym": "K_{MAS_{3}}",
@@ -4410,7 +4464,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{MAS_{3}}": {
+                "L_{q, MAS_{3}}": {
                     "_sym": "Lq_{MAS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_MAS_3",
@@ -4468,7 +4522,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{MAS_{3}}": {
+                "W_{q, MAS_{3}}": {
                     "_sym": "Wq_{MAS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_MAS_3",
@@ -4498,7 +4552,7 @@
                 }
             }
         },
-        "AS_3": {
+        "AS_{3}": {
             "name": "Alarm Service 3",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -4627,7 +4681,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -4641,7 +4695,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{AS_{3}}": {
                     "_sym": "K_{AS_{3}}",
@@ -4731,7 +4787,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{AS_{3}}": {
+                "L_{q, AS_{3}}": {
                     "_sym": "Lq_{AS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_AS_3",
@@ -4789,7 +4845,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{AS_{3}}": {
+                "W_{q, AS_{3}}": {
                     "_sym": "Wq_{AS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_AS_3",
@@ -4819,7 +4875,7 @@
                 }
             }
         },
-        "DS_3": {
+        "DS_{3}": {
             "name": "Drug Service 3",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
@@ -4948,7 +5004,7 @@
                     "_dims": "E",
                     "_units": "req",
                     "_std_units": "req",
-                    "_setpoint": 2.0,
+                    "_setpoint": 1,
                     "_min": 1.0,
                     "_max": 3.0,
                     "_mean": 2.0,
@@ -4962,7 +5018,9 @@
                         "low": 1,
                         "high": 3
                     },
-                    "_data": []
+                    "_data": [
+                        1
+                    ]
                 },
                 "K_{DS_{3}}": {
                     "_sym": "K_{DS_{3}}",
@@ -5052,7 +5110,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{DS_{3}}": {
+                "L_{q, DS_{3}}": {
                     "_sym": "Lq_{DS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Lq_DS_3",
@@ -5110,7 +5168,7 @@
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{DS_{3}}": {
+                "W_{q, DS_{3}}": {
                     "_sym": "Wq_{DS_{3}}",
                     "_fwk": "CUSTOM",
                     "_alias": "Wq_DS_3",
@@ -5156,49 +5214,49 @@
         "_note": "`_setpoint` names the default scenario for this config — the loader reads this scenario when no `--adaptation` CLI flag is given. `_routs[scenario][i][j]` = routing probability from node i to node j under `scenario`. Position i indexes into `_nodes[scenario]`. `_nodes[scenario][i]` names the artifact at position i for that scenario.",
         "_nodes": {
             "s1": [
-                "TAS_1",
-                "TAS_2",
-                "TAS_3",
-                "MAS_1",
-                "MAS_2",
-                "MAS_3",
-                "AS_1",
-                "AS_2",
-                "AS_3",
-                "TAS_4",
-                "DS_3",
-                "TAS_5",
-                "TAS_6"
+                "TAS_{1}",
+                "TAS_{2}",
+                "TAS_{3}",
+                "MAS_{1}",
+                "MAS_{2}",
+                "MAS_{3}",
+                "AS_{1}",
+                "AS_{2}",
+                "AS_{3}",
+                "TAS_{4}",
+                "DS_{3}",
+                "TAS_{5}",
+                "TAS_{6}"
             ],
             "s2": [
-                "TAS_1",
-                "TAS_2",
-                "TAS_3",
-                "MAS_1",
-                "MAS_2",
-                "MAS_4",
-                "AS_1",
-                "AS_2",
-                "AS_4",
-                "TAS_4",
-                "DS_1",
-                "TAS_5",
-                "TAS_6"
+                "TAS_{1}",
+                "TAS_{2}",
+                "TAS_{3}",
+                "MAS_{1}",
+                "MAS_{2}",
+                "MAS_{4}",
+                "AS_{1}",
+                "AS_{2}",
+                "AS_{4}",
+                "TAS_{4}",
+                "DS_{1}",
+                "TAS_{5}",
+                "TAS_{6}"
             ],
             "aggregate": [
-                "TAS_1",
-                "TAS_2",
-                "TAS_3",
-                "MAS_1",
-                "MAS_2",
-                "MAS_4",
-                "AS_1",
-                "AS_2",
-                "AS_4",
-                "TAS_4",
-                "DS_1",
-                "TAS_5",
-                "TAS_6"
+                "TAS_{1}",
+                "TAS_{2}",
+                "TAS_{3}",
+                "MAS_{1}",
+                "MAS_{2}",
+                "MAS_{4}",
+                "AS_{1}",
+                "AS_{2}",
+                "AS_{4}",
+                "TAS_{4}",
+                "DS_{1}",
+                "TAS_{5}",
+                "TAS_{6}"
             ]
         },
         "_routs": {

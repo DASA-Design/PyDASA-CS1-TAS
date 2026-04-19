@@ -42,9 +42,9 @@ class TestResolution:
 
         # swap slots must show the dflt-variant keys under s1
         _keys = _cfg.node_keys()
-        assert _keys[5] == "MAS_3"
-        assert _keys[8] == "AS_3"
-        assert _keys[10] == "DS_3"
+        assert _keys[5] == "MAS_{3}"
+        assert _keys[8] == "AS_{3}"
+        assert _keys[10] == "DS_{3}"
 
     def test_s2_hits_opti_with_opti_swap_services(self):
         """*test_s2_hits_opti_with_opti_swap_services()* `s2` keeps the dflt routing but swaps in the opti services at the three slots."""
@@ -53,9 +53,9 @@ class TestResolution:
 
         # swap slots must show the opti-variant keys under s2
         _keys = _cfg.node_keys()
-        assert _keys[5] == "MAS_4"
-        assert _keys[8] == "AS_4"
-        assert _keys[10] == "DS_1"
+        assert _keys[5] == "MAS_{4}"
+        assert _keys[8] == "AS_{4}"
+        assert _keys[10] == "DS_{1}"
 
     def test_aggregate(self):
         """*test_aggregate()* `aggregate` combines opti routing + opti services at the swap slots."""
@@ -64,8 +64,8 @@ class TestResolution:
 
         # opti variants at the swap slots (spot check)
         _keys = _cfg.node_keys()
-        assert _keys[5] == "MAS_4"
-        assert _keys[10] == "DS_1"
+        assert _keys[5] == "MAS_{4}"
+        assert _keys[10] == "DS_{1}"
 
 
 class TestSetpointFallback:
@@ -90,13 +90,13 @@ class TestArtifactSpec:
     def test_mu_readable_at_dflt_mas_3(self):
         """*test_mu_readable_at_dflt_mas_3()* MAS_3 in the dflt profile has mu = 150 req/s (published baseline value)."""
         _cfg = load_profile(adaptation="baseline")
-        _mas_3 = next(_a for _a in _cfg.artifacts if _a.key == "MAS_3")
+        _mas_3 = next(_a for _a in _cfg.artifacts if _a.key == "MAS_{3}")
         assert _mas_3.mu == 150.0
 
     def test_mu_readable_at_opti_mas_4(self):
         """*test_mu_readable_at_opti_mas_4()* MAS_4 in the opti profile (the upgrade slot) has mu = 880 req/s."""
         _cfg = load_profile(adaptation="aggregate")
-        _mas_4 = next(_a for _a in _cfg.artifacts if _a.key == "MAS_4")
+        _mas_4 = next(_a for _a in _cfg.artifacts if _a.key == "MAS_{4}")
         assert _mas_4.mu == 880.0
 
     def test_lambda_z_only_at_entry(self):
@@ -106,7 +106,7 @@ class TestArtifactSpec:
         # collect artifacts that actually receive external traffic
         _entries = [_a for _a in _cfg.artifacts if _a.lambda_z > 0]
         assert len(_entries) == 1
-        assert _entries[0].key == "TAS_1"
+        assert _entries[0].key == "TAS_{1}"
         assert _entries[0].lambda_z == 345.0
 
 
