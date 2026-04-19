@@ -73,8 +73,7 @@ class TestAggregateBestCase:
     """**TestAggregateBestCase** verifies that the `aggregate` adaptation (opti routing + opti services) does not regress the network-wide response time relative to `baseline`. A small tolerance is allowed so tiny numerical drift does not trip the test; the point is they are at least comparable."""
 
     def test_aggregate_lte_baseline_w_net(self):
-        """*test_aggregate_lte_baseline_w_net()* aggregate W_net must
-        be at most baseline W_net within a 1 percent tolerance."""
+        """*test_aggregate_lte_baseline_w_net()* aggregate W_net must be at most baseline W_net within a 1 percent tolerance."""
         # solve both adaptations end-to-end
         _baseline = run(adp="baseline", wrt=False)
         _aggregate = run(adp="aggregate", wrt=False)
