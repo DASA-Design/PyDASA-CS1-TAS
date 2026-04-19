@@ -5,12 +5,13 @@ Module qn_diagram.py
 
 Queue-network visualisation for the CS-01 TAS case study.
 
-Six plotters with a uniform parameter-IO convention (keyword-only args after the required positional inputs; every plotter returns the `matplotlib.figure.Figure` and persists to disk when both `file_path` and `fname` are supplied):
+Seven plotters with a uniform parameter-IO convention (keyword-only args after the required positional inputs; every plotter returns the `matplotlib.figure.Figure` and persists to disk when both `file_path` and `fname` are supplied):
 
     - `plot_qn_topology(rout, nds, ...)` single-scenario architecture diagram (topology + rho colouring + edge labels).
     - `plot_qn_topology_grid(routs, ndss, names, ...)` N scenarios arranged in a row of topologies with a shared rho colourbar.
     - `plot_nd_heatmap(ndss, names, nodes, ...)` per-node heatmap across N scenarios; one subplot per scenario.
     - `plot_nd_diffmap(deltas, nodes, ...)` per-node delta heatmap (single panel) with a symmetric colour scale centred on 0 %.
+    - `plot_nd_ci(nds, *, metric, reference, ...)` per-node mean with a 95 % CI band (stochastic), optional analytic reference overlay.
     - `plot_net_bars(nets, names, ...)` network-wide grouped-bar chart across N scenarios.
     - `plot_net_delta(deltas, ...)` network-wide percent-change bar chart between two scenarios.
 
@@ -952,6 +953,153 @@ def plot_nd_diffmap(deltas: pd.DataFrame,
 
     _ax.set_title(title or "Per-node Delta Heatmap",
                   fontsize=14, fontweight="bold", color=_TEXT_BLACK, pad=20)
+
+    _fig.tight_layout()
+    _save_figure(_fig, file_path, fname, verbose=verbose)
+    return _fig
+
+
+# z-scores for common two-sided confidence levels; used by plot_nd_ci
+# to turn `<metric>_std` into an error-bar half-width.
+_Z_SCORES = {
+    0.90: 1.645,
+    0.95: 1.960,
+    0.99: 2.576,
+}
+
+
+def plot_nd_ci(nds: pd.DataFrame,
+               *,
+               metric: str = "rho",
+               reference: Optional[pd.DataFrame] = None,
+               reference_name: str = "analytic",
+               stochastic_name: str = "stochastic",
+               metric_label: Optional[str] = None,
+               confidence: float = 0.95,
+               reps: Optional[int] = None,
+               title: Optional[str] = None,
+               file_path: Optional[str] = None,
+               fname: Optional[str] = None,
+               verbose: bool = False) -> Figure:
+    """*plot_nd_ci()* per-node mean with a confidence-interval band,
+    suitable for visualising the stochastic-method output where every
+    metric carries a `<metric>_std` companion from the replication
+    std-dev.
+
+    When `reference` is supplied, its per-node value for the same
+    metric is overlaid as a second marker series; that makes the
+    plot a direct stochastic-vs-analytic cross-method check -- the
+    reference should fall INSIDE the stochastic error bars when the
+    two methods agree.
+
+    The CI half-width is `z * sigma / sqrt(reps)` when `reps` is
+    given (a proper CI on the mean), or `z * sigma` otherwise (a
+    "one-z-band" of rep-to-rep spread). `z` is pulled from
+    `_Z_SCORES[confidence]`.
+
+    Args:
+        nds (pd.DataFrame): stochastic per-node frame; must have a
+            `key` column, the `<metric>` column (mean across reps),
+            and its `<metric>_std` companion.
+        metric (str): which metric to plot (default `"rho"`).
+        reference (Optional[pd.DataFrame]): optional reference frame
+            (e.g. analytic solution) with the same `key` + `<metric>`
+            columns. Values are matched by `key`.
+        reference_name (str): legend label for the reference series.
+        stochastic_name (str): legend label for the stochastic series.
+        metric_label (Optional[str]): display label for the y-axis;
+            LaTeX-friendly. Defaults to `"${metric}$"`.
+        confidence (float): confidence level in {0.90, 0.95, 0.99}.
+        reps (Optional[int]): number of replications; when given, the
+            CI half-width scales as `z * sigma / sqrt(reps)` (CI on
+            the mean). When None, the band is `z * sigma`.
+        title (Optional[str]): figure title.
+        file_path (Optional[str]): directory to save into.
+        fname (Optional[str]): filename (with extension).
+        verbose (bool): if True, prints one save message per format.
+
+    Raises:
+        ValueError: if `confidence` is not in `_Z_SCORES`, or the
+            required columns are missing from `nds`.
+
+    Returns:
+        Figure: the matplotlib figure.
+    """
+    # validate required columns up front
+    _std_col = f"{metric}_std"
+    for _col in ("key", metric, _std_col):
+        if _col not in nds.columns:
+            _msg = f"plot_nd_ci: missing required column {_col!r} in nds"
+            raise ValueError(_msg)
+
+    # resolve the z-score for the requested confidence level
+    if confidence not in _Z_SCORES:
+        _msg = f"plot_nd_ci: unsupported confidence={confidence!r}; "
+        _msg += f"allowed: {sorted(_Z_SCORES.keys())}"
+        raise ValueError(_msg)
+    _z = _Z_SCORES[confidence]
+
+    # pull the stochastic mean + std columns into aligned arrays
+    _keys = nds["key"].tolist()
+    _means = nds[metric].to_numpy(dtype=float)
+    _stds = nds[_std_col].to_numpy(dtype=float)
+
+    # turn per-rep sigma into the error-bar half-width
+    if reps is not None and reps > 0:
+        _halfwidth = _z * _stds / np.sqrt(reps)
+        _band_label = rf"{int(confidence * 100)}% CI (reps={reps})"
+    else:
+        _halfwidth = _z * _stds
+        _band_label = rf"$\pm {_z:.2f}\sigma$ band"
+
+    # figure + axis
+    _fig, _ax = plt.subplots(
+        figsize=(max(10, 0.7 * len(_keys) + 3), 6),
+        facecolor="white",
+    )
+    _ax.set_facecolor("white")
+    _x = np.arange(len(_keys))
+
+    # stochastic mean with error bars
+    _ax.errorbar(
+        _x, _means, yerr=_halfwidth,
+        fmt="o", capsize=5, capthick=1.5, elinewidth=1.5, markersize=8,
+        color=_BAR_GREEN, ecolor=_TEXT_BLACK,
+        label=f"{stochastic_name} mean  ({_band_label})",
+    )
+
+    # optional reference overlay (matched by `key`)
+    if reference is not None:
+        if "key" not in reference.columns:
+            _msg = "plot_nd_ci: reference frame missing 'key' column"
+            raise ValueError(_msg)
+        if metric not in reference.columns:
+            _msg = f"plot_nd_ci: reference frame missing {metric!r} column"
+            raise ValueError(_msg)
+        _ref_by_key = dict(zip(reference["key"], reference[metric]))
+        _ref_vals = [_ref_by_key.get(_k, np.nan) for _k in _keys]
+        _ax.plot(
+            _x, _ref_vals,
+            linestyle="none", marker="x", markersize=10, markeredgewidth=2,
+            color=_BAR_RED,
+            label=f"{reference_name} mean",
+        )
+
+    # axis cosmetics: keys on x as mathtext subscripts, metric symbol on y
+    _ax.set_xticks(_x)
+    _ax.set_xticklabels([f"${_k}$" for _k in _keys],
+                        rotation=45, ha="right",
+                        fontweight="bold", color=_TEXT_BLACK)
+    _ax.set_ylabel(metric_label or f"${metric}$",
+                   color=_TEXT_BLACK, fontsize=13, fontweight="bold")
+    _ax.grid(**_GRID_STYLE)
+    _ax.legend(loc="best", frameon=True, fancybox=True, shadow=True)
+
+    _ax.set_title(
+        title or f"Per-node {metric} (stochastic "
+                 f"{int(confidence * 100)}% CI)",
+        **_TITLE_STYLE,
+    )
 
     _fig.tight_layout()
     _save_figure(_fig, file_path, fname, verbose=verbose)

@@ -13,7 +13,7 @@ CLI:
 
     python -m src.methods.analytic --adaptation baseline
     python -m src.methods.analytic --adaptation s1 --profile opti
-    python -m src.methods.analytic                             # uses _setpoint
+    python -m src.methods.analytic # uses _setpoint
 
 # TODO: wire a real cost model (from the service catalogue) through the verdict writer so R3 carries a numeric value.
 """
@@ -198,31 +198,30 @@ def main() -> None:
     """
     # build the argument parser with the four CLI flags
     _parser = argparse.ArgumentParser(
-        description="Analytic Jackson-network solver for CS-01 TAS.",
-    )
+        description="Analytic Jackson-network solver for CS-01 TAS.",)
+
     _parser.add_argument(
         "--adaptation",
         choices=["baseline", "s1", "s2", "aggregate"],
         default=None,
-        help="adaptation state (resolves to profile + scenario); "
-             "defaults to the profile's _setpoint",
-    )
+        help="adaptation state (resolves to profile + scenario); " + "defaults to the profile's _setpoint",)
+
     _parser.add_argument(
         "--profile",
         choices=["dflt", "opti"],
         default=None,
-        help="explicit profile file stem (overrides adaptation's profile)",
-    )
+        help="explicit profile file stem (overrides adaptation's profile)",)
+
     _parser.add_argument(
         "--scenario",
         default=None,
-        help="explicit scenario name within the profile",
-    )
+        help="explicit scenario name within the profile",)
+
     _parser.add_argument(
         "--no-write",
         action="store_true",
-        help="skip writing result files (useful for dry runs)",
-    )
+        help="skip writing result files (useful for dry runs)",)
+
     _args = _parser.parse_args()
 
     # run the solver end-to-end with the parsed flags
@@ -230,8 +229,7 @@ def main() -> None:
         adp=_args.adaptation,
         prf=_args.profile,
         scn=_args.scenario,
-        wrt=not _args.no_write,
-    )
+        wrt=not _args.no_write,)
 
     # unpack the result blob for the summary print
     _cfg = _result["config"]
