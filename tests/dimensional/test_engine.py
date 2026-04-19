@@ -66,7 +66,7 @@ class TestPiGroupDerivation:
                 str(_engine.coefficients[k].pi_expr) for k in _pi_keys
             ]
 
-        ans = (_exp_per_profile["dflt"] == _exp_per_profile["opti"]), 
+        ans = (_exp_per_profile["dflt"] == _exp_per_profile["opti"])
         assert ans, "Pi-group symbolic expressions should be invariant to setpoint-only changes"
 
     def test_pi_zero_involves_w_lambda_c(self, engine_ready):
