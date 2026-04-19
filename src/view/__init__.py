@@ -2,6 +2,7 @@
 """Plotting helpers (one module per diagram family)."""
 
 from src.view.qn_diagram import (
+    QN_GLOSSARY_DEFAULT,
     plot_qn_topology,
     plot_qn_topology_grid,
     plot_nd_heatmap,
@@ -10,6 +11,7 @@ from src.view.qn_diagram import (
 )
 
 __all__ = [
+    "QN_GLOSSARY_DEFAULT",
     "plot_qn_topology",
     "plot_qn_topology_grid",
     "plot_nd_heatmap",

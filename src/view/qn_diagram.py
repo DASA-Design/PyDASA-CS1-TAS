@@ -23,6 +23,7 @@ Five plotters with a uniform parameter-IO convention (keyword-only args after th
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # data types
 from typing import List, Optional
@@ -37,9 +38,38 @@ from matplotlib import cm
 from matplotlib.figure import Figure
 
 
+# Force black-on-white rendering regardless of the ambient matplotlib
+# style / Jupyter theme. We use the near-black `#010101` rather than
+# pure `"black"` on purpose: matplotlib's SVG backend treats pure
+# black as the SVG-spec default and OMITS the fill attribute entirely,
+# which makes dark-theme SVG viewers (e.g. VSCode preview) render the
+# text in their inherited foreground colour (often white, i.e.
+# invisible on white paper). `#010101` is visually identical to black
+# but non-default, which forces matplotlib to write an explicit
+# `style="fill:#010101"` on every text element.
+_TEXT_BLACK = "#010101"
+
+plt.rcParams.update({
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+    "text.color": _TEXT_BLACK,
+    "axes.labelcolor": _TEXT_BLACK,
+    "axes.edgecolor": _TEXT_BLACK,
+    "xtick.color": _TEXT_BLACK,
+    "ytick.color": _TEXT_BLACK,
+    "grid.color": "lightgray",
+    "font.size": 10,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 10,
+})
+
+
 # -- Shared styling constants (reused across every plotter) --
 _GRID_STYLE = dict(axis="y", linestyle="--", alpha=0.7)
-_LBL_STYLE = dict(fontweight="bold", color="black")
+_LBL_STYLE = dict(fontweight="bold", color=_TEXT_BLACK)
 _TITLE_STYLE = dict(fontsize=14, fontweight="bold", pad=20)
 _SUPTITLE_STYLE = dict(fontsize=16, fontweight="bold")
 
@@ -62,39 +92,43 @@ def _save_figure(fig: Figure,
                  file_path: Optional[str],
                  fname: Optional[str],
                  verbose: bool = False) -> None:
-    """*_save_figure()* persist the figure when both `file_path` and `fname` are given; no-op otherwise.
+    """*_save_figure()* persist the figure as BOTH `.png` (raster, 300 dpi) and `.svg` (vector) when both `file_path` and `fname` are given; no-op otherwise. Any extension on `fname` is stripped; the stem is reused for both formats.
 
     Args:
         fig (Figure): matplotlib figure to save.
         file_path (Optional[str]): destination directory (created if missing).
-        fname (Optional[str]): output filename (with extension).
-        verbose (bool): if True, prints a one-line save message.
+        fname (Optional[str]): output filename; extension (if any) is ignored, the stem drives both `.png` and `.svg` outputs.
+        verbose (bool): if True, prints one save message per format.
 
     Raises:
-        ValueError: If `fig.savefig` fails.
+        ValueError: If `fig.savefig` fails for either format.
     """
     if not (file_path and fname):
         return
 
     # ensure the destination directory exists
     os.makedirs(file_path, exist_ok=True)
-    _full_path = os.path.join(file_path, fname)
+
+    # caller can pass "topology.png" or "topology"; either way, save both formats
+    _stem = Path(fname).with_suffix("").name
+
+    # one raster (.png, 300 dpi) + one vector (.svg) version
+    for _ext, _extra in (("png", {"dpi": 300}), ("svg", {})):
+        _full_path = os.path.join(file_path, f"{_stem}.{_ext}")
+        if verbose:
+            print(f"Saving plot to: {_full_path}")
+        try:
+            fig.savefig(_full_path,
+                        facecolor="white",
+                        bbox_inches="tight",
+                        **_extra)
+        except Exception as _e:
+            _msg = f"Error saving {_ext}: {_e}. "
+            _msg += f"file_path: {file_path!r}, stem: {_stem!r}"
+            raise ValueError(_msg)
 
     if verbose:
-        print(f"Saving plot to: {_full_path}")
-
-    try:
-        fig.savefig(_full_path,
-                    facecolor="white",
-                    bbox_inches="tight",
-                    dpi=300)
-    except Exception as _e:
-        _msg = f"Error saving plot: {_e}. "
-        _msg += f"file_path: {file_path!r}, fname: {fname!r}"
-        raise ValueError(_msg)
-
-    if verbose:
-        print(f"Plot saved successfully to: {_full_path}")
+        print(f"Plot saved successfully ({_stem}.png + {_stem}.svg)")
 
 
 def _resolve_metrics(df: pd.DataFrame,
@@ -192,7 +226,8 @@ def _draw_topology_axis(ax,
                         pos: dict,
                         nds: pd.DataFrame,
                         nd_names: List[str],
-                        edge_label_threshold: float = 0.01) -> None:
+                        edge_label_threshold: float = 0.01,
+                        rho_max: Optional[float] = None) -> None:
     """*_draw_topology_axis()* draw one queue-network topology into a given axis, coloured by `rho` when the column is present.
 
     Args:
@@ -202,59 +237,244 @@ def _draw_topology_axis(ax,
         nds (pd.DataFrame): per-node metrics frame.
         nd_names (List[str]): display names aligned with the graph.
         edge_label_threshold (float): routing probabilities below this are drawn without a numeric label to keep the diagram readable.
+        rho_max (Optional[float]): shared scale for node colouring in multi-panel plots; defaults to the frame's own `rho.max()` so a single-scenario diagram always has one red node.
     """
     _n = len(nd_names)
 
-    # node colours from rho when available; solid sky-blue otherwise
+    # node colours from rho (normalised so the hottest node saturates
+    # to red). Grid plots pass `rho_max` so both subplots share a
+    # colour scale; single plots default to the frame's own max.
     if "rho" in nds.columns:
         _rhos = nds["rho"].to_numpy(dtype=float)
-        _node_colors = [_TOPOLOGY_CMAP(_r) for _r in _rhos]
+        _scale = rho_max if rho_max is not None else float(_rhos.max())
+        _scale = max(_scale, 1e-9)
+        _node_colors = [_TOPOLOGY_CMAP(_r / _scale) for _r in _rhos]
     else:
         _node_colors = ["skyblue"] * _n
 
-    # draw nodes, edges, and both label layers
+    # draw nodes first
     nx.draw_networkx_nodes(graph, pos,
                            node_size=1500,
                            node_color=_node_colors,
                            alpha=0.9,
                            ax=ax)
+
+    # separate self-loops from regular edges; each needs different
+    # `connectionstyle` + label positioning so the self-loop arc is
+    # visible outside the node and its label doesn't sit on top of it
+    _self_edges = [(_u, _v) for _u, _v in graph.edges() if _u == _v]
+    _cross_edges = [(_u, _v) for _u, _v in graph.edges() if _u != _v]
+
+    # regular cross-edges: gentle curve so bi-directional pairs don't overlap
     nx.draw_networkx_edges(graph, pos,
+                           edgelist=_cross_edges,
                            width=1.5,
                            alpha=0.7,
-                           edge_color="black",
+                           edge_color=_TEXT_BLACK,
                            arrows=True,
                            arrowsize=18,
                            arrowstyle="-|>",
                            connectionstyle="arc3,rad=0.2",
                            ax=ax)
+    # self-loops: larger rad keeps the arc outside the node circle
+    if _self_edges:
+        nx.draw_networkx_edges(graph, pos,
+                               edgelist=_self_edges,
+                               width=1.5,
+                               alpha=0.7,
+                               edge_color=_TEXT_BLACK,
+                               arrows=True,
+                               arrowsize=18,
+                               arrowstyle="-|>",
+                               connectionstyle="arc3,rad=1.0",
+                               node_size=1500,
+                               ax=ax)
 
-    # edge labels only when the routing weight is visually meaningful
-    _edge_lbl = {
-        (_i, _j): f"{_d['weight']:.2f}"
-        for _i, _j, _d in graph.edges(data=True)
-        if _d["weight"] >= edge_label_threshold
+    # edge labels only when the routing weight is visually meaningful.
+    # Separate cross-edge labels (positioned near the source) from
+    # self-loop labels (positioned further from the node center).
+    _cross_lbl = {
+        (_u, _v): f"{_d['weight']:.2f}"
+        for _u, _v, _d in graph.edges(data=True)
+        if _u != _v and _d["weight"] >= edge_label_threshold
     }
+    _self_lbl = {
+        (_u, _v): f"{_d['weight']:.2f}"
+        for _u, _v, _d in graph.edges(data=True)
+        if _u == _v and _d["weight"] >= edge_label_threshold
+    }
+    _label_bbox = dict(facecolor="white", edgecolor="none",
+                       alpha=0.9, pad=0.3)
     nx.draw_networkx_edge_labels(graph, pos,
-                                 edge_labels=_edge_lbl,
+                                 edge_labels=_cross_lbl,
                                  font_size=10,
-                                 font_color="black",
+                                 font_color=_TEXT_BLACK,
                                  font_weight="light",
-                                 bbox=dict(facecolor="white",
-                                           edgecolor="none",
-                                           alpha=0.9,
-                                           pad=0.3),
+                                 bbox=_label_bbox,
                                  label_pos=0.4,
                                  ax=ax)
+    # self-loop labels use networkx's dedicated kwarg so they land
+    # OUTSIDE the node circle (positioned at the top of the loop)
+    if _self_lbl:
+        nx.draw_networkx_edge_labels(graph, pos,
+                                     edge_labels=_self_lbl,
+                                     font_size=10,
+                                     font_color=_TEXT_BLACK,
+                                     font_weight="light",
+                                     bbox=_label_bbox,
+                                     connectionstyle="arc3,rad=1.0",
+                                     ax=ax)
 
-    # node labels on top
+    # node labels on top. Format matches the reference diagram:
+    #   "Name (c)\n<rho>"
+    # where Name has any underscore swapped for a space (MAS_3 -> MAS 3)
+    # and the trailing (c) shows the server count when the frame has a
+    # `c` column. So the diagram stands on its own without the per-node
+    # table.
+    _labels = {}
+    for _i in range(_n):
+        _display = nd_names[_i].replace("_", " ")
+        if "c" in nds.columns:
+            _display += f" ({int(nds['c'].iloc[_i])})"
+        if "rho" in nds.columns:
+            _display += f"\n{nds['rho'].iloc[_i]:.2f}"
+        _labels[_i] = _display
     nx.draw_networkx_labels(graph, pos,
-                            labels={_i: nd_names[_i] for _i in range(_n)},
-                            font_size=11,
+                            labels=_labels,
+                            font_size=10,
                             font_weight="bold",
+                            font_color=_TEXT_BLACK,
                             ax=ax)
 
     # axis cosmetics: hide ticks, tighten margins
     ax.set_axis_off()
+
+
+# Convenience default glossary for queueing-network topology plots.
+# Callers import this from `src.view.qn_diagram` and pass it through
+# `plot_qn_topology(..., glossary=QN_GLOSSARY_DEFAULT)` when they want
+# the overlay; other methods (stochastic, dimensional, ...) can define
+# their own list with the same format. The plotter itself stays
+# domain-agnostic.
+QN_GLOSSARY_DEFAULT = [
+    "LEGEND",
+    r"$\lambda$: Arrival rate (req/s)",
+    r"$\mu$: Service rate (req/s)",
+    r"$\rho$: Utilization",
+    r"$L$: Avg number in system",
+    r"$L_q$: Avg queue length",
+    r"$W$: Avg time in system (s)",
+    r"$W_q$: Avg wait time (s)",
+]
+
+
+def _add_param_glossary(ax,
+                        glossary: List[str],
+                        *,
+                        corner: str = "lower right") -> None:
+    """*_add_param_glossary()* overlay a caller-supplied parameter
+    glossary (LaTeX lines) in the chosen corner of a topology axis.
+
+    Args:
+        ax: matplotlib axis (graph subplot).
+        glossary (List[str]): lines to render verbatim (each one a
+            short LaTeX snippet or plain string).
+        corner (str): `"lower right"`, `"lower left"`, `"upper right"`,
+            or `"upper left"`. Anchors the text box to that corner in
+            axis-relative coordinates.
+    """
+    _text = "\n".join(glossary)
+    _y = 0.02 if "lower" in corner else 0.98
+    _x = 0.98 if "right" in corner else 0.02
+    _ha = "right" if "right" in corner else "left"
+    _va = "bottom" if "lower" in corner else "top"
+    _props = dict(boxstyle="round,pad=0.4", facecolor="white",
+                  alpha=0.85, edgecolor="gray")
+    ax.text(_x, _y, _text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment=_va,
+            horizontalalignment=_ha,
+            bbox=_props)
+
+
+def _add_network_summary(ax,
+                         net: pd.Series,
+                         *,
+                         corner: str = "upper right") -> None:
+    """*_add_network_summary()* overlay the network-wide aggregate
+    metrics (avg_mu, avg_rho, L_net, Lq_net, W_net, Wq_net,
+    total_throughput) as a text box in the chosen corner.
+
+    Args:
+        ax: matplotlib axis (graph subplot).
+        net (pd.Series): single row from `aggregate_network()`.
+        corner (str): anchor corner; see `_add_param_glossary()`.
+    """
+    _lines = [
+        "NETWORK",
+        rf"$\overline{{\mu}}$: {net['avg_mu']:.2f}",
+        rf"$\overline{{\rho}}$: {net['avg_rho']:.3f}",
+        rf"$L_{{net}}$: {net['L_net']:.2f}",
+        rf"$L_{{q,net}}$: {net['Lq_net']:.2f}",
+        rf"$\overline{{W}}$: {net['W_net']:.4e}",
+        rf"$\overline{{W_q}}$: {net['Wq_net']:.4e}",
+        rf"$TP_{{net}}$: {net['total_throughput']:.2f}",
+    ]
+    _text = "\n".join(_lines)
+    _y = 0.98 if "upper" in corner else 0.02
+    _x = 0.98 if "right" in corner else 0.02
+    _va = "top" if "upper" in corner else "bottom"
+    _ha = "right" if "right" in corner else "left"
+    _props = dict(boxstyle="round,pad=0.5", facecolor="lightblue",
+                  alpha=0.85, edgecolor="steelblue")
+    ax.text(_x, _y, _text,
+            transform=ax.transAxes,
+            fontsize=10, fontweight="bold",
+            verticalalignment=_va,
+            horizontalalignment=_ha,
+            bbox=_props)
+
+
+def _add_node_table(ax, nds: pd.DataFrame, nd_names: List[str]) -> None:
+    """*_add_node_table()* draw a per-node metrics table (name, lambda,
+    mu, rho, L, Lq, W, Wq) into a dedicated axis below the topology.
+
+    Args:
+        ax: matplotlib axis reserved for the table (axis is hidden).
+        nds (pd.DataFrame): per-node metrics frame.
+        nd_names (List[str]): display names aligned with the rows.
+    """
+    ax.set_axis_off()
+
+    # header row + one data row per node; LaTeX-mathtext labels mirror
+    # the glossary ordering so table and legend line up.
+    _header = ["node", r"$\lambda$", r"$\mu$", r"$\rho$",
+               "L", r"$L_q$", "W", r"$W_q$"]
+    _rows = [_header]
+    for _i in range(len(nd_names)):
+        _row = nds.iloc[_i]
+        _rows.append([
+            nd_names[_i],
+            f"{_row['lambda']:.2f}",
+            f"{_row['mu']:.2f}",
+            f"{_row['rho']:.3f}",
+            f"{_row['L']:.2f}",
+            f"{_row['Lq']:.2f}",
+            f"{_row['W']:.4e}",
+            f"{_row['Wq']:.4e}",
+        ])
+
+    _table = ax.table(cellText=_rows, loc="center", cellLoc="center",
+                      colWidths=[0.14] + [0.11] * 7)
+    _table.auto_set_font_size(False)
+    _table.set_fontsize(10)
+    _table.scale(1, 1.25)
+
+    # header row styling
+    for _j in range(len(_header)):
+        _table[(0, _j)].set_facecolor("#E4EBF1")
+        _table[(0, _j)].set_text_props(weight="bold")
 
 
 # ---------------------------------------------------------------------------
@@ -265,19 +485,24 @@ def _draw_topology_axis(ax,
 def plot_qn_topology(rout: np.ndarray,
                      nds: pd.DataFrame,
                      *,
+                     net: Optional[pd.DataFrame] = None,
+                     glossary: Optional[List[str]] = None,
                      nd_names: Optional[List[str]] = None,
                      title: Optional[str] = None,
                      file_path: Optional[str] = None,
                      fname: Optional[str] = None,
                      verbose: bool = False) -> Figure:
-    """*plot_qn_topology()* draw the queueing-network topology for one scenario, with nodes coloured by `rho` and edge labels showing routing probabilities.
+    """*plot_qn_topology()* draw the queueing-network topology for one scenario, with nodes coloured by `rho`, edge labels showing routing probabilities, a rho colourbar, a parameter glossary, an optional network-wide summary overlay, and a per-node metrics table below the graph.
 
     Args:
         rout (np.ndarray): `(n, n)` routing-probability matrix.
         nds (pd.DataFrame): per-node metrics frame aligned with `rout`. `rho` column drives node colouring when present.
+        net (Optional[pd.DataFrame]): single-row frame from `aggregate_network()`. When given, its values are overlaid as a network-wide summary box on the topology.
         nd_names (Optional[List[str]]): per-node display names. Defaults to `nds["key"]` when present, else `"Node {i}"`.
         title (Optional[str]): figure title. Defaults to `"Queue-Network Topology"`.
-        file_path (Optional[str]): directory to save the figure into. fname (Optional[str]): filename (with extension) for the save. verbose (bool): if True, prints a one-line save message.
+        file_path (Optional[str]): directory to save the figure into.
+        fname (Optional[str]): filename (with extension) for the save.
+        verbose (bool): if True, prints a one-line save message.
 
     Returns:
         Figure: the matplotlib figure (caller decides whether to close or further mutate it).
@@ -295,12 +520,39 @@ def plot_qn_topology(rout: np.ndarray,
     _graph = _build_topology_graph(rout, nd_names)
     _pos = nx.bfs_layout(_graph, start=0)
 
-    # create the figure + axis and delegate the drawing to the helper
-    _fig, _ax = plt.subplots(figsize=(14, 9), facecolor="white")
-    _ax.set_facecolor("white")
-    _draw_topology_axis(_ax, _graph, _pos, nds, nd_names)
+    # two stacked subplots: graph on top (3/4) + metrics table below (1/4)
+    _fig = plt.figure(figsize=(16, 14), facecolor="white")
+    _ax_graph = plt.subplot2grid((4, 1), (0, 0), rowspan=3)
+    _ax_table = plt.subplot2grid((4, 1), (3, 0), rowspan=1)
+    _ax_graph.set_facecolor("white")
+    _ax_table.set_facecolor("white")
 
-    _ax.set_title(title or "Queue-Network Topology", **_TITLE_STYLE)
+    # draw the topology into the graph axis
+    _draw_topology_axis(_ax_graph, _graph, _pos, nds, nd_names)
+
+    # rho colourbar anchored to the right of the graph axis.
+    # vmax tracks the max rho in the frame so the hottest node always
+    # saturates to red; matches the reference diagram's scaling.
+    if "rho" in nds.columns:
+        _max_rho = max(float(nds["rho"].max()), 1e-9)
+        _sm = cm.ScalarMappable(cmap=_TOPOLOGY_CMAP,
+                                norm=plt.Normalize(vmin=0.0, vmax=_max_rho))
+        _sm.set_array([])
+        _cbar = _fig.colorbar(_sm, ax=_ax_graph, shrink=0.75, pad=0.02)
+        _cbar.set_label(r"Utilization $(\rho)$", **_LBL_STYLE)
+
+    # glossary defaults to the module-level QN_GLOSSARY_DEFAULT when the
+    # caller doesn't pass one; pass `glossary=[]` to suppress the overlay
+    _gloss = glossary if glossary is not None else QN_GLOSSARY_DEFAULT
+    if _gloss:
+        _add_param_glossary(_ax_graph, _gloss, corner="lower right")
+    if net is not None:
+        _add_network_summary(_ax_graph, net.iloc[0], corner="upper right")
+
+    # per-node metrics table
+    _add_node_table(_ax_table, nds, nd_names)
+
+    _ax_graph.set_title(title or "Queue-Network Topology", **_TITLE_STYLE)
     _fig.tight_layout()
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
@@ -311,16 +563,21 @@ def plot_qn_topology_grid(routs: List[np.ndarray],
                           ndss: List[pd.DataFrame],
                           names: List[str],
                           *,
+                          nets: Optional[List[pd.DataFrame]] = None,
+                          glossary: Optional[List[str]] = None,
                           nd_names: Optional[List[str]] = None,
                           title: Optional[str] = None,
                           file_path: Optional[str] = None,
                           fname: Optional[str] = None,
                           verbose: bool = False) -> Figure:
-    """*plot_qn_topology_grid()* draw N scenarios side-by-side with a shared BFS layout and a single rho colourbar.
+    """*plot_qn_topology_grid()* draw N scenarios side-by-side with a shared BFS layout, a shared rho colourbar, and optional per-subplot network-wide summary + parameter glossary overlays.
 
     Args:
-        routs (List[np.ndarray]): per-scenario routing matrices. ndss (List[pd.DataFrame]): per-scenario node frames (aligned with `routs` by index).
+        routs (List[np.ndarray]): per-scenario routing matrices.
+        ndss (List[pd.DataFrame]): per-scenario node frames (aligned with `routs` by index).
         names (List[str]): per-scenario display names for subplot titles.
+        nets (Optional[List[pd.DataFrame]]): per-scenario network-wide frames from `aggregate_network()`. When given, each subplot gets a network summary overlay.
+        glossary (Optional[List[str]]): parameter glossary lines (LaTeX OK) drawn once on the first subplot. When None, no glossary overlay is rendered.
         nd_names (Optional[List[str]]): per-node display names. Defaults to the first frame's `key` column when present.
         title (Optional[str]): overall figure title (suptitle).
         file_path (Optional[str]): directory to save into.
@@ -328,7 +585,7 @@ def plot_qn_topology_grid(routs: List[np.ndarray],
         verbose (bool): if True, prints a one-line save message.
 
     Raises:
-        ValueError: If the three lists do not have matching lengths.
+        ValueError: If the required lists do not have matching lengths.
 
     Returns:
         Figure: the matplotlib figure.
@@ -337,6 +594,10 @@ def plot_qn_topology_grid(routs: List[np.ndarray],
     if not (len(routs) == len(ndss) == len(names)):
         _msg = "routs, ndss, and names must have matching lengths; "
         _msg += f"got {len(routs)}, {len(ndss)}, {len(names)}"
+        raise ValueError(_msg)
+    if nets is not None and len(nets) != len(routs):
+        _msg = f"nets length ({len(nets)}) must match routs "
+        _msg += f"length ({len(routs)})"
         raise ValueError(_msg)
 
     _k = len(routs)
@@ -352,26 +613,48 @@ def plot_qn_topology_grid(routs: List[np.ndarray],
     # one shared BFS layout so every subplot uses the same positions
     _pos = _bfs_layout_shared(routs)
 
+    # shared rho scale so both subplots use the same colour normalisation
+    # (and the hottest node across every scenario is the one that maps
+    # to red, not the hottest within each subplot independently)
+    _shared_rho_max = None
+    if all("rho" in _df.columns for _df in ndss):
+        _shared_rho_max = max(float(_df["rho"].max()) for _df in ndss)
+        _shared_rho_max = max(_shared_rho_max, 1e-9)
+
     # create the grid; width scales with the number of scenarios
     _fig, _axes = plt.subplots(1, _k,
-                               figsize=(max(8, 7 * _k), 9),
+                               figsize=(max(8, 8 * _k), 10),
                                facecolor="white")
     if _k == 1:
         _axes = [_axes]
 
-    # draw each scenario into its own axis
-    for _ax, _rout, _nds, _name in zip(_axes, routs, ndss, names):
+    # draw each scenario into its own axis; overlay glossary + summary box
+    for _i, (_ax, _rout, _nds, _name) in enumerate(zip(_axes, routs, ndss, names)):
         _ax.set_facecolor("white")
         _graph = _build_topology_graph(_rout, nd_names)
-        _draw_topology_axis(_ax, _graph, _pos, _nds, nd_names)
+        _draw_topology_axis(_ax, _graph, _pos, _nds, nd_names,
+                            rho_max=_shared_rho_max)
         _ax.set_title(_name, fontsize=13, **_LBL_STYLE)
 
-    # shared rho colourbar anchored to the right of the grid
+        # glossary only on the first subplot (would be redundant otherwise);
+        # defaults to QN_GLOSSARY_DEFAULT when the caller does not pass one.
+        # Pass `glossary=[]` to suppress the overlay entirely.
+        if _i == 0:
+            _gloss = glossary if glossary is not None else QN_GLOSSARY_DEFAULT
+            if _gloss:
+                _add_param_glossary(_ax, _gloss, corner="lower right")
+        if nets is not None:
+            _add_network_summary(_ax, nets[_i].iloc[0], corner="upper right")
+
+    # shared rho colourbar anchored to the right of the grid; vmax
+    # matches the shared normalisation so the colourbar and the node
+    # colours tell the same story
+    _cbar_max = _shared_rho_max if _shared_rho_max is not None else 1.0
     _sm = cm.ScalarMappable(cmap=_TOPOLOGY_CMAP,
-                            norm=plt.Normalize(vmin=0.0, vmax=1.0))
+                            norm=plt.Normalize(vmin=0.0, vmax=_cbar_max))
     _sm.set_array([])
     _cbar = _fig.colorbar(_sm, ax=_axes, shrink=0.75, pad=0.02)
-    _cbar.set_label("rho", **_LBL_STYLE)
+    _cbar.set_label(r"Utilization $(\rho)$", **_LBL_STYLE)
 
     if title:
         _fig.suptitle(title, **_SUPTITLE_STYLE)
@@ -589,7 +872,7 @@ def plot_net_bars(nets: List[pd.DataFrame],
             _ax.text(_positions[_i][_j], _y, _text,
                      ha="center", va=_va,
                      fontsize=10, rotation=90,
-                     fontweight="light", color="black",
+                     fontweight="light", color=_TEXT_BLACK,
                      bbox=dict(boxstyle="round,pad=0.2",
                                fc="white", ec="none", alpha=0.75))
 
@@ -624,7 +907,7 @@ def plot_net_delta(deltas: pd.DataFrame,
                    verbose: bool = False) -> Figure:
     """*plot_net_delta()* percent-change bar chart for the network-wide deltas between two scenarios.
 
-    Negative values are drawn green (improvement) and positive values red (degradation); sign convention assumes each metric is a cost (smaller is better) except `total_throughput`, where positive is treated as improvement.
+    Colouring is semantic, not geometric: negative deltas (the metric decreased) are drawn green (improvement) and positive deltas are drawn red (degradation). The exception is `total_throughput` -- more throughput is better, so its sign rule is flipped.
 
     Args:
         deltas (pd.DataFrame): single-row frame with one column per metric; values are fractional deltas (e.g. `0.05` = +5%).
@@ -645,11 +928,14 @@ def plot_net_delta(deltas: pd.DataFrame,
     # pull the delta values as percentages
     _values = [float(deltas[_m].iloc[0]) * 100 for _m in _metrics]
 
-    # colour each bar: negative = improvement (green); positive = degradation (red).
-    # total_throughput flips the sign convention (more throughput is good).
+    # semantic colour rule: lower is better for cost metrics
+    # (rho, L, Lq, W, Wq), so a NEGATIVE delta is an improvement;
+    # higher is better for rate metrics (mu, throughput), so a POSITIVE
+    # delta is an improvement. Everything else defaults to cost-like.
+    _RATE_METRICS = {"total_throughput", "avg_mu"}
     _colors: List[str] = []
     for _m, _v in zip(_metrics, _values):
-        if _m == "total_throughput":
+        if _m in _RATE_METRICS:
             _colors.append(_BAR_GREEN if _v >= 0 else _BAR_RED)
         else:
             _colors.append(_BAR_GREEN if _v < 0 else _BAR_RED)
@@ -667,7 +953,7 @@ def plot_net_delta(deltas: pd.DataFrame,
                  f"{_v:.2f}%",
                  ha="center",
                  va="bottom" if _v >= 0 else "top",
-                 fontsize=11, fontweight="light", color="black")
+                 fontsize=11, fontweight="light", color=_TEXT_BLACK)
 
     # cosmetics: zero baseline, ticks, labels, grid, legend
     _ax.axhline(y=0, color="black", linestyle="-", alpha=0.3)
