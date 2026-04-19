@@ -10,6 +10,26 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-19 — Dimensional method complete (3/5): engine + orchestrator + thin notebook
+
+**Delivered.** Third of five evaluation methods in place.
+
+- **`src/dimensional/`** — five thin adapters around PyDASA 0.7.1: `schema.build_schema()`, `engine.build_engine()`, `coefficients.derive_coefficients()` (config-driven via `{pi[i]}` placeholder spec), `sensitivity.analyse_symbolic()`, `reshape.{coefficients_to_nodes, coefficients_to_network, coefficients_delta, network_delta}`. Each module under 90 lines; PyDASA owns all the math.
+- **`data/config/method/dimensional.json`** — FDUs (`T`, `S`, `D`), coefficient specs (`{pi[i]}` patterns for θ, σ, η, φ), sensitivity settings, and a `sweep_grid` (6 μ-factors × 4 c × 4 K) earmarked for `yoly.ipynb` (Phase 3b/c).
+- **`src/methods/dimensional.py`** — orchestrator with `run(adp, prf, scn, wrt, method_cfg=None)` + CLI; mirrors analytic/stochastic contract. No `requirements.json`: dimensional characterises the design space, not operational thresholds.
+- **`dimensional.ipynb`** (new) — 9-section thin notebook built via `scripts/build_dimensional_notebook.py` (reproducible regen). Runs all 4 adaptations and plots per-node heatmap / diffmap / network bars / delta for θ, σ, η, φ — **all reusing existing `src.view.qn_diagram` plotters**; no new view module needed for this notebook.
+- **Tests** — 34 engine-level (schema, engine, coefficients, sensitivity, reshape) + 22 orchestrator-level = **56 new**; **138 total pass in ~6 min.**
+
+**Key finding mid-Phase-3a: PyDASA reads `_std_mean`, not `_mean`.** The PACS Variable-dict carries both `_mean` / `_setpoint` (scenario-display) and `_std_mean` / `_std_setpoint` (canonical-units, what pydasa consumes). Only `_std_*` flows into `Coefficient.calculate_setpoint()`. Any seed / override must update both halves.
+
+**Seeded dimensional from analytic results.** The profile JSON's static L / W / Lq / Wq / λ / χ `_mean` values were inherited from the OLD CSV and did not reflect per-adaptation operating points — every artifact came out with θ=0.6 uniformly. Fixed via `src/utils/seed_dim_from_analytic.py`: runs analytic on a representative scenario per profile (`baseline` for `dflt.json`, `aggregate` for `opti.json`) and writes the solver's per-node `λ, χ, L, L_q, W, W_q` back into the variable `_setpoint`, `_mean`, `_std_setpoint`, `_std_mean`, `_data` fields. Also refreshes `M_{act}` (depends on L). Post-seed baseline θ varies 0.005 (AS_{3}) to 0.21 (MAS_{3}); σ ≈ 1.0 uniformly (Little's-law sanity check).
+
+**Limitation of the opti seed.** Only 13 of 16 opti artifacts are seeded — the three pre-adaptation swap-out artifacts (`MAS_{3}`, `AS_{3}`, `DS_{3}`) do not appear in the `aggregate` scenario's artifact list, so their `_mean` values remain stale. If dimensional is later invoked on `s1` / `s2` (which use a subset of those pre-adaptation artifacts), the stale fields will flow through. Acceptable for now per "seed once" scope; can extend to merge across scenarios later if needed.
+
+**Notebook convention.** `dimensional.ipynb` is generated from `scripts/build_dimensional_notebook.py`; edit the script, re-run, commit both. Keeps the notebook in git as a snapshot while the source of truth remains Python.
+
+---
+
 ## 2026-04-19 — Dimensional schema migration: `E → S`, plus `M_{act}`, `M_{buf}` per artifact
 
 **Why.** Before starting the dimensional engine, the TAS profile configs needed to line up with the PACS reference framework `{T, S, D}` used by the two illustrative-example iterations (`__OLD__/src/exports/dimensional_{1,2}_draft.py`). Two gaps were blocking Phase 1:

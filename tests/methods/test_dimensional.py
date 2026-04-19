@@ -97,11 +97,12 @@ class TestDimensionalEndToEnd:
             assert len(_sens) > 0
             assert all(_s.startswith("SEN_") for _s in _sens.keys())
 
-    def test_theta_matches_L_over_K_baseline(self, _result_baseline):
-        """*test_theta_matches_L_over_K_baseline()* per-artifact theta equals L_mean / K_mean (6/10 = 0.6 across the uniform baseline initialisation). Runs on baseline only -- s1 / aggregate swap slots have different L / K means, so the uniform 0.6 check does not apply there."""
-        for _k, _a in _result_baseline["artifacts"].items():
-            _theta = _a["coefficients"][f"\\theta_{{{_k}}}"]["setpoint"]
-            assert _theta == pytest.approx(0.6, abs=1e-6), f"{_k}: theta={_theta}"
+    def test_theta_varies_per_artifact_baseline(self, _result_baseline):
+        """*test_theta_varies_per_artifact_baseline()* after seeding from analytic (`src.utils.seed_dim_from_analytic`), theta reflects real per-artifact L/K ratios; the baseline is no longer uniform. Sanity range: occupancy should spread across at least 5 % of the coefficient axis."""
+        _thetas = [_a["coefficients"][f"\\theta_{{{_k}}}"]["setpoint"]
+                   for _k, _a in _result_baseline["artifacts"].items()]
+        _range = max(_thetas) - min(_thetas)
+        assert _range > 0.05, f"theta range {_range} too small; seed may have failed"
 
 
 class TestResultEnvelope:

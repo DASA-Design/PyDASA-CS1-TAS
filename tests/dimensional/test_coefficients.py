@@ -16,17 +16,9 @@ import pytest
 from src.dimensional import build_engine, derive_coefficients
 
 
-# --- TAS_{1} reference values (from dflt.json._mean) ---
-_LAMBDA_M = 345.0
-_MU_M = 900.0
-_CHI_M = 345.0
-_C_M = 2.0           # NOTE: _setpoint=1, _mean=2. PyDASA uses _mean.
-_K_M = 10.0
-_DELTA_M = 1064.0
-_L_M = 6.0
-_W_M = 0.001801802
-_M_ACT_M = _L_M * _DELTA_M    # migration script: _mean == _setpoint == L·delta
-_M_BUF_M = _K_M * _DELTA_M    # migration script: _mean == _setpoint == K·delta
+def _std_mean(engine, sym: str) -> float:
+    """*_std_mean()* returns `_std_mean` for a variable on the engine; this is the field PyDASA actually reads during `calculate_setpoint()`."""
+    return float(engine.variables[sym]._std_mean)
 
 
 class TestCoefficientDerivation:
@@ -63,39 +55,59 @@ class TestCoefficientDerivation:
 
 
 class TestCoefficientValues:
-    """Numerical setpoints match the by-hand formulas at `_mean` values."""
+    """Numerical setpoints match the by-hand formulas evaluated at PyDASA's `_std_mean`.
+
+    Values are read from the engine at test time so the tests track whatever
+    is in `data/config/profile/dflt.json` — in particular the seeded values
+    written by `src.utils.seed_dim_from_analytic` after the analytic solver
+    is run.
+    """
 
     def test_theta_equals_L_over_K(self, engine_ready):
-        _, _derived = engine_ready
+        _eng, _derived = engine_ready
         _theta = _derived["\\theta_{TAS_{1}}"].setpoint
-        _expected = _L_M / _K_M
-        assert _theta == pytest.approx(_expected, abs=1e-6)
+        _expected = _std_mean(_eng, "L_{TAS_{1}}") / _std_mean(_eng, "K_{TAS_{1}}")
+        assert _theta == pytest.approx(_expected, rel=1e-6)
 
     def test_sigma_equals_little_residual(self, engine_ready):
+        _eng, _derived = engine_ready
+        _sigma = _derived["\\sigma_{TAS_{1}}"].setpoint
+        _lam = _std_mean(_eng, "\\lambda_{TAS_{1}}")
+        _w = _std_mean(_eng, "W_{TAS_{1}}")
+        _L = _std_mean(_eng, "L_{TAS_{1}}")
+        _expected = _lam * _w / _L
+        assert _sigma == pytest.approx(_expected, rel=1e-6)
+
+    def test_sigma_close_to_unity_after_seed(self, engine_ready):
+        """Sanity check: Little's law -> lambda*W = L -> sigma ~ 1 at the seeded operating point."""
         _, _derived = engine_ready
         _sigma = _derived["\\sigma_{TAS_{1}}"].setpoint
-        _expected = _LAMBDA_M * _W_M / _L_M
-        assert _sigma == pytest.approx(_expected, abs=1e-6)
+        assert _sigma == pytest.approx(1.0, abs=0.01)
 
     def test_eta_equals_chi_K_over_mu_c(self, engine_ready):
-        """Pins the `_mean`-based evaluation (c=2, not c_setpoint=1)."""
-        _, _derived = engine_ready
+        _eng, _derived = engine_ready
         _eta = _derived["\\eta_{TAS_{1}}"].setpoint
-        _expected = _CHI_M * _K_M / (_MU_M * _C_M)
-        assert _eta == pytest.approx(_expected, abs=1e-6)
+        _chi = _std_mean(_eng, "\\chi_{TAS_{1}}")
+        _K = _std_mean(_eng, "K_{TAS_{1}}")
+        _mu = _std_mean(_eng, "\\mu_{TAS_{1}}")
+        _c = _std_mean(_eng, "c_{TAS_{1}}")
+        _expected = _chi * _K / (_mu * _c)
+        assert _eta == pytest.approx(_expected, rel=1e-6)
 
     def test_phi_equals_memory_ratio(self, engine_ready):
-        _, _derived = engine_ready
+        _eng, _derived = engine_ready
         _phi = _derived["\\phi_{TAS_{1}}"].setpoint
-        _expected = _M_ACT_M / _M_BUF_M
-        assert _phi == pytest.approx(_expected, abs=1e-6)
+        _m_act = _std_mean(_eng, "M_{act_{TAS_{1}}}")
+        _m_buf = _std_mean(_eng, "M_{buf_{TAS_{1}}}")
+        _expected = _m_act / _m_buf
+        assert _phi == pytest.approx(_expected, rel=1e-6)
 
     def test_phi_collapses_to_L_over_K(self, engine_ready):
-        """Since M_act = L·δ and M_buf = K·δ, φ should equal θ."""
+        """Since M_act = L·delta and M_buf = K·delta, phi should equal theta."""
         _, _derived = engine_ready
         _phi = _derived["\\phi_{TAS_{1}}"].setpoint
         _theta = _derived["\\theta_{TAS_{1}}"].setpoint
-        assert _phi == pytest.approx(_theta, abs=1e-9)
+        assert _phi == pytest.approx(_theta, rel=1e-9)
 
 
 class TestExpressionGuardrails:
