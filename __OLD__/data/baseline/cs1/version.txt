@@ -1,0 +1,32 @@
+﻿TAS 1.6
+
+NOTES:
+
+Based on the TAS (Telecare Assistance Service) context and the CSV structure, here's what the columns likely represent:
+
+Column Breakdown:
+Column 1 (Request ID): Sequential number identifying each service request (1-391 in your example)
+
+Column 2 (Service Name): The specific service invoked:
+
+MedicalService1/2/3 - Different medical monitoring services
+AlarmService1/2/3 - Different alarm notification services
+DrugService - Medication management service
+AssistanceService - The final assistance coordination service
+Column 3 (Success Status): Boolean indicating if the service invocation succeeded (true)
+
+Column 4 (Service Cost/Time): The cost or execution time of that specific service invocation (varies by service type)
+
+Column 5 (Timestamp - Start): When the service invocation started (in milliseconds/seconds from simulation start)
+
+Column 6 (Response Time): The actual response time experienced for this invocation (in seconds)
+
+Column 7 (Total Request Cost/Time): The cumulative cost or total execution time for the entire request up to the AssistanceService (only appears for AssistanceService rows)
+
+Three QoS Scenarios:
+Based on the folder structure you showed:
+
+Cost QoS: Optimizes for lowest cost services
+Preferred QoS: Optimizes for preferred/balanced services (likely a mix of cost, reliability, and performance)
+Reliability QoS: Optimizes for most reliable services (highest success rate/availability)
+Each scenario would show different patterns in columns 4 and 6 based on which services get selected under different QoS policies.
