@@ -10,6 +10,33 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-19 — Dimensional schema migration: `E → S`, plus `M_{act}`, `M_{buf}` per artifact
+
+**Why.** Before starting the dimensional engine, the TAS profile configs needed to line up with the PACS reference framework `{T, S, D}` used by the two illustrative-example iterations (`__OLD__/src/exports/dimensional_{1,2}_draft.py`). Two gaps were blocking Phase 1:
+
+1. **FDU symbol drift.** TAS used `E` (entity) for the request dimension; PACS (authoritative reference) uses `S` (structure). Same semantics, incompatible strings. PyDASA's `Schema` would reject every artifact.
+2. **Missing D-dimension.** `\delta_{X}` (data density, kB/req) was present in every artifact but flagged `relevant: false`, and the companion memory variables `M_{act, X}` / `M_{buf, X}` were absent. Without them the Buckingham matrix has no D coverage and `\phi` (memory-usage coefficient) cannot be derived.
+
+**What.** One-shot utility `src/utils/migrate_dim_schema.py` does three things per artifact:
+
+- Rename token `E → S` in every `_dims` expression (117 in `dflt.json`, 144 in `opti.json`).
+- Flip `\delta_{X}.relevant = true` (13 in `dflt.json`, 16 in `opti.json`).
+- Insert `M_{act, X}` and `M_{buf, X}` with `_dims="D"`, `_units="kB"`, `_cat="CTRL"`, `relevant=true`, `_dist_type="data_product"`. Setpoints derived from existing setpoints:
+  - `M_{act, X}._setpoint = L_{X}._setpoint × \delta_{X}._setpoint` (active memory)
+  - `M_{buf, X}._setpoint = K_{X}._setpoint × \delta_{X}._setpoint` (allocated buffer)
+
+For TAS_{1}: `M_{act} = 6 × 1064 = 6384 kB`, `M_{buf} = 10 × 1064 = 10640 kB`.
+
+**Provenance of the numbers.**
+
+- **`K = 10 req`** — canonical per `CLAUDE.md` ("every artifact has c=1 and K=10"); matches `__OLD__/data/config/cs1/default_dim_variables.csv` (mean=10, range=[5,15]); PACS iter1 used K_max=16 (same ballpark).
+- **`\delta = 1064 kB/req`** — inherited verbatim from the OLD CSV's dimensional variable catalogue; anchored to medical-record / DICOM payload sizes (~1 MB typical). Not a direct citation from Weyns & Calinescu 2015 — the paper does not quantify payload size. This is an educated domain estimate applied uniformly across the 13 artifacts.
+- **`M_buf = K · \delta`** and **`M_act = L · \delta`** — derived, not guessed. The only dimensionally-consistent interpretation of "buffer capacity in memory units".
+
+**Outcome.** 70 existing tests still green (`pytest tests/` in ~12s). Schema is now compatible with PyDASA's Schema / Buckingham pipeline. Phase 1 of the dimensional method (engine + config-driven FDUs + coefficients) unblocked.
+
+---
+
 ## 2026-04-19 — Stochastic method complete (2/5); dimensional split into two notebooks
 
 **Delivered.** Second of five evaluation methods in place; SimPy DES engine + NetworkConfig wrapper agrees with the closed-form analytic solution within Monte-Carlo noise across every adaptation.
