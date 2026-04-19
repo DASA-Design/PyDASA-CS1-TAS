@@ -6,7 +6,6 @@
     "artifacts": {
         "TAS_1": {
             "name": "TAS composite stage 1 (dispatch)",
-            "idx": 0,
             "type": "M/M/s/K",
             "lambda_z": 345.0,
             "L_z": 0.0,
@@ -328,7 +327,6 @@
         },
         "TAS_2": {
             "name": "TAS composite stage 2 (medical dispatch)",
-            "idx": 1,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -650,7 +648,6 @@
         },
         "TAS_3": {
             "name": "TAS composite stage 3 (alarm dispatch)",
-            "idx": 2,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -972,7 +969,6 @@
         },
         "MAS_1": {
             "name": "Medical Analysis Service 1",
-            "idx": 3,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -1294,7 +1290,6 @@
         },
         "MAS_2": {
             "name": "Medical Analysis Service 2",
-            "idx": 4,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -1616,7 +1611,6 @@
         },
         "MAS_3": {
             "name": "Medical Analysis Service 3",
-            "idx": 5,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -1938,7 +1932,6 @@
         },
         "AS_1": {
             "name": "Alarm Service 1",
-            "idx": 6,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -2260,7 +2253,6 @@
         },
         "AS_2": {
             "name": "Alarm Service 2",
-            "idx": 7,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -2582,7 +2574,6 @@
         },
         "AS_3": {
             "name": "Alarm Service 3",
-            "idx": 8,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -2904,7 +2895,6 @@
         },
         "TAS_4": {
             "name": "TAS composite stage 4 (drug dispatch)",
-            "idx": 9,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -3226,7 +3216,6 @@
         },
         "DS_3": {
             "name": "Drug Service 3",
-            "idx": 10,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -3548,7 +3537,6 @@
         },
         "TAS_5": {
             "name": "TAS composite stage 5",
-            "idx": 11,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -3870,7 +3858,6 @@
         },
         "TAS_6": {
             "name": "TAS composite stage 6",
-            "idx": 12,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -4192,31 +4179,33 @@
         }
     },
     "environments": {
-        "_nodes": [
-            "TAS_1",
-            "TAS_2",
-            "TAS_3",
-            "MAS_1",
-            "MAS_2",
-            "MAS_3",
-            "AS_1",
-            "AS_2",
-            "AS_3",
-            "TAS_4",
-            "DS_3",
-            "TAS_5",
-            "TAS_6"
-        ],
         "_setpoint": "baseline",
         "_scenarios": [
             "baseline"
         ],
-        "_labels": [
-            "No adaptation — TAS workflow as published [1]"
-        ],
-        "_note": "P[k][i][j] = routing probability from node i to node j under scenario k. Indices follow `_nodes` order. Diagonal captures per-service error probability; off-diagonal captures the TAS workflow routing.",
-        "_routs": [
-            [
+        "_labels": {
+            "baseline": "Baseline: no adaptation. MAPE-K inert. TAS workflow and service catalogue as published in Weyns & Calinescu 2015 [1] Table III."
+        },
+        "_note": "`_setpoint` names the default scenario for this config — the loader reads this scenario when no `--adaptation` CLI flag is given. `_routs[scenario][i][j]` = routing probability from node i to node j under `scenario`. Position i indexes into `_nodes[scenario]`. Diagonal captures per-service error probability; off-diagonal captures the TAS workflow routing.",
+        "_nodes": {
+            "baseline": [
+                "TAS_1",
+                "TAS_2",
+                "TAS_3",
+                "MAS_1",
+                "MAS_2",
+                "MAS_3",
+                "AS_1",
+                "AS_2",
+                "AS_3",
+                "TAS_4",
+                "DS_3",
+                "TAS_5",
+                "TAS_6"
+            ]
+        },
+        "_routs": {
+            "baseline": [
                 [
                     0.0,
                     0.75,
@@ -4413,6 +4402,6 @@
                     0.0
                 ]
             ]
-        ]
+        }
     }
 }

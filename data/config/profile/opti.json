@@ -1,12 +1,11 @@
 {
     "profile": "opti",
     "adaptation": "aggregate",
-    "source": "Optimal catalogue from __OLD__/data/config/cs1/optimal_qn_model.csv and __OLD__/data/config/cs1/optimal_dim_variables.csv. Baseline (dflt) routing carried over from __OLD__/data/config/cs1/default_qn_model.csv for scenario s2.",
-    "notes": "Three after-adaptation scenarios. The `_vars_source` array tells the loader which profile's artifacts to use per scenario index: `dflt` pulls variables from dflt.json, `opti` uses the artifacts block in this file.",
+    "source": "Optimal catalogue from __OLD__/data/config/cs1/optimal_qn_model.csv and __OLD__/data/config/cs1/optimal_dim_variables.csv. Baseline (dflt) routing and swap-source services (MAS_3, AS_3, DS_3) carried over from __OLD__/data/config/cs1/default_*.csv for scenario s1.",
+    "notes": "Three after-adaptation scenarios. The `artifacts` block carries both dflt-variant and opti-variant entries for the three swap slots (MAS_3 vs MAS_4 at node 6, AS_3 vs AS_4 at node 9, DS_3 vs DS_1 at node 11). Each scenario's `_nodes` list names the 13 artifact keys active for that scenario, in routing-matrix order.",
     "artifacts": {
         "TAS_1": {
             "name": "TAS composite stage 1 (dispatch)",
-            "idx": 0,
             "type": "M/M/s/K",
             "lambda_z": 345.0,
             "L_z": 0.0,
@@ -328,7 +327,6 @@
         },
         "TAS_2": {
             "name": "TAS composite stage 2 (medical dispatch)",
-            "idx": 1,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -650,7 +648,6 @@
         },
         "TAS_3": {
             "name": "TAS composite stage 3 (alarm dispatch)",
-            "idx": 2,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -972,7 +969,6 @@
         },
         "MAS_1": {
             "name": "Medical Analysis Service 1",
-            "idx": 3,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -1294,7 +1290,6 @@
         },
         "MAS_2": {
             "name": "Medical Analysis Service 2",
-            "idx": 4,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -1614,20 +1609,19 @@
                 }
             }
         },
-        "MAS_3": {
-            "name": "Medical Analysis Service 3",
-            "idx": 5,
+        "MAS_4": {
+            "name": "Medical Analysis Service 4 (opti upgrade of MAS_3)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
             "vars": {
-                "\\lambda_{MAS_{3}}": {
-                    "_sym": "\\lambda_{MAS_{3}}",
+                "\\lambda_{MAS_{4}}": {
+                    "_sym": "\\lambda_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "lambda_MAS_3",
+                    "_alias": "lambda_MAS_4",
                     "_idx": 56,
-                    "_name": "MAS_3 arrival rate",
-                    "description": "Arrival rate for MAS_3",
+                    "_name": "MAS_4 arrival rate",
+                    "description": "Arrival rate for MAS_4",
                     "_cat": "IN",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -1649,13 +1643,13 @@
                     },
                     "_data": []
                 },
-                "\\mu_{MAS_{3}}": {
-                    "_sym": "\\mu_{MAS_{3}}",
+                "\\mu_{MAS_{4}}": {
+                    "_sym": "\\mu_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "mu_MAS_3",
+                    "_alias": "mu_MAS_4",
                     "_idx": 57,
-                    "_name": "MAS_3 service rate",
-                    "description": "Service rate for MAS_3",
+                    "_name": "MAS_4 service rate",
+                    "description": "Service rate for MAS_4",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -1677,13 +1671,13 @@
                     },
                     "_data": []
                 },
-                "\\epsilon_{MAS_{3}}": {
-                    "_sym": "\\epsilon_{MAS_{3}}",
+                "\\epsilon_{MAS_{4}}": {
+                    "_sym": "\\epsilon_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "epsilon_MAS_3",
+                    "_alias": "epsilon_MAS_4",
                     "_idx": 58,
-                    "_name": "MAS_3 error probability",
-                    "description": "Service error probability for MAS_3",
+                    "_name": "MAS_4 error probability",
+                    "description": "Service error probability for MAS_4",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "E*T^-1",
@@ -1704,13 +1698,13 @@
                     },
                     "_data": []
                 },
-                "\\chi_{MAS_{3}}": {
-                    "_sym": "\\chi_{MAS_{3}}",
+                "\\chi_{MAS_{4}}": {
+                    "_sym": "\\chi_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "chi_MAS_3",
+                    "_alias": "chi_MAS_4",
                     "_idx": 59,
-                    "_name": "MAS_3 departure rate",
-                    "description": "Departure rate for MAS_3",
+                    "_name": "MAS_4 departure rate",
+                    "description": "Departure rate for MAS_4",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -1726,19 +1720,19 @@
                     "_std_mean": 112.5,
                     "_dist_type": "adjusted_rate",
                     "_depends": [
-                        "\\lambda_{MAS_{3}}",
-                        "\\epsilon_{MAS_{3}}"
+                        "\\lambda_{MAS_{4}}",
+                        "\\epsilon_{MAS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "c_{MAS_{3}}": {
-                    "_sym": "c_{MAS_{3}}",
+                "c_{MAS_{4}}": {
+                    "_sym": "c_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "c_MAS_3",
+                    "_alias": "c_MAS_4",
                     "_idx": 60,
-                    "_name": "MAS_3 resourses",
-                    "description": "Number of resources allocated in MAS_3",
+                    "_name": "MAS_4 resourses",
+                    "description": "Number of resources allocated in MAS_4",
                     "_cat": "IN",
                     "relevant": true,
                     "_dims": "E",
@@ -1760,13 +1754,13 @@
                     },
                     "_data": []
                 },
-                "K_{MAS_{3}}": {
-                    "_sym": "K_{MAS_{3}}",
+                "K_{MAS_{4}}": {
+                    "_sym": "K_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "K_MAS_3",
+                    "_alias": "K_MAS_4",
                     "_idx": 61,
-                    "_name": "MAS_3 q-capacity",
-                    "description": "Allocated request capacity in MAS_3 memory buffer",
+                    "_name": "MAS_4 q-capacity",
+                    "description": "Allocated request capacity in MAS_4 memory buffer",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E",
@@ -1782,7 +1776,7 @@
                     "_std_mean": 6.0,
                     "_dist_type": "shifted_uniform_int",
                     "_depends": [
-                        "c_{MAS_{3}}"
+                        "c_{MAS_{4}}"
                     ],
                     "_dist_params": {
                         "low": 1,
@@ -1790,13 +1784,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{MAS_{3}}": {
-                    "_sym": "\\delta_{MAS_{3}}",
+                "\\delta_{MAS_{4}}": {
+                    "_sym": "\\delta_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "delta_MAS_3",
+                    "_alias": "delta_MAS_4",
                     "_idx": 62,
-                    "_name": "MAS_3 req data density",
-                    "description": "Data density for request in MAS_3 expected data per requests",
+                    "_name": "MAS_4 req data density",
+                    "description": "Data density for request in MAS_4 expected data per requests",
                     "_cat": "IN",
                     "relevant": false,
                     "_dims": "D*E^-1",
@@ -1818,13 +1812,13 @@
                     },
                     "_data": []
                 },
-                "L_{MAS_{3}}": {
-                    "_sym": "L_{MAS_{3}}",
+                "L_{MAS_{4}}": {
+                    "_sym": "L_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "L_MAS_3",
+                    "_alias": "L_MAS_4",
                     "_idx": 63,
-                    "_name": "MAS_3 mean processing requests",
-                    "description": "Average number of request in MAS_3 component",
+                    "_name": "MAS_4 mean processing requests",
+                    "description": "Average number of request in MAS_4 component",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E",
@@ -1840,21 +1834,21 @@
                     "_std_mean": 6.0,
                     "_dist_type": "queue_length",
                     "_depends": [
-                        "\\lambda_{MAS_{3}}",
-                        "\\mu_{MAS_{3}}",
-                        "c_{MAS_{3}}",
-                        "K_{MAS_{3}}"
+                        "\\lambda_{MAS_{4}}",
+                        "\\mu_{MAS_{4}}",
+                        "c_{MAS_{4}}",
+                        "K_{MAS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{MAS_{3}}": {
-                    "_sym": "Lq_{MAS_{3}}",
+                "Lq_{MAS_{4}}": {
+                    "_sym": "Lq_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "Lq_MAS_3",
+                    "_alias": "Lq_MAS_4",
                     "_idx": 64,
-                    "_name": "MAS_3 mean in memory requests",
-                    "description": "Average number of request in MAS_3 memory",
+                    "_name": "MAS_4 mean in memory requests",
+                    "description": "Average number of request in MAS_4 memory",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "E",
@@ -1870,21 +1864,21 @@
                     "_std_mean": 6.0,
                     "_dist_type": "queue_length",
                     "_depends": [
-                        "\\lambda_{MAS_{3}}",
-                        "\\mu_{MAS_{3}}",
-                        "c_{MAS_{3}}",
-                        "K_{MAS_{3}}"
+                        "\\lambda_{MAS_{4}}",
+                        "\\mu_{MAS_{4}}",
+                        "c_{MAS_{4}}",
+                        "K_{MAS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "W_{MAS_{3}}": {
-                    "_sym": "W_{MAS_{3}}",
+                "W_{MAS_{4}}": {
+                    "_sym": "W_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "W_MAS_3",
+                    "_alias": "W_MAS_4",
                     "_idx": 65,
-                    "_name": "MAS_3 mean time to answer",
-                    "description": "Average time to complete a request in MAS_3",
+                    "_name": "MAS_4 mean time to answer",
+                    "description": "Average time to complete a request in MAS_4",
                     "_cat": "OUT",
                     "relevant": true,
                     "_dims": "T",
@@ -1900,19 +1894,19 @@
                     "_std_mean": 0.021801263,
                     "_dist_type": "queue_time",
                     "_depends": [
-                        "\\chi_{MAS_{3}}",
-                        "L_{MAS_{3}}"
+                        "\\chi_{MAS_{4}}",
+                        "L_{MAS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{MAS_{3}}": {
-                    "_sym": "Wq_{MAS_{3}}",
+                "Wq_{MAS_{4}}": {
+                    "_sym": "Wq_{MAS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "Wq_MAS_3",
+                    "_alias": "Wq_MAS_4",
                     "_idx": 66,
-                    "_name": "MAS_3 mean time in buffer",
-                    "description": "Average time for a request to transit the buffer in MAS_3",
+                    "_name": "MAS_4 mean time in buffer",
+                    "description": "Average time for a request to transit the buffer in MAS_4",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "T",
@@ -1928,8 +1922,8 @@
                     "_std_mean": 0.015134596,
                     "_dist_type": "queue_time",
                     "_depends": [
-                        "\\chi_{MAS_{3}}",
-                        "Lq_{MAS_{3}}"
+                        "\\chi_{MAS_{4}}",
+                        "Lq_{MAS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
@@ -1938,7 +1932,6 @@
         },
         "AS_1": {
             "name": "Alarm Service 1",
-            "idx": 6,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -2260,7 +2253,6 @@
         },
         "AS_2": {
             "name": "Alarm Service 2",
-            "idx": 7,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -2580,20 +2572,19 @@
                 }
             }
         },
-        "AS_3": {
-            "name": "Alarm Service 3",
-            "idx": 8,
+        "AS_4": {
+            "name": "Alarm Service 4 (opti upgrade of AS_3)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
             "vars": {
-                "\\lambda_{AS_{3}}": {
-                    "_sym": "\\lambda_{AS_{3}}",
+                "\\lambda_{AS_{4}}": {
+                    "_sym": "\\lambda_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "lambda_AS_3",
+                    "_alias": "lambda_AS_4",
                     "_idx": 89,
-                    "_name": "AS_3 arrival rate",
-                    "description": "Arrival rate for AS_3",
+                    "_name": "AS_4 arrival rate",
+                    "description": "Arrival rate for AS_4",
                     "_cat": "IN",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -2615,13 +2606,13 @@
                     },
                     "_data": []
                 },
-                "\\mu_{AS_{3}}": {
-                    "_sym": "\\mu_{AS_{3}}",
+                "\\mu_{AS_{4}}": {
+                    "_sym": "\\mu_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "mu_AS_3",
+                    "_alias": "mu_AS_4",
                     "_idx": 90,
-                    "_name": "AS_3 service rate",
-                    "description": "Service rate for AS_3",
+                    "_name": "AS_4 service rate",
+                    "description": "Service rate for AS_4",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -2643,13 +2634,13 @@
                     },
                     "_data": []
                 },
-                "\\epsilon_{AS_{3}}": {
-                    "_sym": "\\epsilon_{AS_{3}}",
+                "\\epsilon_{AS_{4}}": {
+                    "_sym": "\\epsilon_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "epsilon_AS_3",
+                    "_alias": "epsilon_AS_4",
                     "_idx": 91,
-                    "_name": "AS_3 error probability",
-                    "description": "Service error probability for AS_3",
+                    "_name": "AS_4 error probability",
+                    "description": "Service error probability for AS_4",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "E*T^-1",
@@ -2670,13 +2661,13 @@
                     },
                     "_data": []
                 },
-                "\\chi_{AS_{3}}": {
-                    "_sym": "\\chi_{AS_{3}}",
+                "\\chi_{AS_{4}}": {
+                    "_sym": "\\chi_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "chi_AS_3",
+                    "_alias": "chi_AS_4",
                     "_idx": 92,
-                    "_name": "AS_3 departure rate",
-                    "description": "Departure rate for AS_3",
+                    "_name": "AS_4 departure rate",
+                    "description": "Departure rate for AS_4",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -2692,19 +2683,19 @@
                     "_std_mean": 38.71666667,
                     "_dist_type": "adjusted_rate",
                     "_depends": [
-                        "\\lambda_{AS_{3}}",
-                        "\\epsilon_{AS_{3}}"
+                        "\\lambda_{AS_{4}}",
+                        "\\epsilon_{AS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "c_{AS_{3}}": {
-                    "_sym": "c_{AS_{3}}",
+                "c_{AS_{4}}": {
+                    "_sym": "c_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "c_AS_3",
+                    "_alias": "c_AS_4",
                     "_idx": 93,
-                    "_name": "AS_3 resourses",
-                    "description": "Number of resources allocated in AS_3",
+                    "_name": "AS_4 resourses",
+                    "description": "Number of resources allocated in AS_4",
                     "_cat": "IN",
                     "relevant": true,
                     "_dims": "E",
@@ -2726,13 +2717,13 @@
                     },
                     "_data": []
                 },
-                "K_{AS_{3}}": {
-                    "_sym": "K_{AS_{3}}",
+                "K_{AS_{4}}": {
+                    "_sym": "K_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "K_AS_3",
+                    "_alias": "K_AS_4",
                     "_idx": 94,
-                    "_name": "AS_3 q-capacity",
-                    "description": "Allocated request capacity in AS_3 memory buffer",
+                    "_name": "AS_4 q-capacity",
+                    "description": "Allocated request capacity in AS_4 memory buffer",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E",
@@ -2748,7 +2739,7 @@
                     "_std_mean": 6.0,
                     "_dist_type": "shifted_uniform_int",
                     "_depends": [
-                        "c_{AS_{3}}"
+                        "c_{AS_{4}}"
                     ],
                     "_dist_params": {
                         "low": 1,
@@ -2756,13 +2747,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{AS_{3}}": {
-                    "_sym": "\\delta_{AS_{3}}",
+                "\\delta_{AS_{4}}": {
+                    "_sym": "\\delta_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "delta_AS_3",
+                    "_alias": "delta_AS_4",
                     "_idx": 95,
-                    "_name": "AS_3 req data density",
-                    "description": "Data density for request in AS_3 expected data per requests",
+                    "_name": "AS_4 req data density",
+                    "description": "Data density for request in AS_4 expected data per requests",
                     "_cat": "IN",
                     "relevant": false,
                     "_dims": "D*E^-1",
@@ -2784,13 +2775,13 @@
                     },
                     "_data": []
                 },
-                "L_{AS_{3}}": {
-                    "_sym": "L_{AS_{3}}",
+                "L_{AS_{4}}": {
+                    "_sym": "L_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "L_AS_3",
+                    "_alias": "L_AS_4",
                     "_idx": 96,
-                    "_name": "AS_3 mean processing requests",
-                    "description": "Average number of request in AS_3 component",
+                    "_name": "AS_4 mean processing requests",
+                    "description": "Average number of request in AS_4 component",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E",
@@ -2806,21 +2797,21 @@
                     "_std_mean": 6.0,
                     "_dist_type": "queue_length",
                     "_depends": [
-                        "\\lambda_{AS_{3}}",
-                        "\\mu_{AS_{3}}",
-                        "c_{AS_{3}}",
-                        "K_{AS_{3}}"
+                        "\\lambda_{AS_{4}}",
+                        "\\mu_{AS_{4}}",
+                        "c_{AS_{4}}",
+                        "K_{AS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{AS_{3}}": {
-                    "_sym": "Lq_{AS_{3}}",
+                "Lq_{AS_{4}}": {
+                    "_sym": "Lq_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "Lq_AS_3",
+                    "_alias": "Lq_AS_4",
                     "_idx": 97,
-                    "_name": "AS_3 mean in memory requests",
-                    "description": "Average number of request in AS_3 memory",
+                    "_name": "AS_4 mean in memory requests",
+                    "description": "Average number of request in AS_4 memory",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "E",
@@ -2836,21 +2827,21 @@
                     "_std_mean": 6.0,
                     "_dist_type": "queue_length",
                     "_depends": [
-                        "\\lambda_{AS_{3}}",
-                        "\\mu_{AS_{3}}",
-                        "c_{AS_{3}}",
-                        "K_{AS_{3}}"
+                        "\\lambda_{AS_{4}}",
+                        "\\mu_{AS_{4}}",
+                        "c_{AS_{4}}",
+                        "K_{AS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "W_{AS_{3}}": {
-                    "_sym": "W_{AS_{3}}",
+                "W_{AS_{4}}": {
+                    "_sym": "W_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "W_AS_3",
+                    "_alias": "W_AS_4",
                     "_idx": 98,
-                    "_name": "AS_3 mean time to answer",
-                    "description": "Average time to complete a request in AS_3",
+                    "_name": "AS_4 mean time to answer",
+                    "description": "Average time to complete a request in AS_4",
                     "_cat": "OUT",
                     "relevant": true,
                     "_dims": "T",
@@ -2866,19 +2857,19 @@
                     "_std_mean": 0.000662147,
                     "_dist_type": "queue_time",
                     "_depends": [
-                        "\\chi_{AS_{3}}",
-                        "L_{AS_{3}}"
+                        "\\chi_{AS_{4}}",
+                        "L_{AS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{AS_{3}}": {
-                    "_sym": "Wq_{AS_{3}}",
+                "Wq_{AS_{4}}": {
+                    "_sym": "Wq_{AS_{4}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "Wq_AS_3",
+                    "_alias": "Wq_AS_4",
                     "_idx": 99,
-                    "_name": "AS_3 mean time in buffer",
-                    "description": "Average time for a request to transit the buffer in AS_3",
+                    "_name": "AS_4 mean time in buffer",
+                    "description": "Average time for a request to transit the buffer in AS_4",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "T",
@@ -2894,8 +2885,8 @@
                     "_std_mean": 2.92e-05,
                     "_dist_type": "queue_time",
                     "_depends": [
-                        "\\chi_{AS_{3}}",
-                        "Lq_{AS_{3}}"
+                        "\\chi_{AS_{4}}",
+                        "Lq_{AS_{4}}"
                     ],
                     "_dist_params": {},
                     "_data": []
@@ -2904,7 +2895,6 @@
         },
         "TAS_4": {
             "name": "TAS composite stage 4 (drug dispatch)",
-            "idx": 9,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -3224,20 +3214,19 @@
                 }
             }
         },
-        "DS_3": {
-            "name": "Drug Service 3",
-            "idx": 10,
+        "DS_1": {
+            "name": "Drug Service 1 (opti replacement for DS_3)",
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
             "vars": {
-                "\\lambda_{DS_{3}}": {
-                    "_sym": "\\lambda_{DS_{3}}",
+                "\\lambda_{DS_{1}}": {
+                    "_sym": "\\lambda_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "lambda_DS_3",
+                    "_alias": "lambda_DS_1",
                     "_idx": 111,
-                    "_name": "DS_3 arrival rate",
-                    "description": "Arrival rate for DS_3",
+                    "_name": "DS_1 arrival rate",
+                    "description": "Arrival rate for DS_1",
                     "_cat": "IN",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -3259,13 +3248,13 @@
                     },
                     "_data": []
                 },
-                "\\mu_{DS_{3}}": {
-                    "_sym": "\\mu_{DS_{3}}",
+                "\\mu_{DS_{1}}": {
+                    "_sym": "\\mu_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "mu_DS_3",
+                    "_alias": "mu_DS_1",
                     "_idx": 112,
-                    "_name": "DS_3 service rate",
-                    "description": "Service rate for DS_3",
+                    "_name": "DS_1 service rate",
+                    "description": "Service rate for DS_1",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -3287,13 +3276,13 @@
                     },
                     "_data": []
                 },
-                "\\epsilon_{DS_{3}}": {
-                    "_sym": "\\epsilon_{DS_{3}}",
+                "\\epsilon_{DS_{1}}": {
+                    "_sym": "\\epsilon_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "epsilon_DS_3",
+                    "_alias": "epsilon_DS_1",
                     "_idx": 113,
-                    "_name": "DS_3 error probability",
-                    "description": "Service error probability for DS_3",
+                    "_name": "DS_1 error probability",
+                    "description": "Service error probability for DS_1",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "E*T^-1",
@@ -3314,13 +3303,13 @@
                     },
                     "_data": []
                 },
-                "\\chi_{DS_{3}}": {
-                    "_sym": "\\chi_{DS_{3}}",
+                "\\chi_{DS_{1}}": {
+                    "_sym": "\\chi_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "chi_DS_3",
+                    "_alias": "chi_DS_1",
                     "_idx": 114,
-                    "_name": "DS_3 departure rate",
-                    "description": "Departure rate for DS_3",
+                    "_name": "DS_1 departure rate",
+                    "description": "Departure rate for DS_1",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E*T^-1",
@@ -3336,19 +3325,19 @@
                     "_std_mean": 172.5,
                     "_dist_type": "adjusted_rate",
                     "_depends": [
-                        "\\lambda_{DS_{3}}",
-                        "\\epsilon_{DS_{3}}"
+                        "\\lambda_{DS_{1}}",
+                        "\\epsilon_{DS_{1}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "c_{DS_{3}}": {
-                    "_sym": "c_{DS_{3}}",
+                "c_{DS_{1}}": {
+                    "_sym": "c_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "c_DS_3",
+                    "_alias": "c_DS_1",
                     "_idx": 115,
-                    "_name": "DS_3 resourses",
-                    "description": "Number of resources allocated in DS_3",
+                    "_name": "DS_1 resourses",
+                    "description": "Number of resources allocated in DS_1",
                     "_cat": "IN",
                     "relevant": true,
                     "_dims": "E",
@@ -3370,13 +3359,13 @@
                     },
                     "_data": []
                 },
-                "K_{DS_{3}}": {
-                    "_sym": "K_{DS_{3}}",
+                "K_{DS_{1}}": {
+                    "_sym": "K_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "K_DS_3",
+                    "_alias": "K_DS_1",
                     "_idx": 116,
-                    "_name": "DS_3 q-capacity",
-                    "description": "Allocated request capacity in DS_3 memory buffer",
+                    "_name": "DS_1 q-capacity",
+                    "description": "Allocated request capacity in DS_1 memory buffer",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E",
@@ -3392,7 +3381,7 @@
                     "_std_mean": 6.0,
                     "_dist_type": "shifted_uniform_int",
                     "_depends": [
-                        "c_{DS_{3}}"
+                        "c_{DS_{1}}"
                     ],
                     "_dist_params": {
                         "low": 1,
@@ -3400,13 +3389,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{DS_{3}}": {
-                    "_sym": "\\delta_{DS_{3}}",
+                "\\delta_{DS_{1}}": {
+                    "_sym": "\\delta_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "delta_DS_3",
+                    "_alias": "delta_DS_1",
                     "_idx": 117,
-                    "_name": "DS_3 req data density",
-                    "description": "Data density for request in DS_3 expected data per requests",
+                    "_name": "DS_1 req data density",
+                    "description": "Data density for request in DS_1 expected data per requests",
                     "_cat": "IN",
                     "relevant": false,
                     "_dims": "D*E^-1",
@@ -3428,13 +3417,13 @@
                     },
                     "_data": []
                 },
-                "L_{DS_{3}}": {
-                    "_sym": "L_{DS_{3}}",
+                "L_{DS_{1}}": {
+                    "_sym": "L_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "L_DS_3",
+                    "_alias": "L_DS_1",
                     "_idx": 118,
-                    "_name": "DS_3 mean processing requests",
-                    "description": "Average number of request in DS_3 component",
+                    "_name": "DS_1 mean processing requests",
+                    "description": "Average number of request in DS_1 component",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "E",
@@ -3450,21 +3439,21 @@
                     "_std_mean": 6.0,
                     "_dist_type": "queue_length",
                     "_depends": [
-                        "\\lambda_{DS_{3}}",
-                        "\\mu_{DS_{3}}",
-                        "c_{DS_{3}}",
-                        "K_{DS_{3}}"
+                        "\\lambda_{DS_{1}}",
+                        "\\mu_{DS_{1}}",
+                        "c_{DS_{1}}",
+                        "K_{DS_{1}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "Lq_{DS_{3}}": {
-                    "_sym": "Lq_{DS_{3}}",
+                "Lq_{DS_{1}}": {
+                    "_sym": "Lq_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "Lq_DS_3",
+                    "_alias": "Lq_DS_1",
                     "_idx": 119,
-                    "_name": "DS_3 mean in memory requests",
-                    "description": "Average number of request in DS_3 memory",
+                    "_name": "DS_1 mean in memory requests",
+                    "description": "Average number of request in DS_1 memory",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "E",
@@ -3480,21 +3469,21 @@
                     "_std_mean": 6.0,
                     "_dist_type": "queue_length",
                     "_depends": [
-                        "\\lambda_{DS_{3}}",
-                        "\\mu_{DS_{3}}",
-                        "c_{DS_{3}}",
-                        "K_{DS_{3}}"
+                        "\\lambda_{DS_{1}}",
+                        "\\mu_{DS_{1}}",
+                        "c_{DS_{1}}",
+                        "K_{DS_{1}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "W_{DS_{3}}": {
-                    "_sym": "W_{DS_{3}}",
+                "W_{DS_{1}}": {
+                    "_sym": "W_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "W_DS_3",
+                    "_alias": "W_DS_1",
                     "_idx": 120,
-                    "_name": "DS_3 mean time to answer",
-                    "description": "Average time to complete a request in DS_3",
+                    "_name": "DS_1 mean time to answer",
+                    "description": "Average time to complete a request in DS_1",
                     "_cat": "OUT",
                     "relevant": true,
                     "_dims": "T",
@@ -3510,19 +3499,19 @@
                     "_std_mean": 0.002687923,
                     "_dist_type": "queue_time",
                     "_depends": [
-                        "\\chi_{DS_{3}}",
-                        "L_{DS_{3}}"
+                        "\\chi_{DS_{1}}",
+                        "L_{DS_{1}}"
                     ],
                     "_dist_params": {},
                     "_data": []
                 },
-                "Wq_{DS_{3}}": {
-                    "_sym": "Wq_{DS_{3}}",
+                "Wq_{DS_{1}}": {
+                    "_sym": "Wq_{DS_{1}}",
                     "_fwk": "CUSTOM",
-                    "_alias": "Wq_DS_3",
+                    "_alias": "Wq_DS_1",
                     "_idx": 121,
-                    "_name": "DS_3 mean time in buffer",
-                    "description": "Average time for a request to transit the buffer in DS_3",
+                    "_name": "DS_1 mean time in buffer",
+                    "description": "Average time for a request to transit the buffer in DS_1",
                     "_cat": "CTRL",
                     "relevant": false,
                     "_dims": "T",
@@ -3538,8 +3527,8 @@
                     "_std_mean": 0.000869741,
                     "_dist_type": "queue_time",
                     "_depends": [
-                        "\\chi_{DS_{3}}",
-                        "Lq_{DS_{3}}"
+                        "\\chi_{DS_{1}}",
+                        "Lq_{DS_{1}}"
                     ],
                     "_dist_params": {},
                     "_data": []
@@ -3548,7 +3537,6 @@
         },
         "TAS_5": {
             "name": "TAS composite stage 5",
-            "idx": 11,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -3870,7 +3858,6 @@
         },
         "TAS_6": {
             "name": "TAS composite stage 6",
-            "idx": 12,
             "type": "M/M/s/K",
             "lambda_z": 0.0,
             "L_z": 0.0,
@@ -4189,43 +4176,1033 @@
                     "_data": []
                 }
             }
+        },
+        "MAS_3": {
+            "name": "Medical Analysis Service 3",
+            "type": "M/M/s/K",
+            "lambda_z": 0.0,
+            "L_z": 0.0,
+            "vars": {
+                "\\lambda_{MAS_{3}}": {
+                    "_sym": "\\lambda_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "lambda_MAS_3",
+                    "_idx": 56,
+                    "_name": "MAS_3 arrival rate",
+                    "description": "Arrival rate for MAS_3",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 104.1310976,
+                    "_min": 10.41311,
+                    "_max": 197.8491,
+                    "_mean": 104.1310976,
+                    "_std_setpoint": 104.1310976,
+                    "_std_min": 10.4131098,
+                    "_std_max": 197.8490854,
+                    "_std_mean": 104.1310976,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 10.4131097560975,
+                        "high": 197.849085365852
+                    },
+                    "_data": []
+                },
+                "\\mu_{MAS_{3}}": {
+                    "_sym": "\\mu_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "mu_MAS_3",
+                    "_idx": 57,
+                    "_name": "MAS_3 service rate",
+                    "description": "Service rate for MAS_3",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 150.0,
+                    "_min": 15.0,
+                    "_max": 285.0,
+                    "_mean": 150.0,
+                    "_std_setpoint": 150.0,
+                    "_std_min": 15.0,
+                    "_std_max": 285.0,
+                    "_std_mean": 150.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 15,
+                        "high": 285
+                    },
+                    "_data": []
+                },
+                "\\epsilon_{MAS_{3}}": {
+                    "_sym": "\\epsilon_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "epsilon_MAS_3",
+                    "_idx": 58,
+                    "_name": "MAS_3 error probability",
+                    "description": "Service error probability for MAS_3",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "E*T^-1",
+                    "_units": "n.a.",
+                    "_std_units": "n.a.",
+                    "_setpoint": 0.18,
+                    "_min": 0.18,
+                    "_max": 0.18,
+                    "_mean": 0.18,
+                    "_std_setpoint": 0.18,
+                    "_std_min": 0.18,
+                    "_std_max": 0.18,
+                    "_std_mean": 0.18,
+                    "_dist_type": "adjusted_uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "constant": 0.18
+                    },
+                    "_data": []
+                },
+                "\\chi_{MAS_{3}}": {
+                    "_sym": "\\chi_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "chi_MAS_3",
+                    "_idx": 59,
+                    "_name": "MAS_3 departure rate",
+                    "description": "Departure rate for MAS_3",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 104.1311,
+                    "_min": 10.41311,
+                    "_max": 197.8491,
+                    "_mean": 104.1311,
+                    "_std_setpoint": 104.1310976,
+                    "_std_min": 10.4131098,
+                    "_std_max": 197.8490854,
+                    "_std_mean": 104.1310976,
+                    "_dist_type": "adjusted_rate",
+                    "_depends": [
+                        "\\lambda_{MAS_{3}}",
+                        "\\epsilon_{MAS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "c_{MAS_{3}}": {
+                    "_sym": "c_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "c_MAS_3",
+                    "_idx": 60,
+                    "_name": "MAS_3 resourses",
+                    "description": "Number of resources allocated in MAS_3",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 2.0,
+                    "_min": 1.0,
+                    "_max": 3.0,
+                    "_mean": 2.0,
+                    "_std_setpoint": 2.0,
+                    "_std_min": 1.0,
+                    "_std_max": 3.0,
+                    "_std_mean": 2.0,
+                    "_dist_type": "uniform_int",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 1,
+                        "high": 3
+                    },
+                    "_data": []
+                },
+                "K_{MAS_{3}}": {
+                    "_sym": "K_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "K_MAS_3",
+                    "_idx": 61,
+                    "_name": "MAS_3 q-capacity",
+                    "description": "Allocated request capacity in MAS_3 memory buffer",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 10.0,
+                    "_min": 5.0,
+                    "_max": 15.0,
+                    "_mean": 10.0,
+                    "_std_setpoint": 10.0,
+                    "_std_min": 5.0,
+                    "_std_max": 15.0,
+                    "_std_mean": 10.0,
+                    "_dist_type": "shifted_uniform_int",
+                    "_depends": [
+                        "c_{MAS_{3}}"
+                    ],
+                    "_dist_params": {
+                        "low": 5,
+                        "high": 15
+                    },
+                    "_data": []
+                },
+                "\\delta_{MAS_{3}}": {
+                    "_sym": "\\delta_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "delta_MAS_3",
+                    "_idx": 62,
+                    "_name": "MAS_3 req data density",
+                    "description": "Data density for request in MAS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": false,
+                    "_dims": "D*E^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
+                },
+                "L_{MAS_{3}}": {
+                    "_sym": "L_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "L_MAS_3",
+                    "_idx": 63,
+                    "_name": "MAS_3 mean processing requests",
+                    "description": "Average number of request in MAS_3 component",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 6.0,
+                    "_min": 1.0,
+                    "_max": 11.0,
+                    "_mean": 6.0,
+                    "_std_setpoint": 6.0,
+                    "_std_min": 1.0,
+                    "_std_max": 11.0,
+                    "_std_mean": 6.0,
+                    "_dist_type": "queue_length",
+                    "_depends": [
+                        "\\lambda_{MAS_{3}}",
+                        "\\mu_{MAS_{3}}",
+                        "c_{MAS_{3}}",
+                        "K_{MAS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "Lq_{MAS_{3}}": {
+                    "_sym": "Lq_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "Lq_MAS_3",
+                    "_idx": 64,
+                    "_name": "MAS_3 mean in memory requests",
+                    "description": "Average number of request in MAS_3 memory",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 6.0,
+                    "_min": 1.0,
+                    "_max": 11.0,
+                    "_mean": 6.0,
+                    "_std_setpoint": 6.0,
+                    "_std_min": 1.0,
+                    "_std_max": 11.0,
+                    "_std_mean": 6.0,
+                    "_dist_type": "queue_length",
+                    "_depends": [
+                        "\\lambda_{MAS_{3}}",
+                        "\\mu_{MAS_{3}}",
+                        "c_{MAS_{3}}",
+                        "K_{MAS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "W_{MAS_{3}}": {
+                    "_sym": "W_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "W_MAS_3",
+                    "_idx": 65,
+                    "_name": "MAS_3 mean time to answer",
+                    "description": "Average time to complete a request in MAS_3",
+                    "_cat": "OUT",
+                    "relevant": true,
+                    "_dims": "T",
+                    "_units": "s",
+                    "_std_units": "s",
+                    "_setpoint": 0.021801263,
+                    "_min": 0.0,
+                    "_max": 0.02180126,
+                    "_mean": 0.021801263,
+                    "_std_setpoint": 0.021801263,
+                    "_std_min": 0.0,
+                    "_std_max": 0.021801263,
+                    "_std_mean": 0.021801263,
+                    "_dist_type": "queue_time",
+                    "_depends": [
+                        "\\chi_{MAS_{3}}",
+                        "L_{MAS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "Wq_{MAS_{3}}": {
+                    "_sym": "Wq_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "Wq_MAS_3",
+                    "_idx": 66,
+                    "_name": "MAS_3 mean time in buffer",
+                    "description": "Average time for a request to transit the buffer in MAS_3",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "T",
+                    "_units": "s",
+                    "_std_units": "s",
+                    "_setpoint": 0.015134596,
+                    "_min": 0.0,
+                    "_max": 0.0151346,
+                    "_mean": 0.015134596,
+                    "_std_setpoint": 0.015134596,
+                    "_std_min": 0.0,
+                    "_std_max": 0.015134596,
+                    "_std_mean": 0.015134596,
+                    "_dist_type": "queue_time",
+                    "_depends": [
+                        "\\chi_{MAS_{3}}",
+                        "Lq_{MAS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                }
+            }
+        },
+        "AS_3": {
+            "name": "Alarm Service 3",
+            "type": "M/M/s/K",
+            "lambda_z": 0.0,
+            "L_z": 0.0,
+            "vars": {
+                "\\lambda_{AS_{3}}": {
+                    "_sym": "\\lambda_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "lambda_AS_3",
+                    "_idx": 89,
+                    "_name": "AS_3 arrival rate",
+                    "description": "Arrival rate for AS_3",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 68.20868196,
+                    "_min": 3.871667,
+                    "_max": 132.5457,
+                    "_mean": 68.20868196,
+                    "_std_setpoint": 68.20868196,
+                    "_std_min": 3.87166667,
+                    "_std_max": 132.5456973,
+                    "_std_mean": 68.20868196,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 3.87166666666666,
+                        "high": 132.545697256097
+                    },
+                    "_data": []
+                },
+                "\\mu_{AS_{3}}": {
+                    "_sym": "\\mu_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "mu_AS_3",
+                    "_idx": 90,
+                    "_name": "AS_3 service rate",
+                    "description": "Service rate for AS_3",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 1580.0,
+                    "_min": 158.0,
+                    "_max": 3002.0,
+                    "_mean": 1580.0,
+                    "_std_setpoint": 1580.0,
+                    "_std_min": 158.0,
+                    "_std_max": 3002.0,
+                    "_std_mean": 1580.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 158,
+                        "high": 3002
+                    },
+                    "_data": []
+                },
+                "\\epsilon_{AS_{3}}": {
+                    "_sym": "\\epsilon_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "epsilon_AS_3",
+                    "_idx": 91,
+                    "_name": "AS_3 error probability",
+                    "description": "Service error probability for AS_3",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "E*T^-1",
+                    "_units": "n.a.",
+                    "_std_units": "n.a.",
+                    "_setpoint": 0.1,
+                    "_min": 0.1,
+                    "_max": 0.1,
+                    "_mean": 0.1,
+                    "_std_setpoint": 0.1,
+                    "_std_min": 0.1,
+                    "_std_max": 0.1,
+                    "_std_mean": 0.1,
+                    "_dist_type": "adjusted_uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "constant": 0.1
+                    },
+                    "_data": []
+                },
+                "\\chi_{AS_{3}}": {
+                    "_sym": "\\chi_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "chi_AS_3",
+                    "_idx": 92,
+                    "_name": "AS_3 departure rate",
+                    "description": "Departure rate for AS_3",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 68.2087,
+                    "_min": 3.871667,
+                    "_max": 132.5457,
+                    "_mean": 68.2087,
+                    "_std_setpoint": 68.20868196,
+                    "_std_min": 3.87166667,
+                    "_std_max": 132.5456973,
+                    "_std_mean": 68.20868196,
+                    "_dist_type": "adjusted_rate",
+                    "_depends": [
+                        "\\lambda_{AS_{3}}",
+                        "\\epsilon_{AS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "c_{AS_{3}}": {
+                    "_sym": "c_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "c_AS_3",
+                    "_idx": 93,
+                    "_name": "AS_3 resourses",
+                    "description": "Number of resources allocated in AS_3",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 2.0,
+                    "_min": 1.0,
+                    "_max": 3.0,
+                    "_mean": 2.0,
+                    "_std_setpoint": 2.0,
+                    "_std_min": 1.0,
+                    "_std_max": 3.0,
+                    "_std_mean": 2.0,
+                    "_dist_type": "uniform_int",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 1,
+                        "high": 3
+                    },
+                    "_data": []
+                },
+                "K_{AS_{3}}": {
+                    "_sym": "K_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "K_AS_3",
+                    "_idx": 94,
+                    "_name": "AS_3 q-capacity",
+                    "description": "Allocated request capacity in AS_3 memory buffer",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 10.0,
+                    "_min": 5.0,
+                    "_max": 15.0,
+                    "_mean": 10.0,
+                    "_std_setpoint": 10.0,
+                    "_std_min": 5.0,
+                    "_std_max": 15.0,
+                    "_std_mean": 10.0,
+                    "_dist_type": "shifted_uniform_int",
+                    "_depends": [
+                        "c_{AS_{3}}"
+                    ],
+                    "_dist_params": {
+                        "low": 5,
+                        "high": 15
+                    },
+                    "_data": []
+                },
+                "\\delta_{AS_{3}}": {
+                    "_sym": "\\delta_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "delta_AS_3",
+                    "_idx": 95,
+                    "_name": "AS_3 req data density",
+                    "description": "Data density for request in AS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": false,
+                    "_dims": "D*E^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
+                },
+                "L_{AS_{3}}": {
+                    "_sym": "L_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "L_AS_3",
+                    "_idx": 96,
+                    "_name": "AS_3 mean processing requests",
+                    "description": "Average number of request in AS_3 component",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 6.0,
+                    "_min": 1.0,
+                    "_max": 11.0,
+                    "_mean": 6.0,
+                    "_std_setpoint": 6.0,
+                    "_std_min": 1.0,
+                    "_std_max": 11.0,
+                    "_std_mean": 6.0,
+                    "_dist_type": "queue_length",
+                    "_depends": [
+                        "\\lambda_{AS_{3}}",
+                        "\\mu_{AS_{3}}",
+                        "c_{AS_{3}}",
+                        "K_{AS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "Lq_{AS_{3}}": {
+                    "_sym": "Lq_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "Lq_AS_3",
+                    "_idx": 97,
+                    "_name": "AS_3 mean in memory requests",
+                    "description": "Average number of request in AS_3 memory",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 6.0,
+                    "_min": 1.0,
+                    "_max": 11.0,
+                    "_mean": 6.0,
+                    "_std_setpoint": 6.0,
+                    "_std_min": 1.0,
+                    "_std_max": 11.0,
+                    "_std_mean": 6.0,
+                    "_dist_type": "queue_length",
+                    "_depends": [
+                        "\\lambda_{AS_{3}}",
+                        "\\mu_{AS_{3}}",
+                        "c_{AS_{3}}",
+                        "K_{AS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "W_{AS_{3}}": {
+                    "_sym": "W_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "W_AS_3",
+                    "_idx": 98,
+                    "_name": "AS_3 mean time to answer",
+                    "description": "Average time to complete a request in AS_3",
+                    "_cat": "OUT",
+                    "relevant": true,
+                    "_dims": "T",
+                    "_units": "s",
+                    "_std_units": "s",
+                    "_setpoint": 0.000662147,
+                    "_min": 0.0,
+                    "_max": 0.00066215,
+                    "_mean": 0.000662147,
+                    "_std_setpoint": 0.000662147,
+                    "_std_min": 0.0,
+                    "_std_max": 0.000662147,
+                    "_std_mean": 0.000662147,
+                    "_dist_type": "queue_time",
+                    "_depends": [
+                        "\\chi_{AS_{3}}",
+                        "L_{AS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "Wq_{AS_{3}}": {
+                    "_sym": "Wq_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "Wq_AS_3",
+                    "_idx": 99,
+                    "_name": "AS_3 mean time in buffer",
+                    "description": "Average time for a request to transit the buffer in AS_3",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "T",
+                    "_units": "s",
+                    "_std_units": "s",
+                    "_setpoint": 2.92e-05,
+                    "_min": 0.0,
+                    "_max": 2.92e-05,
+                    "_mean": 2.92e-05,
+                    "_std_setpoint": 2.92e-05,
+                    "_std_min": 0.0,
+                    "_std_max": 2.92e-05,
+                    "_std_mean": 2.92e-05,
+                    "_dist_type": "queue_time",
+                    "_depends": [
+                        "\\chi_{AS_{3}}",
+                        "Lq_{AS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                }
+            }
+        },
+        "DS_3": {
+            "name": "Drug Service 3",
+            "type": "M/M/s/K",
+            "lambda_z": 0.0,
+            "L_z": 0.0,
+            "vars": {
+                "\\lambda_{DS_{3}}": {
+                    "_sym": "\\lambda_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "lambda_DS_3",
+                    "_idx": 111,
+                    "_name": "DS_3 arrival rate",
+                    "description": "Arrival rate for DS_3",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 177.9655263,
+                    "_min": 17.79655,
+                    "_max": 338.1345,
+                    "_mean": 177.9655263,
+                    "_std_setpoint": 177.9655263,
+                    "_std_min": 17.7965526,
+                    "_std_max": 338.1345,
+                    "_std_mean": 177.9655263,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 17.7965526315789,
+                        "high": 338.134499999999
+                    },
+                    "_data": []
+                },
+                "\\mu_{DS_{3}}": {
+                    "_sym": "\\mu_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "mu_DS_3",
+                    "_idx": 112,
+                    "_name": "DS_3 service rate",
+                    "description": "Service rate for DS_3",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 550.0,
+                    "_min": 55.0,
+                    "_max": 1045.0,
+                    "_mean": 550.0,
+                    "_std_setpoint": 550.0,
+                    "_std_min": 55.0,
+                    "_std_max": 1045.0,
+                    "_std_mean": 550.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 55,
+                        "high": 1045
+                    },
+                    "_data": []
+                },
+                "\\epsilon_{DS_{3}}": {
+                    "_sym": "\\epsilon_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "epsilon_DS_3",
+                    "_idx": 113,
+                    "_name": "DS_3 error probability",
+                    "description": "Service error probability for DS_3",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "E*T^-1",
+                    "_units": "n.a.",
+                    "_std_units": "n.a.",
+                    "_setpoint": 0.05,
+                    "_min": 0.05,
+                    "_max": 0.05,
+                    "_mean": 0.05,
+                    "_std_setpoint": 0.05,
+                    "_std_min": 0.05,
+                    "_std_max": 0.05,
+                    "_std_mean": 0.05,
+                    "_dist_type": "adjusted_uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "constant": 0.05
+                    },
+                    "_data": []
+                },
+                "\\chi_{DS_{3}}": {
+                    "_sym": "\\chi_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "chi_DS_3",
+                    "_idx": 114,
+                    "_name": "DS_3 departure rate",
+                    "description": "Departure rate for DS_3",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E*T^-1",
+                    "_units": "req/s",
+                    "_std_units": "req/s",
+                    "_setpoint": 177.9655,
+                    "_min": 17.79655,
+                    "_max": 338.1345,
+                    "_mean": 177.9655,
+                    "_std_setpoint": 177.9655263,
+                    "_std_min": 17.7965526,
+                    "_std_max": 338.1345,
+                    "_std_mean": 177.9655263,
+                    "_dist_type": "adjusted_rate",
+                    "_depends": [
+                        "\\lambda_{DS_{3}}",
+                        "\\epsilon_{DS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "c_{DS_{3}}": {
+                    "_sym": "c_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "c_DS_3",
+                    "_idx": 115,
+                    "_name": "DS_3 resourses",
+                    "description": "Number of resources allocated in DS_3",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 2.0,
+                    "_min": 1.0,
+                    "_max": 3.0,
+                    "_mean": 2.0,
+                    "_std_setpoint": 2.0,
+                    "_std_min": 1.0,
+                    "_std_max": 3.0,
+                    "_std_mean": 2.0,
+                    "_dist_type": "uniform_int",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 1,
+                        "high": 3
+                    },
+                    "_data": []
+                },
+                "K_{DS_{3}}": {
+                    "_sym": "K_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "K_DS_3",
+                    "_idx": 116,
+                    "_name": "DS_3 q-capacity",
+                    "description": "Allocated request capacity in DS_3 memory buffer",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 10.0,
+                    "_min": 5.0,
+                    "_max": 15.0,
+                    "_mean": 10.0,
+                    "_std_setpoint": 10.0,
+                    "_std_min": 5.0,
+                    "_std_max": 15.0,
+                    "_std_mean": 10.0,
+                    "_dist_type": "shifted_uniform_int",
+                    "_depends": [
+                        "c_{DS_{3}}"
+                    ],
+                    "_dist_params": {
+                        "low": 5,
+                        "high": 15
+                    },
+                    "_data": []
+                },
+                "\\delta_{DS_{3}}": {
+                    "_sym": "\\delta_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "delta_DS_3",
+                    "_idx": 117,
+                    "_name": "DS_3 req data density",
+                    "description": "Data density for request in DS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": false,
+                    "_dims": "D*E^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
+                },
+                "L_{DS_{3}}": {
+                    "_sym": "L_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "L_DS_3",
+                    "_idx": 118,
+                    "_name": "DS_3 mean processing requests",
+                    "description": "Average number of request in DS_3 component",
+                    "_cat": "CTRL",
+                    "relevant": true,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 6.0,
+                    "_min": 1.0,
+                    "_max": 11.0,
+                    "_mean": 6.0,
+                    "_std_setpoint": 6.0,
+                    "_std_min": 1.0,
+                    "_std_max": 11.0,
+                    "_std_mean": 6.0,
+                    "_dist_type": "queue_length",
+                    "_depends": [
+                        "\\lambda_{DS_{3}}",
+                        "\\mu_{DS_{3}}",
+                        "c_{DS_{3}}",
+                        "K_{DS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "Lq_{DS_{3}}": {
+                    "_sym": "Lq_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "Lq_DS_3",
+                    "_idx": 119,
+                    "_name": "DS_3 mean in memory requests",
+                    "description": "Average number of request in DS_3 memory",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "E",
+                    "_units": "req",
+                    "_std_units": "req",
+                    "_setpoint": 6.0,
+                    "_min": 1.0,
+                    "_max": 11.0,
+                    "_mean": 6.0,
+                    "_std_setpoint": 6.0,
+                    "_std_min": 1.0,
+                    "_std_max": 11.0,
+                    "_std_mean": 6.0,
+                    "_dist_type": "queue_length",
+                    "_depends": [
+                        "\\lambda_{DS_{3}}",
+                        "\\mu_{DS_{3}}",
+                        "c_{DS_{3}}",
+                        "K_{DS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "W_{DS_{3}}": {
+                    "_sym": "W_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "W_DS_3",
+                    "_idx": 120,
+                    "_name": "DS_3 mean time to answer",
+                    "description": "Average time to complete a request in DS_3",
+                    "_cat": "OUT",
+                    "relevant": true,
+                    "_dims": "T",
+                    "_units": "s",
+                    "_std_units": "s",
+                    "_setpoint": 0.002687923,
+                    "_min": 0.0,
+                    "_max": 0.00268792,
+                    "_mean": 0.002687923,
+                    "_std_setpoint": 0.002687923,
+                    "_std_min": 0.0,
+                    "_std_max": 0.002687923,
+                    "_std_mean": 0.002687923,
+                    "_dist_type": "queue_time",
+                    "_depends": [
+                        "\\chi_{DS_{3}}",
+                        "L_{DS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                },
+                "Wq_{DS_{3}}": {
+                    "_sym": "Wq_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "Wq_DS_3",
+                    "_idx": 121,
+                    "_name": "DS_3 mean time in buffer",
+                    "description": "Average time for a request to transit the buffer in DS_3",
+                    "_cat": "CTRL",
+                    "relevant": false,
+                    "_dims": "T",
+                    "_units": "s",
+                    "_std_units": "s",
+                    "_setpoint": 0.000869741,
+                    "_min": 0.0,
+                    "_max": 0.00086974,
+                    "_mean": 0.000869741,
+                    "_std_setpoint": 0.000869741,
+                    "_std_min": 0.0,
+                    "_std_max": 0.000869741,
+                    "_std_mean": 0.000869741,
+                    "_dist_type": "queue_time",
+                    "_depends": [
+                        "\\chi_{DS_{3}}",
+                        "Lq_{DS_{3}}"
+                    ],
+                    "_dist_params": {},
+                    "_data": []
+                }
+            }
         }
     },
     "environments": {
-        "_nodes": [
-            "TAS_1",
-            "TAS_2",
-            "TAS_3",
-            "MAS_1",
-            "MAS_2",
-            "MAS_3",
-            "AS_1",
-            "AS_2",
-            "AS_3",
-            "TAS_4",
-            "DS_3",
-            "TAS_5",
-            "TAS_6"
-        ],
         "_setpoint": "aggregate",
         "_scenarios": [
             "s1",
             "s2",
             "aggregate"
         ],
-        "_labels": [
-            "S1 — opti routing + dflt services (Retry-style: fallback-reroute on failure)",
-            "S2 — dflt routing + opti services (Select-Reliable-style: upgraded service instances)",
-            "Aggregate — opti routing + opti services (both adaptations active)"
-        ],
-        "_vars_source": [
-            "dflt",
-            "opti",
-            "opti"
-        ],
-        "_note": "P[k][i][j] = routing probability from node i to node j under scenario k. Indices follow `_nodes` order. `_vars_source[k]` names which profile's artifacts block the loader must consume for scenario k.",
-        "_routs": [
-            [
+        "_labels": {
+            "s1": "S1 service-failure adaptation (Retry strategy): on failure, the Controller removes the failing service and reroutes to an equivalent via the opti routing matrix. Service parameters stay as dflt (MAS_3, AS_3, DS_3 at the swap slots).",
+            "s2": "S2 response-time adaptation (Select Reliable strategy): the Controller switches to upgraded service instances at the swap slots (MAS_3 becomes MAS_4, AS_3 becomes AS_4, DS_3 becomes DS_1), all with improved parameters. Routing stays as dflt.",
+            "aggregate": "Aggregate (both S1 and S2 active): Retry fallback routing combined with Select Reliable service upgrades. Uses opti routing over opti services (MAS_4, AS_4, DS_1 at the swap slots)."
+        },
+        "_note": "`_setpoint` names the default scenario for this config — the loader reads this scenario when no `--adaptation` CLI flag is given. `_routs[scenario][i][j]` = routing probability from node i to node j under `scenario`. Position i indexes into `_nodes[scenario]`. `_nodes[scenario][i]` names the artifact at position i for that scenario.",
+        "_nodes": {
+            "s1": [
+                "TAS_1",
+                "TAS_2",
+                "TAS_3",
+                "MAS_1",
+                "MAS_2",
+                "MAS_3",
+                "AS_1",
+                "AS_2",
+                "AS_3",
+                "TAS_4",
+                "DS_3",
+                "TAS_5",
+                "TAS_6"
+            ],
+            "s2": [
+                "TAS_1",
+                "TAS_2",
+                "TAS_3",
+                "MAS_1",
+                "MAS_2",
+                "MAS_4",
+                "AS_1",
+                "AS_2",
+                "AS_4",
+                "TAS_4",
+                "DS_1",
+                "TAS_5",
+                "TAS_6"
+            ],
+            "aggregate": [
+                "TAS_1",
+                "TAS_2",
+                "TAS_3",
+                "MAS_1",
+                "MAS_2",
+                "MAS_4",
+                "AS_1",
+                "AS_2",
+                "AS_4",
+                "TAS_4",
+                "DS_1",
+                "TAS_5",
+                "TAS_6"
+            ]
+        },
+        "_routs": {
+            "s1": [
                 [
                     0.0,
                     0.75,
@@ -4422,7 +5399,7 @@
                     0.0
                 ]
             ],
-            [
+            "s2": [
                 [
                     0.0,
                     0.75,
@@ -4619,7 +5596,7 @@
                     0.0
                 ]
             ],
-            [
+            "aggregate": [
                 [
                     0.0,
                     0.75,
@@ -4816,6 +5793,6 @@
                     0.0
                 ]
             ]
-        ]
+        }
     }
 }
