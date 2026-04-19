@@ -39,19 +39,19 @@ Two of the variation points in Table 7.1 are our own reading rather than explici
 
 The Target System is the *TAS* composite service, which orchestrates three atomic services (*Drug*, *Medical Analysis*, *Alarm*) for a patient's wearable device (Figure 7.1). The composite runs on the *ReSeP* (Research Service Platform), a research implementation of service-oriented principles; the Controller is a *MAPE-K* loop realised by *ActivFORMS* around the composite.
 
-![TAS context diagram.](../../../img/07/cs1/cs_tas_context.svg)
+![TAS context diagram.](../assets/img/cs1/cs_tas_context.svg)
 
 Figure 7.1. *TAS* context diagram.
 
 The composite follows an analyse-and-act pattern at runtime (Figure 7.2). Each vital-parameters message goes to the *Medical Analysis Service*, which returns one of three verdicts that branch to `changeDrug`, `changeDose`, or `sendAlarm` against the *Drug* or *Alarm* service. A panic-button press skips the analysis and calls `triggerAlarm` on the *Alarm* service directly. Three decision points therefore open non-trivial failure paths, and the *MAPE-K* loop must cover all of them.
 
-![TAS workflow diagram.](../../../img/07/cs1/cs_tas_workflow.svg)
+![TAS workflow diagram.](../assets/img/cs1/cs_tas_workflow.svg)
 
 Figure 7.2. *TAS* workflow.
 
 Five principal classes structure the managed subsystem (Figure 7.3): `CompositeService` orchestrates the workflow; `AtomicService` holds the concrete *Drug*, *Medical Analysis*, and *Alarm* instances; `ServiceRegistry` and `ServiceCache` handle runtime lookup and client-side caching; `WorkflowEngine` runs the composite's workflow specification. The decision variables for the Controller sit on each concrete atomic service: its `ServiceDescription` exposes a failure-rate and a cost-per-invocation attribute, and those attributes drive every adaptation choice.
 
-![ReSeP service structure.](../../../img/07/cs1/cs_tas_services.svg)
+![ReSeP service structure.](../assets/img/cs1/cs_tas_services.svg)
 
 Figure 7.3. *ReSeP* service structure realising the *TAS* composite service.
 
@@ -59,8 +59,8 @@ Two adaptation strategies ride on the Controller's feedback loop. *Retry* compos
 
 Figure 7.4 renders the two focus scenarios in the authors' own notation. *S1* (Figure 7.4a) fires when an atomic-service invocation returns a failure verdict: the Controller flags the failing service as unavailable, and the workflow falls back to an equivalent one resolved through `ServiceRegistry`. *S2* (Figure 7.4b) fires when the moving-average response time crosses the per-scenario threshold: the Controller updates the preferred-service ranking so that subsequent invocations route to a faster equivalent. Neither scenario rewrites the workflow, which is why they stay within the published effector set.
 
-![S1 service failure.](../../../img/07/cs1/cs_tas_sas_s1.svg)
-![S2 response-time variability.](../../../img/07/cs1/cs_tas_sas_s2.svg)
+![S1 service failure.](../assets/img/cs1/cs_tas_sas_s1.svg)
+![S2 response-time variability.](../assets/img/cs1/cs_tas_sas_s2.svg)
 
 Figure 7.4. *TAS* adaptation scenarios: (a) *S1* service failure and (b) *S2* response-time variability.
 
@@ -101,26 +101,26 @@ Cabrera and Clarke frame every *QA* concern under *Performance*, decomposing it 
 
 The Target System of *IoT-SDP* is a federation of self-similar gateways, and each gateway hosts a `Service Register` and an `Autonomic Manager` running a local *MAPE-K* loop. Urban entities (citizens, authorities, places, events) reach the platform through *MQTT* topics exposed by each gateway's register interface; stationary gateways synchronise with peers via *Ping/Echo*, while mobile gateways broadcast *Heartbeat* messages as they move through the city (Figure 7.5). No central directory exists, so the federation's logically unified discovery surface is an emergent property of the sync tactics.
 
-![IoT-SDP context diagram.](../../../img/07/cs2/cs_iotsdp_context.svg)
+![IoT-SDP context diagram.](../assets/img/cs2/cs_iotsdp_context.svg)
 
 Figure 7.5. *IoT-SDP* context diagram.
 
 Four actor groups drive the platform: city authorities (police, firefighters, mayor's office), citizens (residents, tourists), places (stations, museums, hotels, concert halls), and events (concerts, emergencies, accidents, maintenance). Any actor can issue a *City Request*, typically a discovery for a service such as `city navigation`, `metro line status`, or `ticket sale`; the request lands on the nearest gateway via *MQTT* and resolves either locally through the register or by forwarding to a peer (Figure 7.6). The same *MQTT* fabric carries both discovery requests and city events, so the register surface and the adaptation-trigger surface coincide.
 
-![IoT-SDP use-case view.](../../../img/07/cs2/cs_iotsdp_use_case.svg)
+![IoT-SDP use-case view.](../assets/img/cs2/cs_iotsdp_use_case.svg)
 
 Figure 7.6. *IoT-SDP* actor/use-case view.
 
 A single *MAPE-K* loop per gateway splits across the two subsystems shown in Figure 7.7. On the Target System side sit the `Service Register` (a local *MongoDB 2.4* database), the `SR Internal Broker` (*SRIB*, the gateway's in-process publish-subscribe bus), the `Entity Request Handler` and `SR Notification Handler` for inbound *MQTT* traffic, and the `SR Database Manager` with its read and write pools. On the Controller side sits the `Autonomic Manager`, composed of `Planner`, `Manager`, `Rules`, `Goals`, and `Utility`; it observes the register through the `Controller Monitor Probe` on *SRIB* and actuates through the same bus. Inside the `Planner`, *E1* and *E2* take the rule-based branch and *E3* takes the *Deep-Q Network* branch.
 
-![IoT-SDP controller and target-system composition.](../../../img/07/cs2/cs_iotsdp_components.svg)
+![IoT-SDP controller and target-system composition.](../assets/img/cs2/cs_iotsdp_components.svg)
 
 Figure 7.7. *IoT-SDP* gateway composition: `Autonomic Manager` (Controller) and `Service Register` + *SRIB* + handlers + `SR Database Manager` (Target System).
 
 Figure 7.8 shows the two extremes of the time-horizon spectrum in the authors' own notation. *E1* (Figure 7.8a) is an unforeseen city event (a natural disaster, protest, or accident) that arrives at a gateway with no prior warning; the `Planner` matches the event against a preprogrammed rule set and triggers a reactive register update. *E3* (Figure 7.8b) is a periodic event rooted in the city's entity behaviour (for example, citizens commuting on weekdays); the `Planner` runs a *Deep-Q Network* that observes the utility-function slope and learns to anticipate the pattern, updating the register before the event occurs. Neither scenario rewrites the gateway's workflow, but *E3*'s proactive path adds a steady-state load component that *E1* does not carry.
 
-![(a) E1 unforeseen event.](../../../img/07/cs2/cs_iotsdp_event_e1.svg)
-![(b) E3 periodic event.](../../../img/07/cs2/cs_iotsdp_event_e3.svg)
+![(a) E1 unforeseen event.](../assets/img/cs2/cs_iotsdp_event_e1.svg)
+![(b) E3 periodic event.](../assets/img/cs2/cs_iotsdp_event_e3.svg)
 
 Figure 7.8. *IoT-SDP* focus scenarios: (a) *E1* unforeseen event (reactive rule-based) and (b) *E3* periodic event (proactive *DQN*).
 

@@ -66,7 +66,7 @@ The two cases address a substantial subset of these weaknesses between them. *TA
 
 The clinical intent of *TAS* is to provide home care for patients with chronic conditions. The canonical example used in the author's own teaching material [11] is **diabetes**: the system periodically reviews vital signs such as glucose level, analyses the measurements externally, changes the prescribed drug or the dose when the analysis indicates it, and notifies emergency services when circumstances warrant or the patient presses a panic button. The **primary functional requirements** are therefore (i) periodic vital-parameter sampling, (ii) external analysis of the measurement stream, (iii) drug-change or dose-change actions when analysis dictates, and (iv) alarm-triggering when the button is pressed or the analysis returns a *sendAlarm* verdict. The **primary QA trade-off** in the authors' own vocabulary is *Reliability* vs. *Cost*: the exemplar's adaptation strategies (`Retry`, `Select Reliable`) raise *Reliability* at the price of invocation cost and response time, and neither strategy dominates the other (see *Headline Results* below). This work does not stay within that vocabulary; following the *Performance vs. Availability* lens we re-read the same metrics as *Performance* (average response time) and *Availability* (average failure rate, equivalent to the authors' *Reliability* signal), with *Cost* retained as a secondary trade-off driver and *Functionality* retained as a compliance attribute from [1] Table II. The **adaptation objectives** as framed by Cámara et al. [10] are three quality requirements, which we re-label under our lens without changing their numeric content: `R1` keep the average failure rate below `0.03 %` (the authors call this a *Reliability* target; we read it as *Availability*); `R2` keep the average response time below `26 ms` (*Performance*); `R3` subject to `R1` and `R2`, minimise cost. The earlier [13] framing uses different numeric targets and inverts the `R3` objective (see *Technical Specifications* below).
 
-![TAS context diagram showing patient wearable, composite service, atomic services, and external providers.](../../../img/07/cs1/01%20-%20Context.svg)
+![TAS context diagram showing patient wearable, composite service, atomic services, and external providers.](../assets/img/cs1/cs_tas_context.svg)
 
 Figure CS1.1. *TAS* context diagram.
 
@@ -105,7 +105,7 @@ loop:
 
 The workflow exhibits three decision points that create non-trivial failure-propagation paths: the `analyseData` outcome branches into three operation classes (`changeDrug`, `changeDose`, `sendAlarm`), and the panic-button path bypasses the analysis step entirely to invoke `triggerAlarm` directly.
 
-![TAS workflow diagram showing pickTask loop, analyseData branching to changeDrug/changeDose/sendAlarm, and the direct triggerAlarm path from buttonMsg.](../../../img/07/cs1/03%20-%20Workflow.svg)
+![TAS workflow diagram showing pickTask loop, analyseData branching to changeDrug/changeDose/sendAlarm, and the direct triggerAlarm path from buttonMsg.](../assets/img/cs1/cs_tas_workflow.svg)
 
 Figure CS1.2. *TAS* workflow, reconstructed from Figure 1 of [1].
 
@@ -125,7 +125,7 @@ Figure CS1.2. *TAS* workflow, reconstructed from Figure 1 of [1].
 | `ServiceClient`      | Invokes composite services with QoS requirements                                                                     |
 | `InputProfile`       | Scripted sequence of invocations with predefined QoS requirements                                                    |
 
-![ReSeP service structure: CompositeService (TAS), three AtomicService instances (Drug, Medical Analysis, Alarm), ServiceRegistry, ServiceCache, and the WorkflowEngine.](../../../img/07/cs1/02%20-%20Services.svg)
+![ReSeP service structure: CompositeService (TAS), three AtomicService instances (Drug, Medical Analysis, Alarm), ServiceRegistry, ServiceCache, and the WorkflowEngine.](../assets/img/cs1/cs_tas_services.svg)
 
 Figure CS1.3. *ReSeP* service structure realising the *TAS* composite service, reconstructed from Figures 2 and 3 of [1].
 
@@ -182,7 +182,7 @@ When a later analysis cites *TAS* service parameters, it should state whether it
 
 The *ReSeP* effector set directly enables the five adaptation scenarios of Table I. Specifically, `removeFailedService` combined with `setPreferredService` implements `S1`; `setPreferredService` over response-time-annotated alternatives implements `S2`; `changeQoSRequirement` drives `S3`. Scenarios `S4` (new goal, change workflow architecture) and `S5` (wrong operation sequence, change workflow architecture) require runtime rewriting of the workflow itself and therefore **fall outside the published effector set**. [1] implies full scenario coverage but does not document a workflow-rewriting effector; a follow-up extension would need to add one (for example, a `WorkflowEditor` effector operating on the `WorkflowEngine`).
 
-![Adaptability overview showing the MAPE-K feedback loop (Monitor, Analyse, Plan, Execute over Knowledge) wrapping the managed TAS subsystem.](../../../img/07/cs1/05%20-%20Adaptability.svg)
+![Adaptability overview showing the MAPE-K feedback loop (Monitor, Analyse, Plan, Execute over Knowledge) wrapping the managed TAS subsystem.](../assets/img/cs1/cs_tas_adaptability.svg)
 
 Figure CS1.4. *TAS* adaptability overview: *MAPE-K* feedback loop over the managed subsystem.
 
@@ -336,23 +336,23 @@ The `R2` dimension changes from cost to response time, and the `R3` objective in
 |    `S4`    | Changing requirements: new goal                               | Change workflow architecture; select new service                                                    | *Functional*: new operation                 |
 |    `S5`    | Inadequate design: wrong operation sequence                   | Change workflow architecture                                                                        | *Functional*: operation sequence compliance |
 
-![S1: service failure, switch to equivalent service.](../../../img/07/cs1/05A%20-%20SAS%20S1.svg)
+![S1: service failure, switch to equivalent service.](../assets/img/cs1/cs_tas_sas_s1.svg)
 
 Figure CS1.5-a. Scenario `S1`: service failure.
 
-![S2: response-time variability, select preferred service.](../../../img/07/cs1/05B%20-%20SAS%20S2.svg)
+![S2: response-time variability, select preferred service.](../assets/img/cs1/cs_tas_sas_s2.svg)
 
 Figure CS1.5-b. Scenario `S2`: response-time variability.
 
-![S3: new service discovered, use the new service.](../../../img/07/cs1/05C%20-%20SAS%20S3.svg)
+![S3: new service discovered, use the new service.](../assets/img/cs1/cs_tas_sas_s3.svg)
 
 Figure CS1.5-c. Scenario `S3`: discovery of a new service.
 
-![S4: new goal, change workflow architecture and select new service.](../../../img/07/cs1/05D%20-%20SAS%20S4.svg)
+![S4: new goal, change workflow architecture and select new service.](../assets/img/cs1/cs_tas_sas_s4.svg)
 
 Figure CS1.5-d. Scenario `S4`: changing requirements, new goal.
 
-![S5: wrong operation sequence, change workflow architecture.](../../../img/07/cs1/05E%20-%20SAS%20S5.svg)
+![S5: wrong operation sequence, change workflow architecture.](../assets/img/cs1/cs_tas_sas_s5.svg)
 
 Figure CS1.5-e. Scenario `S5`: inadequate design, wrong operation sequence.
 
@@ -466,7 +466,7 @@ Only scenario `S1` is quantified in Table IV of [1]. Scenarios `S2` to `S5` are 
 
 The **primary functional requirements** are (i) receiving discovery requests from urban entities (citizens, authorities, enterprises) through the service register interface, (ii) maintaining the service descriptor register across gateways with fresh information, (iii) resolving discovery requests locally when possible and forwarding otherwise, and (iv) reacting or proactively adapting to city events that shift the relevance of service descriptors. The **primary QA trade-off** in the authors' own vocabulary is entirely within *Performance*: the platform balances *latency* (response time `art`), *network overhead* (register-synchronisation traffic), and *resource utilisation* (per-gateway CPU, RAM, buffer occupation captured by `avu`). This work does not stay within that single-attribute framing. Under the *Performance vs Availability* lens, we re-read the utility-function signals `ars` (average rate of solved requests) and `avp` (average precision) as *Availability* evidence: both degrade whenever a gateway falls behind the true service state, which is the architectural symptom of a register becoming unavailable in a data-freshness sense. `ADR-CS2-06` elevates *Availability* to a first-class QA on that basis and flags it as `(inferred)` because the authors do not label it. Higher replication reduces latency but increases network overhead; more frequent synchronisation improves register freshness (our implicit *Availability*) but raises resource utilisation. The **adaptation objectives** are formalised as the utility function of [1] Eq. 6 (reproduced below), maximised over five weighted metrics (`ars`, `avp`, `art`, average number of hops `ashs`, average used storage `avu`) with the reactive-adaptation threshold set at `T = 0.15`.
 
-![Reconstructed context diagram showing the three layers (Smart City, Service Discovery Platform, Service Environment) of the Cabrera and Clarke case study.](../../../img/07/cs2/01%20-%20Context.svg)
+![Reconstructed context diagram showing the three layers (Smart City, Service Discovery Platform, Service Environment) of the Cabrera and Clarke case study.](../assets/img/cs2/cs_iotsdp_context.svg)
 
 Figure CS2.1. Reconstructed context diagram for the Smart City *IoT-SDP*, adapted from [1] and [3].
 
@@ -490,17 +490,17 @@ The platform decomposes vertically into three layers: **Smart City** (physical, 
 2. **Service Discovery Platform layer (integration).** Autonomic gateways maintain per-node service registers. Stationary gateways synchronise with nearby peers via `Ping/Echo`; mobile gateways broadcast `Heartbeat` messages as they move through the city.
 3. **Service Environment layer (service).** Hosts the actual service implementations run by each urban entity (e.g., `city navigation service` on a citizen's mobile phone, `bus stop monitor service` on the bus company's infrastructure, `metro line status service` at the metro company, `ticket sale service` at a concert hall or museum). Stationary services remain registered in the same gateway; mobile services migrate across gateways as they move.
 
-![Reconstructed use-case view of the platform: urban entities request city services; gateways update their registers; the autonomic manager drives adaptation.](../../../img/07/cs2/08%20-%20Use%20Cases.svg)
+![Reconstructed use-case view of the platform: urban entities request city services; gateways update their registers; the autonomic manager drives adaptation.](../assets/img/cs2/cs_iotsdp_use_case.svg)
 
 Figure CS2.2. Use-case view of the platform.
 
-![Concurrent-behaviour view of the platform showing the parallel operation of stationary and mobile gateways and their autonomic loops.](../../../img/07/cs2/09%20-%20Concurrent.svg)
+![Concurrent-behaviour view of the platform showing the parallel operation of stationary and mobile gateways and their autonomic loops.](../assets/img/cs2/cs_iotsdp_concurrent.svg)
 
 Figure CS2.3. Concurrent-behaviour view.
 
 **Runtime Architecture: target-system side of each gateway.** Every gateway is an instance of the same component structure, separated into a Target System (the service register and its interface) and a Controller (the autonomic manager). The Target-System internals are:
 
-![Target-System component view: the Service Register exposes read/write operations and emits change events.](../../../img/07/cs2/07B%20-%20Tgt%20Sys%20comp.svg)
+![Target-System component view: the Service Register exposes read/write operations and emits change events.](../assets/img/cs2/cs_iotsdp_tgtsys.svg)
 
 Figure CS2.4. Target System internals: `Service Register`, register interface, and change-event emitter.
 
@@ -511,25 +511,25 @@ The `Service Register` is a local *MongoDB 2.4* database that stores service des
 - **Simulation.** `500` gateways distributed across a `2 km²` grid in Dublin city centre. Three mobility environments: *static* (`0 %` mobile), *semi-mobile* (`25 %` mobile), *fully-mobile* (`100 %` mobile). Mobile gateways move at `10` to `50 km/h`. Each gateway exposes five service domains. Three replication levels: `20 %` (low), `60 %` (medium), `100 %` (high).
 - **Testbed.** `5` Raspberry Pi 3 boards serve as *IoT*-grade gateways. Each board has `1 GB` of RAM and a `16 GB` SD card. The gateways communicate through an *MQTT* broker. Each gateway runs Python 3.5 and a local *MongoDB 2.4* instance for the `Service Register`. Gateway 1 runs the full self-adaptive functionality; Gateways 2, 3, 4 only respond to requests.
 
-![Network view: federated peer-to-peer gateways connected through an MQTT broker; stationary and mobile nodes exchange Ping/Echo and Heartbeat messages to synchronise their local service registers.](../../../img/07/cs2/05%20-%20Network.svg)
+![Network view: federated peer-to-peer gateways connected through an MQTT broker; stationary and mobile nodes exchange Ping/Echo and Heartbeat messages to synchronise their local service registers.](../assets/img/cs2/cs_iotsdp_network.svg)
 
 Figure CS2.5. Network view: peer-to-peer gateways and their inter-node messaging.
 
-![Deployment view: five Raspberry Pi 3 boards running MongoDB 2.4 and Python 3.5, connected through an MQTT broker in the in-laboratory testbed.](../../../img/07/cs2/06%20-%20Deployment.svg)
+![Deployment view: five Raspberry Pi 3 boards running MongoDB 2.4 and Python 3.5, connected through an MQTT broker in the in-laboratory testbed.](../assets/img/cs2/cs_iotsdp_deployment.svg)
 
 Figure CS2.6. Deployment view of the Raspberry Pi 3 testbed.
 
 **Behavioural reconstruction: sequence diagrams.**
 
-![Sequence diagram for a service-register update driven by a stationary gateway's Ping/Echo exchange with its neighbours.](../../../img/07/cs2/010A%20-%20Seq%20Update.svg)
+![Sequence diagram for a service-register update driven by a stationary gateway's Ping/Echo exchange with its neighbours.](../assets/img/cs2/cs_iotsdp_seq_update.svg)
 
 Figure CS2.7-a. Sequence view for a register update triggered by a stationary-gateway `Ping/Echo` cycle.
 
-![Sequence diagram for a service discovery request issued by an urban entity and resolved through the nearest gateway's register.](../../../img/07/cs2/010B%20-%20Seq%20Request.svg)
+![Sequence diagram for a service discovery request issued by an urban entity and resolved through the nearest gateway's register.](../assets/img/cs2/cs_iotsdp_seq_request.svg)
 
 Figure CS2.7-b. Sequence view for a service-discovery request issued by an urban entity.
 
-![Sequence diagram for the autonomic manager handling an adaptation event: the Planner consults Rules or the DQN model, the Manager actuates the Service Register, and the Utility is recomputed.](../../../img/07/cs2/10C%20-%20Seq%20Manage%20Event.svg)
+![Sequence diagram for the autonomic manager handling an adaptation event: the Planner consults Rules or the DQN model, the Manager actuates the Service Register, and the Utility is recomputed.](../assets/img/cs2/cs_iotsdp_seq_event.svg)
 
 Figure CS2.7-c. Sequence view for the `Autonomic Manager` handling an `E1` / `E2` / `E3` event.
 
@@ -537,11 +537,11 @@ Figure CS2.7-c. Sequence view for the `Autonomic Manager` handling an `E1` / `E2
 
 **Managing-subsystem components.** The Controller side of each gateway is the `Autonomic Manager`:
 
-![Target-System plus Controller composition view: the Service Register and its interface form the managed subsystem; the Autonomic Manager forms the managing subsystem.](../../../img/07/cs2/07A%20-%20Ctrl%20%26%20Tgt-Sys%20comp.svg)
+![Target-System plus Controller composition view: the Service Register and its interface form the managed subsystem; the Autonomic Manager forms the managing subsystem.](../assets/img/cs2/cs_iotsdp_components.svg)
 
 Figure CS2.8. Gateway composition: Controller (*Autonomic Manager*) and Target System (*Service Register* + interface).
 
-![Controller component view: the Autonomic Manager hosts the Planner, Manager, Rules, Goals, and Utility components.](../../../img/07/cs2/07C%20-%20Ctrl%20comp.svg)
+![Controller component view: the Autonomic Manager hosts the Planner, Manager, Rules, Goals, and Utility components.](../assets/img/cs2/cs_iotsdp_ctrl.svg)
 
 Figure CS2.9. Controller internals: `Planner`, `Manager`, `Rules`, `Goals`, and `Utility`.
 
@@ -664,15 +664,15 @@ Consistently with the elevation of *Availability* to a first-class QA (see below
 
 The identifiers `E1`, `E2`, `E3` are introduced by this ACS for cross-reference convenience; neither [1] nor [3] assigns numeric IDs to the scenarios.
 
-![Context diagram for the unforeseen event self-adaptation scenario.](../../../img/07/cs2/01A%20-%20Unforseen%20Event.svg)
+![Context diagram for the unforeseen event self-adaptation scenario.](../assets/img/cs2/cs_iotsdp_event_e1.svg)
 
 Figure CS2.10-a. Scenario `E1`: *Unforeseen Event*, reactive rule-based adaptation.
 
-![Context diagram for the planned (scheduled) event self-adaptation scenario.](../../../img/07/cs2/01B%20-%20Planned%20Event.svg)
+![Context diagram for the planned (scheduled) event self-adaptation scenario.](../assets/img/cs2/cs_iotsdp_event_e2.svg)
 
 Figure CS2.10-b. Scenario `E2`: *Scheduled Event*, reactive time-programmed adaptation.
 
-![Context diagram for the periodic event self-adaptation scenario.](../../../img/07/cs2/01C%20-%20Periodic%20Event.svg)
+![Context diagram for the periodic event self-adaptation scenario.](../assets/img/cs2/cs_iotsdp_event_e3.svg)
 
 Figure CS2.10-c. Scenario `E3`: *Periodic Event*, proactive *DQN*-driven adaptation.
 
