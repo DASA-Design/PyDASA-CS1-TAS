@@ -59,6 +59,9 @@
     "sweep_grid": {
         "mu_factor": [0.5, 0.8, 1.0, 1.5, 2.0, 4.0],
         "c": [1, 2, 3, 4],
-        "K": [8, 10, 16, 32]
+        "K": [8, 10, 16, 32],
+        "lambda_steps": 30,
+        "lambda_factor_min": 0.05,
+        "util_threshold": 0.95
     }
 }
