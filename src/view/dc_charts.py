@@ -590,8 +590,10 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
     _gs = _fig.add_gridspec(2, 2, hspace=0.25, wspace=0.25)
     _axes = [_fig.add_subplot(_gs[_i, _j]) for _i in range(2) for _j in range(2)]
 
-    # populate every panel via the matching mode; track whether any panel
-    # produced a legend entry so we only enable the legend where meaningful
+    # populate every panel via the matching mode; the helpers attach
+    # `label=...` to scatter calls so handles can be lifted later for a
+    # single figure-level legend (no per-panel legend overlay)
+    _legend_axes: Optional[Any] = None
     for _idx, (_panel_title, _x_key, _y_key) in enumerate(_YOLY_PANELS):
         _ax = _axes[_idx]
         _ax.set_facecolor("white")
@@ -601,6 +603,10 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
                                             _x_key, _y_key, _groups)
         else:
             _has_legend = _panel_single_mode(_ax, coeff_data, _x_key, _y_key)
+
+        # remember the first axes that produced legend handles
+        if _has_legend and _legend_axes is None:
+            _legend_axes = _ax
 
         # cosmetic pass: grid, ticks, spines, sci format, log toggle
         _ax.grid(True, **_GRID_STY_2D)
@@ -615,12 +621,18 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.set_ylabel(_lbl_map[_y_key], **_LBL_STY_2D_SINGLE)
         _ax.set_title(_panel_title, fontsize=17, pad=-10, **_LBL_STYLE)
 
-        if _has_legend:
-            _ax.legend(loc="best",
-                       fontsize=12,
-                       framealpha=0.9,
-                       title=_legend_title,
-                       title_fontsize=13)
+    # one figure-level legend on the right side; reserves room via
+    # subplots_adjust so the panels do not get clipped behind it
+    if _legend_axes is not None:
+        _handles, _labels = _legend_axes.get_legend_handles_labels()
+        _fig.legend(_handles, _labels,
+                    loc="center right",
+                    bbox_to_anchor=(1.01, 0.5),
+                    fontsize=12,
+                    framealpha=0.9,
+                    title=_legend_title,
+                    title_fontsize=13)
+        _fig.subplots_adjust(right=0.85)
 
     # figure title bound above the top row (y=0.995 per OLD convention)
     if title:
@@ -966,10 +978,13 @@ def plot_arts_distributions(coeff_data: Dict[str, Dict[str, Any]],
     _n_rows, _n_cols, _last_row_idx, _n_last_row = _grid_layout(_n_nodes)
 
     _fig = plt.figure(figsize=(26, 26), facecolor="white")
-    _fig.subplots_adjust(top=0.92, bottom=0.05, left=0.08, right=0.96)
+    # extra hspace on the outer grid leaves room for the per-cell header
+    # anchored above each cell via `get_position()` later
+    _fig.subplots_adjust(top=0.93, bottom=0.04, left=0.06, right=0.97,
+                         hspace=0.55, wspace=0.30)
     _gs_main = _fig.add_gridspec(_n_rows, _n_cols,
-                                 hspace=0.45,
-                                 wspace=0.40,
+                                 hspace=0.55,
+                                 wspace=0.30,
                                  figure=_fig)
 
     # walk every node and populate its subgrid
@@ -992,16 +1007,15 @@ def plot_arts_distributions(coeff_data: Dict[str, Dict[str, Any]],
                                                           hspace=0.45,
                                                           wspace=0.45)
 
-        # per-node header placed above its subgrid (fig-coord anchor since
-        # each node gets its own gridspec cell rather than its own axes).
-        # node keys carry LaTeX subscripts (e.g. `TAS_{1}`) so the helper
-        # wraps them in `$...$` for mathtext rendering
-        _title_x = (_nd_col + 0.5) / _n_cols
-        _title_y = 0.98 - (_nd_row * (0.92 / _n_rows))
+        # per-node header anchored to the actual gridspec cell top so it
+        # never overlaps the inner subgrid's title row
+        _cell_pos = _gs_main[_nd_row, _nd_col].get_position(_fig)
+        _title_x = (_cell_pos.x0 + _cell_pos.x1) / 2.0
+        _title_y = _cell_pos.y1 + 0.008
         _fig.text(_title_x, _title_y,
                   _node_header(_node, _name_map),
-                  ha="center", va="top",
-                  fontsize=19, fontweight="bold", color=_TEXT_BLACK,
+                  ha="center", va="bottom",
+                  fontsize=15, fontweight="bold", color=_TEXT_BLACK,
                   transform=_fig.transFigure)
 
         # populate one histogram per coefficient in declared order
@@ -1035,11 +1049,12 @@ def plot_arts_distributions(coeff_data: Dict[str, Dict[str, Any]],
 
             # axis labels + per-axes title (shows mean + std)
             _ax.set_xlabel(_lbl_map.get(_short, _short),
-                           fontsize=13, fontweight="bold", color=_TEXT_BLACK)
+                           fontsize=11, fontweight="bold", color=_TEXT_BLACK)
             _ax.set_ylabel("Frequency",
-                           fontsize=13, fontweight="bold", color=_TEXT_BLACK)
-            _ax.set_title(f"Mean: {_mean:.4e} | Std: {_std:.4e}",
-                          fontsize=15, fontweight="bold", color=_TEXT_BLACK)
+                           fontsize=11, fontweight="bold", color=_TEXT_BLACK)
+            _ax.set_title(f"mean={_mean:.3g}  std={_std:.3g}",
+                          fontsize=11, fontweight="bold", color=_TEXT_BLACK,
+                          pad=4)
 
             # cosmetic pass: sci-notation on x, tick style, legend, grid, spines
             _ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0))
@@ -1170,7 +1185,9 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
                          hspace=0.15, wspace=0.10)
     _gs_main = _fig.add_gridspec(_n_rows, _n_cols, figure=_fig)
 
-    # walk every node and populate one 3D cell
+    # walk every node and populate one 3D cell; track the first axes that
+    # produced legend handles so a single figure-level legend can lift them
+    _legend_axes: Optional[Any] = None
     for _nd_idx, _node in enumerate(_node_keys):
         _nd_row, _nd_col = _node_grid_pos(_nd_idx, _n_rows, _n_cols,
                                           _last_row_idx, _n_last_row)
@@ -1192,6 +1209,9 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
                 # stays visually balanced
                 _has_legend = False
 
+        if _has_legend and _legend_axes is None:
+            _legend_axes = _ax
+
         # axis labels (smaller font for the grid context)
         _ax.set_xlabel(_lbl_map["theta"], **_LBL_STY_3D_GRID)
         _ax.set_ylabel(_lbl_map["sigma"], **_LBL_STY_3D_GRID)
@@ -1210,12 +1230,19 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
         _ax.set_title(_node_header(_node, _name_map),
                       fontsize=19, pad=10, **_LBL_STYLE)
 
-        if _has_legend:
-            _ax.legend(loc="upper left",
-                       fontsize=11,
-                       framealpha=0.9,
-                       title=_legend_title,
-                       title_fontsize=12)
+    # ONE figure-level legend along the bottom; reserves a strip via
+    # subplots_adjust(bottom=...) so the per-cell 3D axes are not clipped
+    if _legend_axes is not None:
+        _handles, _labels = _legend_axes.get_legend_handles_labels()
+        _fig.legend(_handles, _labels,
+                    loc="lower center",
+                    bbox_to_anchor=(0.5, 0.01),
+                    ncol=min(len(_labels), 6),
+                    fontsize=14,
+                    framealpha=0.9,
+                    title=_legend_title,
+                    title_fontsize=15)
+        _fig.subplots_adjust(bottom=0.10)
 
     if title:
         _fig.suptitle(title, fontsize=27, y=0.995, **_LBL_STYLE)
@@ -1284,7 +1311,9 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
                          hspace=0.35, wspace=0.30)
     _gs_main = _fig.add_gridspec(_n_rows, _n_cols, figure=_fig)
 
-    # walk every node and populate its 2x2 inner subgrid
+    # walk every node and populate its 2x2 inner subgrid; one figure-level
+    # legend is added at the end from the first cell that produced labels
+    _legend_axes: Optional[Any] = None
     for _nd_idx, _node in enumerate(_node_keys):
         _nd_row, _nd_col = _node_grid_pos(_nd_idx, _n_rows, _n_cols,
                                           _last_row_idx, _n_last_row)
@@ -1312,6 +1341,9 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
                 except KeyError:
                     _has_legend = False
 
+            if _has_legend and _legend_axes is None:
+                _legend_axes = _ax
+
             # cosmetic pass: grid, ticks, spines, sci format, log toggle
             _ax.grid(True, **_GRID_STY_2D)
             _ax.tick_params(**_TICK_STYLE)
@@ -1325,21 +1357,30 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
             _ax.set_ylabel(_lbl_map[_y_key], **_LBL_STY_2D_GRID)
             _ax.set_title(_panel_title, fontsize=13, **_LBL_STYLE)
 
-            if _has_legend:
-                _ax.legend(loc="best",
-                           fontsize=10,
-                           framealpha=0.85,
-                           title=_legend_title,
-                           title_fontsize=11)
-
-        # per-node header placed above the 2x2 subgrid (fig-coord anchor)
-        _title_x = (_nd_col + 0.5) / _n_cols
-        _title_y = 0.98 - (_nd_row * (0.92 / _n_rows))
+        # per-node header anchored to the actual gridspec cell top so it
+        # never overlaps the inner subgrid's title row
+        _cell_pos = _gs_main[_nd_row, _nd_col].get_position(_fig)
+        _title_x = (_cell_pos.x0 + _cell_pos.x1) / 2.0
+        _title_y = _cell_pos.y1 + 0.012
         _fig.text(_title_x, _title_y,
                   _node_header(_node, _name_map),
-                  ha="center", va="top",
+                  ha="center", va="bottom",
                   fontsize=17, fontweight="bold", color=_TEXT_BLACK,
                   transform=_fig.transFigure)
+
+    # ONE figure-level legend along the bottom; reserves a strip via
+    # subplots_adjust(bottom=...) so the panel grid is not clipped
+    if _legend_axes is not None:
+        _handles, _labels = _legend_axes.get_legend_handles_labels()
+        _fig.legend(_handles, _labels,
+                    loc="lower center",
+                    bbox_to_anchor=(0.5, 0.01),
+                    ncol=min(len(_labels), 6),
+                    fontsize=14,
+                    framealpha=0.9,
+                    title=_legend_title,
+                    title_fontsize=15)
+        _fig.subplots_adjust(bottom=0.08)
 
     if title:
         _fig.suptitle(title, fontsize=27, y=0.995, **_LBL_STYLE)

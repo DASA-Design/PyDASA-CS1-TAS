@@ -7,6 +7,7 @@ construction, coefficient derivation from spec, sensitivity reshaping).
 
 from src.dimensional.coefficients import derive_coefficients
 from src.dimensional.engine import build_engine
+from src.dimensional.networks import sweep_artifact, sweep_network
 from src.dimensional.reshape import (coefficients_delta,
                                      coefficients_to_network,
                                      coefficients_to_nodes,
@@ -23,4 +24,6 @@ __all__ = [
     "coefficients_to_nodes",
     "derive_coefficients",
     "network_delta",
+    "sweep_artifact",
+    "sweep_network",
 ]
