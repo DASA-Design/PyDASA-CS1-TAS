@@ -13,7 +13,8 @@ Shape + semantic checks for the orchestrator-output reshapers:
 import pytest
 
 # modules under test
-from src.dimensional import (coefficients_delta,
+from src.dimensional import (aggregate_architecture_coefficients,
+                             coefficients_delta,
                              coefficients_to_network,
                              coefficients_to_nodes,
                              network_delta)
@@ -100,3 +101,73 @@ class TestDeltaSemantics:
         _d = network_delta(_nb, _na)
         assert len(_d) == 1
         assert {"theta", "sigma", "eta", "phi"} <= set(_d.columns)
+
+
+class TestArchitectureAggregation:
+    """PACS-iter2-style variable-level aggregation (sum first, divide after)."""
+
+    def test_single_row_output(self, _dim_baseline):
+        _arch = aggregate_architecture_coefficients(_dim_baseline)
+        assert len(_arch) == 1
+
+    def test_default_tag_is_TAS(self, _dim_baseline):
+        _arch = aggregate_architecture_coefficients(_dim_baseline)
+        for _coef in ("theta", "sigma", "eta", "phi", "epsilon"):
+            assert f"\\{_coef}_{{TAS}}" in _arch.columns
+
+    def test_custom_tag_flows_through(self, _dim_baseline):
+        _arch = aggregate_architecture_coefficients(_dim_baseline, tag="TAS_base")
+        assert "\\theta_{TAS_base}" in _arch.columns
+
+    def test_theta_equals_sumL_over_sumK(self, _dim_baseline):
+        """theta_arch = (sum L_i) / (sum K_i) across every artifact."""
+        _cfg = _dim_baseline["config"]
+        _sum_L = sum(float(_a.vars[f"L_{{{_a.key}}}"]["_setpoint"])
+                     for _a in _cfg.artifacts)
+        _sum_K = sum(float(_a.vars[f"K_{{{_a.key}}}"]["_setpoint"])
+                     for _a in _cfg.artifacts)
+        _arch = aggregate_architecture_coefficients(_dim_baseline)
+        _theta = float(_arch["\\theta_{TAS}"].iloc[0])
+        assert _theta == pytest.approx(_sum_L / _sum_K, rel=1e-9)
+
+    def test_epsilon_uses_cumulative_probability(self, _dim_baseline):
+        """epsilon_arch = 1 - prod(1 - epsilon_i). Value derives from the actual per-artifact epsilons."""
+        _cfg = _dim_baseline["config"]
+        _prod = 1.0
+        for _a in _cfg.artifacts:
+            _eps_i = float(_a.vars[f"\\epsilon_{{{_a.key}}}"]["_setpoint"])
+            _prod *= (1.0 - _eps_i)
+        _expected = 1.0 - _prod
+
+        _arch = aggregate_architecture_coefficients(_dim_baseline)
+        _eps = float(_arch["\\epsilon_{TAS}"].iloc[0])
+        assert _eps == pytest.approx(_expected, rel=1e-9)
+
+    def test_eta_matches_sum_chi_K_over_sum_mu_c(self, _dim_baseline):
+        """eta_arch = (sum chi_i * K_i) / (sum mu_i * c_i); recomputed by hand from the config setpoints."""
+        _cfg = _dim_baseline["config"]
+        _num = 0.0
+        _den = 0.0
+        for _a in _cfg.artifacts:
+            _chi = float(_a.vars[f"\\chi_{{{_a.key}}}"]["_setpoint"])
+            _K = float(_a.vars[f"K_{{{_a.key}}}"]["_setpoint"])
+            _mu = float(_a.vars[f"\\mu_{{{_a.key}}}"]["_setpoint"])
+            _c = float(_a.vars[f"c_{{{_a.key}}}"]["_setpoint"])
+            _num += _chi * _K
+            _den += _mu * _c
+        _expected = _num / _den
+
+        _arch = aggregate_architecture_coefficients(_dim_baseline)
+        _eta = float(_arch["\\eta_{TAS}"].iloc[0])
+        assert _eta == pytest.approx(_expected, rel=1e-9)
+
+    def test_architecture_coefficients_in_range(self, _dim_baseline):
+        """Every architecture-level coefficient must sit in a sensible range for a stable baseline."""
+        _arch = aggregate_architecture_coefficients(_dim_baseline)
+        _theta = float(_arch["\\theta_{TAS}"].iloc[0])
+        _phi = float(_arch["\\phi_{TAS}"].iloc[0])
+        _eps = float(_arch["\\epsilon_{TAS}"].iloc[0])
+        # occupancy + memory use are ratios in [0, 1]; compound epsilon also in [0, 1]
+        assert 0.0 <= _theta <= 1.0
+        assert 0.0 <= _phi <= 1.0
+        assert 0.0 <= _eps <= 1.0
