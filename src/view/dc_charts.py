@@ -621,18 +621,21 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.set_ylabel(_lbl_map[_y_key], **_LBL_STY_2D_SINGLE)
         _ax.set_title(_panel_title, fontsize=17, pad=-10, **_LBL_STYLE)
 
-    # one figure-level legend on the right side; reserves room via
-    # subplots_adjust so the panels do not get clipped behind it
+    # ONE figure-level legend parked to the RIGHT of the panel grid.
+    # `loc="center left"` anchors the legend's LEFT edge at bbox_to_anchor,
+    # so the legend extends rightward off the data area. Pairs with
+    # `subplots_adjust(right=0.82)` which shrinks the panel grid to leave
+    # the [0.82, 1.0] horizontal strip free for the legend.
     if _legend_axes is not None:
         _handles, _labels = _legend_axes.get_legend_handles_labels()
+        _fig.subplots_adjust(right=0.82)
         _fig.legend(_handles, _labels,
-                    loc="center right",
-                    bbox_to_anchor=(1.01, 0.5),
+                    loc="center left",
+                    bbox_to_anchor=(0.84, 0.5),
                     fontsize=12,
                     framealpha=0.9,
                     title=_legend_title,
                     title_fontsize=13)
-        _fig.subplots_adjust(right=0.85)
 
     # figure title bound above the top row (y=0.995 per OLD convention)
     if title:
