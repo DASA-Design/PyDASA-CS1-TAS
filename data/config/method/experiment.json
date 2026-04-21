@@ -1,0 +1,43 @@
+{
+    "base_port": 8001,
+    "host": "127.0.0.1",
+    "healthz_timeout_s": 10,
+    "duration_s": 60,
+    "warmup_s": 2,
+    "seed": 42,
+    "replications": 1,
+    "ramp": {
+        "min_samples_per_kind": 32,
+        "max_probe_window_s": 60.0,
+        "rates": [1, 2, 5, 10, 20, 50, 100, 200, 500],
+        "cascade": {
+            "mode": "rolling",
+            "threshold": 0.10,
+            "window": 50
+        }
+    },
+    "request_size_bytes": {
+        "analyse_request": 256,
+        "alarm_request": 128,
+        "drug_request": 192,
+        "response_default": 128
+    },
+    "service_registry": {
+        "TAS_{1}": {"port_offset": 0, "role": "composite_router"},
+        "TAS_{2}": {"port_offset": 0, "role": "composite"},
+        "TAS_{3}": {"port_offset": 0, "role": "composite"},
+        "TAS_{4}": {"port_offset": 0, "role": "composite"},
+        "TAS_{5}": {"port_offset": 0, "role": "composite"},
+        "TAS_{6}": {"port_offset": 0, "role": "composite"},
+        "MAS_{1}": {"port_offset": 6, "role": "atomic"},
+        "MAS_{2}": {"port_offset": 7, "role": "atomic"},
+        "MAS_{3}": {"port_offset": 8, "role": "atomic"},
+        "AS_{1}": {"port_offset": 9, "role": "atomic"},
+        "AS_{2}": {"port_offset": 10, "role": "atomic"},
+        "AS_{3}": {"port_offset": 11, "role": "atomic"},
+        "DS_{3}": {"port_offset": 12, "role": "atomic"},
+        "MAS_{4}": {"port_offset": 13, "role": "atomic"},
+        "AS_{4}": {"port_offset": 14, "role": "atomic"},
+        "DS_{1}": {"port_offset": 15, "role": "atomic"}
+    }
+}

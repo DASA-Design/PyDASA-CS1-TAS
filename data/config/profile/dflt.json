@@ -185,41 +185,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{TAS_{1}}": {
-                    "_sym": "\\delta_{TAS_{1}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_TAS_1",
-                    "_idx": 7,
-                    "_name": "TAS_1 req data density",
-                    "description": "Data density for request in TAS_1 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{TAS_{1}}}": {
                     "_sym": "M_{act_{TAS_{1}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_TAS_1",
                     "_idx": 12,
                     "_name": "TAS_{1} active memory",
-                    "description": "Active memory used by processing requests in TAS_{1} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in TAS_{1} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -249,7 +221,7 @@
                     "_alias": "M_buf_TAS_1",
                     "_idx": 13,
                     "_name": "TAS_{1} buffer memory",
-                    "description": "Allocated buffer memory for the TAS_{1} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the TAS_{1} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -394,6 +366,34 @@
                     "_data": [
                         0.0006899293954719466
                     ]
+                },
+                "d_{TAS_{1}}": {
+                    "_sym": "d_{TAS_{1}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_TAS_1",
+                    "_idx": 7,
+                    "_name": "TAS_1 data per req",
+                    "description": "Data density for request in TAS_1 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -578,41 +578,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{TAS_{2}}": {
-                    "_sym": "\\delta_{TAS_{2}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_TAS_2",
-                    "_idx": 18,
-                    "_name": "TAS_2 req data density",
-                    "description": "Data density for request in TAS_2 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{TAS_{2}}}": {
                     "_sym": "M_{act_{TAS_{2}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_TAS_2",
                     "_idx": 23,
                     "_name": "TAS_{2} active memory",
-                    "description": "Active memory used by processing requests in TAS_{2} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in TAS_{2} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -642,7 +614,7 @@
                     "_alias": "M_buf_TAS_2",
                     "_idx": 24,
                     "_name": "TAS_{2} buffer memory",
-                    "description": "Allocated buffer memory for the TAS_{2} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the TAS_{2} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -787,6 +759,34 @@
                     "_data": [
                         0.0008370371522172216
                     ]
+                },
+                "d_{TAS_{2}}": {
+                    "_sym": "d_{TAS_{2}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_TAS_2",
+                    "_idx": 18,
+                    "_name": "TAS_2 data per req",
+                    "description": "Data density for request in TAS_2 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -971,41 +971,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{TAS_{3}}": {
-                    "_sym": "\\delta_{TAS_{3}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_TAS_3",
-                    "_idx": 29,
-                    "_name": "TAS_3 req data density",
-                    "description": "Data density for request in TAS_3 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{TAS_{3}}}": {
                     "_sym": "M_{act_{TAS_{3}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_TAS_3",
                     "_idx": 34,
                     "_name": "TAS_{3} active memory",
-                    "description": "Active memory used by processing requests in TAS_{3} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in TAS_{3} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -1035,7 +1007,7 @@
                     "_alias": "M_buf_TAS_3",
                     "_idx": 35,
                     "_name": "TAS_{3} buffer memory",
-                    "description": "Allocated buffer memory for the TAS_{3} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the TAS_{3} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -1180,6 +1152,34 @@
                     "_data": [
                         0.00047019332233432453
                     ]
+                },
+                "d_{TAS_{3}}": {
+                    "_sym": "d_{TAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_TAS_3",
+                    "_idx": 29,
+                    "_name": "TAS_3 data per req",
+                    "description": "Data density for request in TAS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -1364,41 +1364,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{MAS_{1}}": {
-                    "_sym": "\\delta_{MAS_{1}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_MAS_1",
-                    "_idx": 40,
-                    "_name": "MAS_1 req data density",
-                    "description": "Data density for request in MAS_1 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{MAS_{1}}}": {
                     "_sym": "M_{act_{MAS_{1}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_MAS_1",
                     "_idx": 45,
                     "_name": "MAS_{1} active memory",
-                    "description": "Active memory used by processing requests in MAS_{1} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in MAS_{1} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -1428,7 +1400,7 @@
                     "_alias": "M_buf_MAS_1",
                     "_idx": 46,
                     "_name": "MAS_{1} buffer memory",
-                    "description": "Allocated buffer memory for the MAS_{1} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the MAS_{1} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -1573,6 +1545,34 @@
                     "_data": [
                         0.0063818246361512015
                     ]
+                },
+                "d_{MAS_{1}}": {
+                    "_sym": "d_{MAS_{1}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_MAS_1",
+                    "_idx": 40,
+                    "_name": "MAS_1 data per req",
+                    "description": "Data density for request in MAS_1 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -1757,41 +1757,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{MAS_{2}}": {
-                    "_sym": "\\delta_{MAS_{2}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_MAS_2",
-                    "_idx": 51,
-                    "_name": "MAS_2 req data density",
-                    "description": "Data density for request in MAS_2 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{MAS_{2}}}": {
                     "_sym": "M_{act_{MAS_{2}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_MAS_2",
                     "_idx": 56,
                     "_name": "MAS_{2} active memory",
-                    "description": "Active memory used by processing requests in MAS_{2} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in MAS_{2} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -1821,7 +1793,7 @@
                     "_alias": "M_buf_MAS_2",
                     "_idx": 57,
                     "_name": "MAS_{2} buffer memory",
-                    "description": "Allocated buffer memory for the MAS_{2} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the MAS_{2} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -1966,6 +1938,34 @@
                     "_data": [
                         0.0003953456725943122
                     ]
+                },
+                "d_{MAS_{2}}": {
+                    "_sym": "d_{MAS_{2}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_MAS_2",
+                    "_idx": 51,
+                    "_name": "MAS_2 data per req",
+                    "description": "Data density for request in MAS_2 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -2150,41 +2150,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{MAS_{3}}": {
-                    "_sym": "\\delta_{MAS_{3}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_MAS_3",
-                    "_idx": 62,
-                    "_name": "MAS_3 req data density",
-                    "description": "Data density for request in MAS_3 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{MAS_{3}}}": {
                     "_sym": "M_{act_{MAS_{3}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_MAS_3",
                     "_idx": 67,
                     "_name": "MAS_{3} active memory",
-                    "description": "Active memory used by processing requests in MAS_{3} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in MAS_{3} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -2214,7 +2186,7 @@
                     "_alias": "M_buf_MAS_3",
                     "_idx": 68,
                     "_name": "MAS_{3} buffer memory",
-                    "description": "Allocated buffer memory for the MAS_{3} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the MAS_{3} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -2359,6 +2331,34 @@
                     "_data": [
                         0.013355335953547336
                     ]
+                },
+                "d_{MAS_{3}}": {
+                    "_sym": "d_{MAS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_MAS_3",
+                    "_idx": 62,
+                    "_name": "MAS_3 data per req",
+                    "description": "Data density for request in MAS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -2543,41 +2543,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{AS_{1}}": {
-                    "_sym": "\\delta_{AS_{1}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_AS_1",
-                    "_idx": 73,
-                    "_name": "AS_1 req data density",
-                    "description": "Data density for request in AS_1 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{AS_{1}}}": {
                     "_sym": "M_{act_{AS_{1}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_AS_1",
                     "_idx": 78,
                     "_name": "AS_{1} active memory",
-                    "description": "Active memory used by processing requests in AS_{1} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in AS_{1} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -2607,7 +2579,7 @@
                     "_alias": "M_buf_AS_1",
                     "_idx": 79,
                     "_name": "AS_{1} buffer memory",
-                    "description": "Allocated buffer memory for the AS_{1} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the AS_{1} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -2752,6 +2724,34 @@
                     "_data": [
                         0.00014443349454196412
                     ]
+                },
+                "d_{AS_{1}}": {
+                    "_sym": "d_{AS_{1}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_AS_1",
+                    "_idx": 73,
+                    "_name": "AS_1 data per req",
+                    "description": "Data density for request in AS_1 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -2936,41 +2936,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{AS_{2}}": {
-                    "_sym": "\\delta_{AS_{2}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_AS_2",
-                    "_idx": 84,
-                    "_name": "AS_2 req data density",
-                    "description": "Data density for request in AS_2 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{AS_{2}}}": {
                     "_sym": "M_{act_{AS_{2}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_AS_2",
                     "_idx": 89,
                     "_name": "AS_{2} active memory",
-                    "description": "Active memory used by processing requests in AS_{2} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in AS_{2} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -3000,7 +2972,7 @@
                     "_alias": "M_buf_AS_2",
                     "_idx": 90,
                     "_name": "AS_{2} buffer memory",
-                    "description": "Allocated buffer memory for the AS_{2} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the AS_{2} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -3145,6 +3117,34 @@
                     "_data": [
                         0.00041475440877104645
                     ]
+                },
+                "d_{AS_{2}}": {
+                    "_sym": "d_{AS_{2}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_AS_2",
+                    "_idx": 84,
+                    "_name": "AS_2 data per req",
+                    "description": "Data density for request in AS_2 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -3329,41 +3329,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{AS_{3}}": {
-                    "_sym": "\\delta_{AS_{3}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_AS_3",
-                    "_idx": 95,
-                    "_name": "AS_3 req data density",
-                    "description": "Data density for request in AS_3 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{AS_{3}}}": {
                     "_sym": "M_{act_{AS_{3}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_AS_3",
                     "_idx": 100,
                     "_name": "AS_{3} active memory",
-                    "description": "Active memory used by processing requests in AS_{3} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in AS_{3} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -3393,7 +3365,7 @@
                     "_alias": "M_buf_AS_3",
                     "_idx": 101,
                     "_name": "AS_{3} buffer memory",
-                    "description": "Allocated buffer memory for the AS_{3} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the AS_{3} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -3538,6 +3510,34 @@
                     "_data": [
                         2.9235413063357123e-05
                     ]
+                },
+                "d_{AS_{3}}": {
+                    "_sym": "d_{AS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_AS_3",
+                    "_idx": 95,
+                    "_name": "AS_3 data per req",
+                    "description": "Data density for request in AS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -3722,41 +3722,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{TAS_{4}}": {
-                    "_sym": "\\delta_{TAS_{4}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_TAS_4",
-                    "_idx": 106,
-                    "_name": "TAS_4 req data density",
-                    "description": "Data density for request in TAS_4 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{TAS_{4}}}": {
                     "_sym": "M_{act_{TAS_{4}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_TAS_4",
                     "_idx": 111,
                     "_name": "TAS_{4} active memory",
-                    "description": "Active memory used by processing requests in TAS_{4} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in TAS_{4} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -3786,7 +3758,7 @@
                     "_alias": "M_buf_TAS_4",
                     "_idx": 112,
                     "_name": "TAS_{4} buffer memory",
-                    "description": "Allocated buffer memory for the TAS_{4} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the TAS_{4} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -3931,6 +3903,34 @@
                     "_data": [
                         0.0008238901169305374
                     ]
+                },
+                "d_{TAS_{4}}": {
+                    "_sym": "d_{TAS_{4}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_TAS_4",
+                    "_idx": 106,
+                    "_name": "TAS_4 data per req",
+                    "description": "Data density for request in TAS_4 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -4115,41 +4115,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{DS_{3}}": {
-                    "_sym": "\\delta_{DS_{3}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_DS_3",
-                    "_idx": 117,
-                    "_name": "DS_3 req data density",
-                    "description": "Data density for request in DS_3 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{DS_{3}}}": {
                     "_sym": "M_{act_{DS_{3}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_DS_3",
                     "_idx": 122,
                     "_name": "DS_{3} active memory",
-                    "description": "Active memory used by processing requests in DS_{3} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in DS_{3} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -4179,7 +4151,7 @@
                     "_alias": "M_buf_DS_3",
                     "_idx": 123,
                     "_name": "DS_{3} buffer memory",
-                    "description": "Allocated buffer memory for the DS_{3} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the DS_{3} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -4324,6 +4296,34 @@
                     "_data": [
                         0.0008695123746307061
                     ]
+                },
+                "d_{DS_{3}}": {
+                    "_sym": "d_{DS_{3}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_DS_3",
+                    "_idx": 117,
+                    "_name": "DS_3 data per req",
+                    "description": "Data density for request in DS_3 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -4508,41 +4508,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{TAS_{5}}": {
-                    "_sym": "\\delta_{TAS_{5}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_TAS_5",
-                    "_idx": 128,
-                    "_name": "TAS_5 req data density",
-                    "description": "Data density for request in TAS_5 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{TAS_{5}}}": {
                     "_sym": "M_{act_{TAS_{5}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_TAS_5",
                     "_idx": 133,
                     "_name": "TAS_{5} active memory",
-                    "description": "Active memory used by processing requests in TAS_{5} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in TAS_{5} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -4572,7 +4544,7 @@
                     "_alias": "M_buf_TAS_5",
                     "_idx": 134,
                     "_name": "TAS_{5} buffer memory",
-                    "description": "Allocated buffer memory for the TAS_{5} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the TAS_{5} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -4717,6 +4689,34 @@
                     "_data": [
                         0.0004639652990311937
                     ]
+                },
+                "d_{TAS_{5}}": {
+                    "_sym": "d_{TAS_{5}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_TAS_5",
+                    "_idx": 128,
+                    "_name": "TAS_5 data per req",
+                    "description": "Data density for request in TAS_5 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         },
@@ -4901,41 +4901,13 @@
                     },
                     "_data": []
                 },
-                "\\delta_{TAS_{6}}": {
-                    "_sym": "\\delta_{TAS_{6}}",
-                    "_fwk": "CUSTOM",
-                    "_alias": "delta_TAS_6",
-                    "_idx": 139,
-                    "_name": "TAS_6 req data density",
-                    "description": "Data density for request in TAS_6 expected data per requests",
-                    "_cat": "IN",
-                    "relevant": true,
-                    "_dims": "D*S^-1",
-                    "_units": "kB/req",
-                    "_std_units": "bit/req",
-                    "_setpoint": 1064.0,
-                    "_min": 128.0,
-                    "_max": 2000.0,
-                    "_mean": 1064.0,
-                    "_std_setpoint": 1089536000.0,
-                    "_std_min": 131072000.0,
-                    "_std_max": 2048000000.0,
-                    "_std_mean": 1089536000.0,
-                    "_dist_type": "uniform",
-                    "_depends": [],
-                    "_dist_params": {
-                        "low": 131072000,
-                        "high": 2048000000
-                    },
-                    "_data": []
-                },
                 "M_{act_{TAS_{6}}}": {
                     "_sym": "M_{act_{TAS_{6}}}",
                     "_fwk": "CUSTOM",
                     "_alias": "M_act_TAS_6",
                     "_idx": 144,
                     "_name": "TAS_{6} active memory",
-                    "description": "Active memory used by processing requests in TAS_{6} (M_act = L \u00b7 delta).",
+                    "description": "Active memory used by processing requests in TAS_{6} (M_act = L · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -4965,7 +4937,7 @@
                     "_alias": "M_buf_TAS_6",
                     "_idx": 145,
                     "_name": "TAS_{6} buffer memory",
-                    "description": "Allocated buffer memory for the TAS_{6} queue (M_buf = K \u00b7 delta).",
+                    "description": "Allocated buffer memory for the TAS_{6} queue (M_buf = K · delta).",
                     "_cat": "CTRL",
                     "relevant": true,
                     "_dims": "D",
@@ -5110,6 +5082,34 @@
                     "_data": [
                         0.0004548966314111337
                     ]
+                },
+                "d_{TAS_{6}}": {
+                    "_sym": "d_{TAS_{6}}",
+                    "_fwk": "CUSTOM",
+                    "_alias": "d_TAS_6",
+                    "_idx": 139,
+                    "_name": "TAS_6 data per req",
+                    "description": "Data density for request in TAS_6 expected data per requests",
+                    "_cat": "IN",
+                    "relevant": true,
+                    "_dims": "D*S^-1",
+                    "_units": "kB/req",
+                    "_std_units": "bit/req",
+                    "_setpoint": 1064.0,
+                    "_min": 128.0,
+                    "_max": 2000.0,
+                    "_mean": 1064.0,
+                    "_std_setpoint": 1089536000.0,
+                    "_std_min": 131072000.0,
+                    "_std_max": 2048000000.0,
+                    "_std_mean": 1089536000.0,
+                    "_dist_type": "uniform",
+                    "_depends": [],
+                    "_dist_params": {
+                        "low": 131072000,
+                        "high": 2048000000
+                    },
+                    "_data": []
                 }
             }
         }
@@ -5122,7 +5122,7 @@
         "_labels": {
             "baseline": "Baseline: no adaptation. MAPE-K inert. TAS workflow and service catalogue as published in Weyns & Calinescu 2015 [1] Table III."
         },
-        "_note": "`_setpoint` names the default scenario for this config \u2014 the loader reads this scenario when no `--adaptation` CLI flag is given. `_routs[scenario][i][j]` = routing probability from node i to node j under `scenario`. Position i indexes into `_nodes[scenario]`. Diagonal captures per-service error probability; off-diagonal captures the TAS workflow routing.",
+        "_note": "`_setpoint` names the default scenario for this config — the loader reads this scenario when no `--adaptation` CLI flag is given. `_routs[scenario][i][j]` = routing probability from node i to node j under `scenario`. Position i indexes into `_nodes[scenario]`. Diagonal captures per-service error probability; off-diagonal captures the TAS workflow routing.",
         "_nodes": {
             "baseline": [
                 "TAS_{1}",
