@@ -8,18 +8,9 @@ study. Three layers, kept separate so each can be unit-tested
 independently.
 
 Public API:
-    - `solve_jackson_lambdas(P, lambda_z)` pure linear solve of
-      `(I - P^T) lamb = lamb_z`, returning the per-node effective
-      arrival rates.
-    - `solve_network(cfg)` takes a resolved `NetworkConfig`, builds a
-      `Queue` per artifact with the Jackson-solved `lamb`, calls
-      `calculate_metrics()`, and returns a pandas DataFrame with one
-      row per node.
-    - rho-indexed helpers (`per_artifact_lambdas`, `per_artifact_rhos`,
-      `lambda_z_for_rho`, `build_rho_grid`) drive the inverse
-      direction used by the experiment orchestrator to build the
-      rho-indexed operating-point grid. Since Jackson is linear in
-      lambda_z, the inversion is one division.
+    - `solve_jackson_lambdas(P, lambda_z)` pure linear solve of `(I - P^T) lamb = lamb_z`, returning the per-node effective arrival rates.
+    - `solve_network(cfg)` takes a resolved `NetworkConfig`, builds a `Queue` per artifact with the Jackson-solved `lamb`, calls `calculate_metrics()`, and returns a pandas DataFrame with one row per node.
+    - rho-indexed helpers (`per_artifact_lambdas`, `per_artifact_rhos`, `lambda_z_for_rho`, `build_rho_grid`) drive the inverse direction used by the experiment orchestrator to build the rho-indexed operating-point grid. Since Jackson is linear in lambda_z, the inversion is one division.
 
 *IMPORTANT:* the routing matrix in `cfg.routing` is stored with
 `row = source, col = dest`, so it is transposed before solving the
@@ -79,7 +70,8 @@ def solve_network(cfg: NetworkConfig) -> pd.DataFrame:
         pd.DataFrame: one row per artifact with columns `node`, `key`, `name`, `type`, `lambda`, `mu`, `c`, `K`, `rho`, `L`, `Lq`, `W`, `Wq`.
     """
     # solve the traffic equations once for the whole network
-    _lambdas = solve_jackson_lambdas(cfg.routing, cfg.lambda_z_vector())
+    _lambdas = solve_jackson_lambdas(cfg.routing,
+                                     cfg.build_lam_z_vec())
 
     # accumulators for per-node rows and any unstable nodes found
     _rows: List[dict] = []
@@ -150,7 +142,7 @@ def per_artifact_lambdas(cfg: NetworkConfig,
     Returns:
         np.ndarray: per-artifact λ_i in artifact-declaration order.
     """
-    _lam_z_vec = np.asarray(cfg.lambda_z_vector(), dtype=float)
+    _lam_z_vec = np.asarray(cfg.build_lam_z_vec(), dtype=float)
     _total = float(_lam_z_vec.sum())
     if _total <= 0:
         # profile has no external arrivals declared; treat the first
