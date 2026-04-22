@@ -3,21 +3,31 @@
 Module test_client.py
 =====================
 
-Unit tests for `src.experiment.client`. Uses `httpx.MockTransport` so
-nothing depends on spinning up the real apparatus — every test runs in
-well under a second. Covers:
+Unit tests for `src.experiment.client`. Use `httpx.MockTransport` so
+nothing depends on spinning up the real apparatus; every test runs in
+well under a second.
 
-    - **TestInvocationRecord** `status_code` / `success` → `infra_failure` / `business_failure` / `response_time_s` derived properties.
+    - **TestInvocationRecord** `(status_code, success)` maps to
+      `infra_failure` / `business_failure` / `response_time_s` derived
+      properties.
     - **TestCascadeConfigDefaults** dataclass defaults.
     - **TestRampConfigDefaults** dataclass defaults.
-    - **TestClientConfigKindWeights** `ClientConfig` kind-weights validation happens at `ClientSimulator.__init__` time (not at dataclass construction).
-    - **TestPickKind** `_pick_kind` respects the declared weights under a seeded RNG + is deterministic given the same seed.
-    - **TestValidateRamp** min_samples_per_kind floor, rates monotonicity, cascade mode, threshold + window bounds.
-    - **TestBuildRampCfg** builds a `RampConfig` + `CascadeConfig` from a dict; validates first.
+    - **TestClientConfigKindWeights** `ClientConfig` kind-weights
+      validation fires at `ClientSimulator.__init__` time, not at
+      dataclass construction.
+    - **TestPickKind** `_pick_kind` respects the declared weights under
+      a seeded RNG and is deterministic given the same seed.
+    - **TestValidateRamp** min_samples_per_kind floor, rates
+      monotonicity, cascade mode, threshold and window bounds.
+    - **TestBuildRampCfg** builds a `RampConfig` plus `CascadeConfig`
+      from a dict; validates first.
     - **TestCascadeDetectorFailFast** trips on the first infra failure.
-    - **TestCascadeDetectorRolling` trips only once the threshold is breached over a full window.
-    - **TestSendOne** payload blob + size_bytes + X-Request-* headers propagate to the outbound request.
-    - **TestProbeStopsOnCascade** `_probe_at_rate` reports `cascade: ...` when the detector trips.
+    - **TestCascadeDetectorRolling** trips only once the threshold is
+      breached over a full window.
+    - **TestSendOne** payload blob, `size_bytes`, and `X-Request-*`
+      headers propagate to the outbound request.
+    - **TestProbeStopsOnCascade** `_probe_at_rate` reports `cascade: ...`
+      when the detector trips.
 """
 # native python modules
 import asyncio
@@ -172,7 +182,7 @@ class TestPickKind:
         _counts: Dict[str, int] = {"A": 0, "B": 0}
         for _ in range(10_000):
             _counts[_sim._pick_kind()] += 1
-        # 75/25 draw: expect ~7500 A, ~2500 B — generous ±300 tolerance
+        # 75/25 draw: expect ~7500 A, ~2500 B with generous +/-300 tolerance
         assert abs(_counts["A"] - 7500) < 300
         assert abs(_counts["B"] - 2500) < 300
 
@@ -290,7 +300,7 @@ class TestCascadeDetectorRolling:
     def test_below_threshold_no_trip(self):
         _d = _CascadeDetector(CascadeConfig(mode="rolling",
                                             threshold=0.5, window=10))
-        # 4 infra of 10 → 0.4 < 0.5 → no trip
+        # 4 infra of 10 -> 0.4 < 0.5 -> no trip
         for _ in range(4):
             _d.observe(_rec(503, False))
         for _ in range(6):
@@ -300,11 +310,11 @@ class TestCascadeDetectorRolling:
     def test_above_threshold_trip_only_after_window_fills(self):
         _d = _CascadeDetector(CascadeConfig(mode="rolling",
                                             threshold=0.3, window=10))
-        # first 9 are infra; window not full yet → no trip
+        # first 9 are infra; window not full yet -> no trip
         for _ in range(9):
             _d.observe(_rec(503, False))
             assert _d.tripped is False
-        # 10th fills the window → 9/10 = 0.9 > 0.3 → trip
+        # 10th fills the window -> 9/10 = 0.9 > 0.3 -> trip
         _d.observe(_rec(503, False))
         assert _d.tripped is True
         assert "rolling" in _d.trip_reason
@@ -364,7 +374,7 @@ class TestProbeStopsOnCascade:
 
     @pytest.mark.asyncio
     async def test_cascade_stops_probe(self):
-        # every request returns 503 → fail_fast trips on the first observation
+        # every request returns 503 -> fail_fast trips on the first observation
         def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, json={"detail": "buffer full"})
 

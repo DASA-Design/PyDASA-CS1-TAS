@@ -12,14 +12,16 @@ through the in-process mesh. Prints:
     - the response body received
     - the client-side `InvocationRecord` (status, success flags)
 
-No ramp is driven — just one send — so this runs in a couple of
-seconds instead of minutes. Run:
+No ramp is driven; just one send, so this runs in a couple of seconds
+instead of minutes.
 
-    python scripts/demo/demo_client.py
+Run:
+    python src/scripts/demo_client.py
 """
 import asyncio
 import random
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -27,31 +29,35 @@ _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
 sys.path.insert(0, str(_ROOT))
 
-import httpx
+import httpx   # noqa: E402
 
-from src.experiment.client import (CascadeConfig,
+from src.experiment.client import (CascadeConfig,  # noqa: E402
                                    ClientConfig,
                                    ClientSimulator,
+                                   InvocationRecord,
                                    RampConfig)
-from src.experiment.core import ServiceRequest
-from src.experiment.launcher import ExperimentLauncher
-from src.experiment.payload import generate as _generate_payload
-from src.experiment.payload import size_for_kind
-from src.io import load_method_config, load_profile
+from src.experiment.launcher import ExperimentLauncher  # noqa: E402
+from src.experiment.payload import generate_payload as _generate_payload  # noqa: E402
+from src.experiment.payload import resolve_size_for_kind  # noqa: E402
+from src.experiment.services import ServiceRequest  # noqa: E402
+from src.io import load_method_config, load_profile  # noqa: E402
 
 
-def _banner(_s: str) -> None:
+def _banner(s: str) -> None:
+    """*_banner()* print a centred header band to stdout."""
     print()
     print("=" * 72)
-    print(f"  {_s}")
+    print(f"  {s}")
     print("=" * 72)
 
 
 async def _demo() -> None:
+    """*_demo()* spin up the launcher, send one request, show the InvocationRecord."""
     _cfg = load_profile(adaptation="baseline")
     _mcfg = load_method_config("experiment")
-    # keep the ramp tiny; we send ONE request manually below so ramp config
-    # values don't really matter but must be present to satisfy validation
+    # keep the ramp tiny; we send ONE request manually below so ramp
+    # config values do not really matter but must be present to satisfy
+    # validation
     _mcfg["ramp"] = {"min_samples_per_kind": 32,
                      "max_probe_window_s": 5.0,
                      "rates": [2.0],
@@ -87,9 +93,10 @@ async def _demo() -> None:
 
         # ---- 2. show how _send_one would build + send a request ------
         _banner("2. build one ServiceRequest (kind + real ASCII payload)")
-        _kind = "TAS_{2}"   # route medical request into the TAS mesh
-        _size = size_for_kind(_client_cfg.request_sizes_by_kind, _kind,
-                              default=_client_cfg.request_size_bytes)
+        # route a medical request into the TAS mesh
+        _kind = "TAS_{2}"
+        _size = resolve_size_for_kind(_client_cfg.request_sizes_by_kind, _kind,
+                                      default=_client_cfg.request_size_bytes)
         _payload = _generate_payload(_kind, _size,
                                      rng=random.Random(_seed))
         _req = ServiceRequest(request_id=str(uuid.uuid4()),
@@ -101,11 +108,11 @@ async def _demo() -> None:
         print(f"  size_bytes       = {_req.size_bytes}")
         print(f"  payload.kind     = {_req.payload['kind']!r}")
         print(f"  payload.blob[:60]= {_req.payload['blob'][:60]!r}...")
-        print(f"  entry URL        = {_lnc.registry.invoke_url('TAS_{1}')}")
+        print(f"  entry URL        = {_lnc.registry.build_invoke_url('TAS_{1}')}")
 
         # ---- 3. actually send it ----
         _banner("3. HTTP POST to the TAS entry and observe the response")
-        _url = _lnc.registry.invoke_url("TAS_{1}")
+        _url = _lnc.registry.build_invoke_url("TAS_{1}")
         _headers = {"X-Request-Id": _req.request_id,
                     "X-Request-Size-Bytes": str(_req.size_bytes),
                     "X-Request-Kind": _req.kind}
@@ -121,20 +128,19 @@ async def _demo() -> None:
             print(f"  HTTP error: {_exc}")
 
         # ---- 4. the client-side InvocationRecord shape ----
-        # No second HTTP send — we construct the record directly from
+        # No second HTTP send; we construct the record directly from
         # step 3's response. Calling `_sim._send_one()` here would fire
         # another request through the mesh and this demo is meant to
         # terminate quickly; the record shape is the interesting thing.
         _banner("4. what an InvocationRecord would look like post-send")
-        import time as _time
-        from src.experiment.client import InvocationRecord as _InvRec
         _body = _r.json()
-        _rec = _InvRec(
+        _rec = InvocationRecord(
             request_id=_req.request_id,
             kind=_req.kind,
             size_bytes=_req.size_bytes,
-            send_ts=_time.time() - 0.01,   # placeholder: 10 ms before now
-            recv_ts=_time.time(),
+            # placeholder: 10 ms before now
+            send_ts=time.time() - 0.01,
+            recv_ts=time.time(),
             status_code=_r.status_code,
             success=bool(_body.get("success", False)),
         )
@@ -152,13 +158,14 @@ async def _demo() -> None:
         print("  stopping ExperimentLauncher context manager...")
 
     # once the launcher's __aexit__ returns (client aclose + transport
-    # aclose), we're back at the async-fn top level with nothing left to
-    # do except print the farewell banner.
-    _banner("demo complete — exiting")
+    # aclose), we're back at the async-fn top level with nothing left
+    # to do except print the farewell banner.
+    _banner("demo complete; exiting")
     print("  ok")
 
 
 def main() -> None:
+    """*main()* entry point: run the async demo to completion."""
     asyncio.run(_demo())
 
 
