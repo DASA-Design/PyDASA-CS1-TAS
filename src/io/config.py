@@ -5,15 +5,29 @@ Module config.py
 
 Profile + scenario loader for the CS-01 TAS case study.
 
-Resolves a `(profile, scenario)` selection into a flat `NetworkConfig` by reading the PACS-style JSONs under `data/config/profile/`. Expected envelope shape:
+Resolves a `(profile, scenario)` selection into a flat
+`NetworkConfig` by reading the PACS-style JSONs under
+`data/config/profile/`.
+
+Expected envelope shape::
 
     environments._setpoint  -> default scenario when --adaptation is absent
-    environments._nodes -> {scenario: [artifact_key, ... 13 entries]}
-    environments._routs -> {scenario: [[13x13 matrix]]}
-    environments._labels -> {scenario: str}
-    artifacts[<key>] -> {name, type, lambda_z, L_z, vars: {sym: {...}}}
+    environments._nodes     -> {scenario: [artifact_key, ... 13 entries]}
+    environments._routs     -> {scenario: [[13x13 matrix]]}
+    environments._labels    -> {scenario: str}
+    artifacts[<key>]        -> {name, type, lambda_z, L_z, vars: {sym: {...}}}
 
-*IMPORTANT:* for the `opti` profile, `_nodes[scenario]` at the three swap slots picks different artifacts per scenario:
+Public API:
+    - `ArtifactSpec` frozen per-node dataclass with setpoint
+      accessors (`mu`, `c`, `K`, `epsilon`, `d_kb`, `d_bytes`).
+    - `NetworkConfig` normalised view of a resolved (profile,
+      scenario) pair.
+    - `load_profile(adaptation, profile, scenario)` main loader.
+    - `load_method_config(name)` method-config JSON reader.
+    - `load_reference(name)` reference-file JSON reader.
+
+*IMPORTANT:* for the `opti` profile, `_nodes[scenario]` at the three
+swap slots picks different artifacts per scenario:
 
     - slot  5: s1 -> MAS_3 (dflt);  s2 / aggregate -> MAS_4 (opti)
     - slot  8: s1 -> AS_3  (dflt);  s2 / aggregate -> AS_4  (opti)
@@ -53,52 +67,42 @@ _ADAPTATION_TO_SOURCE: Dict[str, Tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class ArtifactSpec:
-    """**ArtifactSpec** captures one node's full spec, resolved from the profile + scenario load.
+    """**ArtifactSpec** one node's full spec, resolved from the profile + scenario load.
 
     Attributes:
-        key (str): artifact key in the PACS envelope (e.g. `TAS_1`).
+        key (str): artifact key in the PACS envelope (e.g. `TAS_{1}`).
         name (str): human-readable name.
         type_ (str): queue model string (e.g. `M/M/c/K`).
         lambda_z (float): external arrival rate entering this node.
         L_z (float): external queue length initialisation (currently 0).
-        vars (Dict[str, dict]): PyDASA `Variable`-dict block, keyed by LaTeX symbol (e.g. `\\mu_{TAS_{1}}`).
+        vars (Dict[str, dict]): PyDASA `Variable`-dict block, keyed by
+            LaTeX symbol (e.g. `\\mu_{TAS_{1}}`).
     """
 
-    # :attr: key
     key: str
-    """Artifact key in the PACS envelope (e.g. `TAS_1`)."""
 
-    # :attr: name
     name: str
-    """Human-readable name."""
 
-    # :attr: type_
     type_: str
-    """Queue model string (e.g. `M/M/c/K`)."""
 
-    # :attr: lambda_z
     lambda_z: float
-    """External arrival rate entering this node."""
 
-    # :attr: L_z
     L_z: float
-    """External queue length initialisation (currently 0)."""
 
-    # :attr: vars
     vars: Dict[str, dict]
-    """PyDASA `Variable`-dict block, keyed by LaTeX symbol."""
 
     def _setpoint(self, prefix: str) -> float:
-        """*_setpoint()* returns the `_setpoint` of the first variable whose LaTeX symbol starts with `prefix`.
+        """*_setpoint()* read the `_setpoint` of the first variable whose LaTeX symbol starts with `prefix`.
 
         Args:
-            prefix (str): LaTeX-symbol prefix including the artifact's own subscript (e.g. `\\mu_{TAS_{1}}`).
+            prefix (str): LaTeX-symbol prefix including the artifact's
+                own subscript (e.g. `\\mu_{TAS_{1}}`).
 
         Raises:
-            KeyError: If no variable on this artifact matches the prefix.
+            KeyError: when no variable on this artifact matches the prefix.
 
         Returns:
-            float: the setpoint value of the matching variable.
+            float: setpoint value of the matching variable.
         """
         # walk the variable dict and return the first match
         for _sym, _var in self.vars.items():
@@ -107,15 +111,15 @@ class ArtifactSpec:
         raise KeyError(f"no variable with prefix {prefix!r} on {self.key}")
 
     def _sub(self) -> str:
-        """*_sub()* returns the LaTeX subscript form of the artifact key.
+        """*_sub()* return the LaTeX subscript form of the artifact key.
 
         Since `data/config/profile/*.json` was migrated to store keys
-        already in LaTeX form (e.g. `TAS_{1}`), this is just an identity
-        pass-through kept for API compatibility with callers that were
-        written against the old `TAS_1` flat-key convention.
+        already in LaTeX form (e.g. `TAS_{1}`), this is an identity
+        pass-through kept for API compatibility with callers written
+        against the old `TAS_1` flat-key convention.
 
         Returns:
-            str: the artifact key verbatim (already a LaTeX subscript).
+            str: artifact key verbatim (already a LaTeX subscript).
         """
         return self.key
 
@@ -139,40 +143,50 @@ class ArtifactSpec:
         """*epsilon* per-node failure rate setpoint for this artifact."""
         return self._setpoint(f"\\epsilon_{{{self._sub()}}}")
 
+    @property
+    def d_kb(self) -> float:
+        """*d_kb* request data density in kB per request; reads the profile key `d_{<artifact>}` (setpoint in kB/req)."""
+        return self._setpoint(f"d_{{{self._sub()}}}")
+
+    @property
+    def d_bytes(self) -> int:
+        """*d_bytes* expected request size in bytes at this artifact.
+
+        Read from the profile's `d_{<artifact>}` variable (kB/req)
+        and converted to bytes (1 kB = 1024 bytes) so the apparatus
+        can size mock payloads and memory buffers against a single
+        declarative source.
+        """
+        return int(round(self.d_kb * 1024))
+
 
 @dataclass(frozen=True)
 class NetworkConfig:
-    """**NetworkConfig** is the normalised view of a resolved (profile, scenario) pair.
+    """**NetworkConfig** normalised view of a resolved (profile, scenario) pair.
 
-    `artifacts` is a list of 13 entries in the positional order given by `environments._nodes[scenario]`. `routing` is the 13x13 matrix aligned with that order.
+    `artifacts` is a list of 13 (or 16 for the opti profile) entries
+    in the positional order given by `environments._nodes[scenario]`.
+    `routing` is the matching NxN matrix aligned with that order.
 
     Attributes:
         profile (str): profile file stem (`dflt` or `opti`).
         scenario (str): scenario name within the profile.
         label (str): human-readable scenario label (from `_labels`).
-        artifacts (List[ArtifactSpec]): 13 resolved artifact specs.
-        routing (np.ndarray): 13x13 routing-probability matrix, `row = source`, `col = dest`.
+        artifacts (List[ArtifactSpec]): resolved artifact specs in
+            positional order.
+        routing (np.ndarray): NxN routing-probability matrix;
+            `row = source`, `col = dest`.
     """
 
-    # :attr: profile
     profile: str
-    """Profile file stem (`dflt` or `opti`)."""
 
-    # :attr: scenario
     scenario: str
-    """Scenario name within the profile."""
 
-    # :attr: label
     label: str
-    """Human-readable scenario label (from `_labels`)."""
 
-    # :attr: artifacts
     artifacts: List[ArtifactSpec]
-    """13 resolved artifact specs in positional order."""
 
-    # :attr: routing
     routing: np.ndarray
-    """NxN routing-probability matrix (row=source, col=dest)."""
 
     @property
     def n_nodes(self) -> int:
@@ -180,15 +194,15 @@ class NetworkConfig:
         return len(self.artifacts)
 
     def node_keys(self) -> List[str]:
-        """*node_keys()* returns the artifact keys in positional order.
+        """*node_keys()* return the artifact keys in positional order.
 
         Returns:
-            List[str]: list of artifact keys aligned with `routing`.
+            List[str]: artifact keys aligned with `routing`.
         """
         return [_a.key for _a in self.artifacts]
 
     def lambda_z_vector(self) -> np.ndarray:
-        """*lambda_z_vector()* returns the external arrivals per node.
+        """*lambda_z_vector()* return the external arrivals per node.
 
         Returns:
             np.ndarray: `(n_nodes,)` vector of external arrival rates.
@@ -201,14 +215,14 @@ def _resolve_source(
     profile: Optional[str],
     scenario: Optional[str],
 ) -> Tuple[str, str]:
-    """*_resolve_source()* maps the user-facing arguments to the (profile_stem, scenario_name) tuple read from disk.
+    """*_resolve_source()* map user-facing arguments to the (profile_stem, scenario_name) tuple on disk.
 
     Precedence:
 
-        1. Explicit (profile, scenario) wins if both are given.
+        1. Explicit (profile, scenario) wins when both are given.
         2. `adaptation` maps via `_ADAPTATION_TO_SOURCE`.
-        3. `profile` alone -> use that profile's `_setpoint` scenario.
-        4. Nothing given -> default to `("dflt", "baseline")`.
+        3. `profile` alone uses that profile's `_setpoint` scenario.
+        4. Nothing given defaults to `("dflt", "baseline")`.
 
     Args:
         adaptation (Optional[str]): adaptation value or None.
@@ -216,7 +230,7 @@ def _resolve_source(
         scenario (Optional[str]): scenario name or None.
 
     Raises:
-        ValueError: If `adaptation` is given but not in the registry.
+        ValueError: when `adaptation` is given but not in the registry.
 
     Returns:
         Tuple[str, str]: `(profile_stem, scenario_name)`.
@@ -244,13 +258,13 @@ def _resolve_source(
 
 
 def _read_profile(profile_stem: str) -> Dict[str, Any]:
-    """*_read_profile()* loads the raw PACS-style JSON for a profile.
+    """*_read_profile()* load the raw PACS-style JSON for a profile.
 
     Args:
         profile_stem (str): profile file stem (e.g. `dflt`, `opti`).
 
     Raises:
-        FileNotFoundError: If the profile file does not exist.
+        FileNotFoundError: when the profile file does not exist.
 
     Returns:
         Dict[str, Any]: parsed JSON envelope.
@@ -267,19 +281,27 @@ def load_profile(
     profile: Optional[str] = None,
     scenario: Optional[str] = None,
 ) -> NetworkConfig:
-    """*load_profile()* loads a resolved `NetworkConfig` for one
-    `(profile, scenario)` pair.
+    """*load_profile()* load a resolved `NetworkConfig` for one `(profile, scenario)` pair.
 
     Args:
-        adaptation (Optional[str]): one of `baseline`, `s1`, `s2`, `aggregate`. Maps to `(profile, scenario)` via `_ADAPTATION_TO_SOURCE`.
-        profile (Optional[str]): profile file stem (`dflt` or `opti`). Overrides `adaptation`'s implied profile if both given with `scenario`.
-        scenario (Optional[str]): explicit scenario name within the profile. Defaults to the profile's`environments._setpoint` when absent.
+        adaptation (Optional[str]): one of `baseline`, `s1`, `s2`,
+            `aggregate`. Maps to `(profile, scenario)` via
+            `_ADAPTATION_TO_SOURCE`.
+        profile (Optional[str]): profile file stem (`dflt` or `opti`);
+            overrides `adaptation`'s implied profile when paired with
+            `scenario`.
+        scenario (Optional[str]): explicit scenario name within the
+            profile. Defaults to the profile's
+            `environments._setpoint` when absent.
 
     Raises:
-        ValueError: If the scenario is not declared in the profile, or the routing matrix shape does not match the node count.
+        ValueError: when the scenario is not declared in the profile,
+            or when the routing matrix shape does not match the node
+            count.
 
     Returns:
-        NetworkConfig: 13 resolved artifacts + the aligned routing matrix for the requested scenario.
+        NetworkConfig: resolved artifacts plus the aligned routing
+            matrix for the requested scenario.
     """
     # resolve user args into a concrete (profile, scenario) pair
     _profile, _scenario = _resolve_source(adaptation, profile, scenario)
@@ -328,13 +350,13 @@ def load_profile(
 
 
 def load_method_config(name: str) -> Dict[str, Any]:
-    """*load_method_config()* loads `data/config/method/<name>.json` (e.g. `stochastic`, `experiment`).
+    """*load_method_config()* load `data/config/method/<name>.json` (e.g. `stochastic`, `experiment`).
 
     Args:
         name (str): method config file stem.
 
     Raises:
-        FileNotFoundError: If the method config does not exist.
+        FileNotFoundError: when the method config does not exist.
 
     Returns:
         Dict[str, Any]: parsed JSON contents.
@@ -347,15 +369,19 @@ def load_method_config(name: str) -> Dict[str, Any]:
 
 
 def load_reference(name: str = "baseline") -> Dict[str, Any]:
-    """*load_reference()* loads `data/reference/<name>.json`.
+    """*load_reference()* load `data/reference/<name>.json`.
 
-    These files hold case-study ground truth or validation targets that must not live inside the Python (e.g. the Camara 2023 R1 / R2 / R3 thresholds in `baseline.json`). Consumed by `src.analytic.metrics` and any other module that needs an external reference value.
+    These files hold case-study ground truth or validation targets
+    that must not live inside Python (e.g. the Camara 2023 R1 / R2 /
+    R3 thresholds in `baseline.json`). Consumed by
+    `src.analytic.metrics` and any other module that needs an
+    external reference value.
 
     Args:
         name (str): reference file stem. Defaults to `"baseline"`.
 
     Raises:
-        FileNotFoundError: If the reference file does not exist.
+        FileNotFoundError: when the reference file does not exist.
 
     Returns:
         Dict[str, Any]: parsed JSON contents.

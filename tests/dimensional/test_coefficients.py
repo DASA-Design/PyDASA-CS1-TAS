@@ -38,9 +38,10 @@ class TestCoefficientDerivation:
         }
         assert set(_derived.keys()) == _expected
 
-    def test_all_artifacts_get_four_coefficients(
-        self, schema, method_cfg, dflt_profile
-    ):
+    def test_all_artifacts_get_four_coefficients(self,
+                                                 schema,
+                                                 method_cfg,
+                                                 dflt_profile):
         """Every artifact in dflt.json yields 4 derived coefficients."""
         _artifacts = dflt_profile["artifacts"]
         for _artifact_key, _artifact in _artifacts.items():
@@ -57,10 +58,7 @@ class TestCoefficientDerivation:
 class TestCoefficientValues:
     """Numerical setpoints match the by-hand formulas evaluated at PyDASA's `_std_mean`.
 
-    Values are read from the engine at test time so the tests track whatever
-    is in `data/config/profile/dflt.json`; in particular the seeded values
-    written by `src.utils.seed_dim_from_analytic` after the analytic solver
-    is run.
+    Values are read from the engine at test time so the tests track whatever is in `data/config/profile/dflt.json`; in particular the seeded values written by `src.utils.seed_dim_from_analytic` after the analytic solver is run.
     """
 
     def test_theta_equals_L_over_K(self, engine_ready):
