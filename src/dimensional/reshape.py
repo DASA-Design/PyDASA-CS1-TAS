@@ -9,10 +9,10 @@ flat pandas shapes the existing `src.view.qn_diagram` plotters
 consume.
 
 Public API:
-    - `coefficients_to_nodes(result)` per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
-    - `coefficients_to_network(result, agg="mean")` single-row DataFrame of network-wide aggregates across artifacts.
-    - `coefficients_delta(nds_dflt, nds_other, *, pct=True)` the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
-    - `aggregate_architecture_coefficients(result, tag="TAS")` PACS- iter2-style architecture-level aggregate (sum first, divide after).
+    - `coefs_to_nodes(result)` per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
+    - `coefs_to_net(result, agg="mean")` single-row DataFrame of network-wide aggregates across artifacts.
+    - `coefs_delta(nds_dflt, nds_other, *, pct=True)` the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
+    - `aggregate_arch_coefs(result, tag="TAS")` PACS- iter2-style architecture-level aggregate (sum first, divide after).
     - `aggregate_sweep_to_arch(sweep_data, tag="TAS")` collapse per-artifact sweep arrays into flat architecture-level arrays.
     - `network_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
 
@@ -50,8 +50,8 @@ def _coef_column(full_sym: str) -> str:
     return _stem
 
 
-def coefficients_to_nodes(result: Dict[str, Any]) -> pd.DataFrame:
-    """*coefficients_to_nodes()* flattens per-artifact coefficients into a per-node DataFrame.
+def coefs_to_nodes(result: Dict[str, Any]) -> pd.DataFrame:
+    """*coefs_to_nodes()* flattens per-artifact coefficients into a per-node DataFrame.
 
     Args:
         result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`.
@@ -74,10 +74,10 @@ def coefficients_to_nodes(result: Dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(_rows)
 
 
-def coefficients_to_network(result: Dict[str, Any],
-                            *,
-                            agg: str = "mean") -> pd.DataFrame:
-    """*coefficients_to_network()* aggregates coefficient values across artifacts into a single-row network frame.
+def coefs_to_net(result: Dict[str, Any],
+                 *,
+                 agg: str = "mean") -> pd.DataFrame:
+    """*coefs_to_net()* aggregates coefficient values across artifacts into a single-row network frame.
 
     Args:
         result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`.
@@ -99,7 +99,7 @@ def coefficients_to_network(result: Dict[str, Any],
         raise ValueError(_msg)
 
     # reuse the per-node frame so the reducer sees a single numeric column
-    _nds = coefficients_to_nodes(result)
+    _nds = coefs_to_nodes(result)
     _row: Dict[str, float] = {"nodes": float(len(_nds))}
     for _c in _COEF_NAMES:
         if _c in _nds.columns:
@@ -107,12 +107,12 @@ def coefficients_to_network(result: Dict[str, Any],
     return pd.DataFrame([_row])
 
 
-def coefficients_delta(nds_dflt: pd.DataFrame,
-                       nds_other: pd.DataFrame,
-                       *,
-                       pct: bool = True,
-                       cname: str = "key") -> pd.DataFrame:
-    """*coefficients_delta()* computes the per-node coefficient delta between two scenarios.
+def coefs_delta(nds_dflt: pd.DataFrame,
+                nds_other: pd.DataFrame,
+                *,
+                pct: bool = True,
+                cname: str = "key") -> pd.DataFrame:
+    """*coefs_delta()* computes the per-node coefficient delta between two scenarios.
 
     Args:
         nds_dflt (pd.DataFrame): baseline per-node frame (reference).
@@ -147,12 +147,12 @@ def coefficients_delta(nds_dflt: pd.DataFrame,
     return _out
 
 
-def aggregate_architecture_coefficients(result: Dict[str, Any],
-                                        *,
-                                        tag: str = "TAS") -> pd.DataFrame:
-    """*aggregate_architecture_coefficients()* compute one architecture-level coefficient set by summing raw per-node variables first and dividing after; the PACS-iter2 aggregation pattern.
+def aggregate_arch_coefs(result: Dict[str, Any],
+                         *,
+                         tag: str = "TAS") -> pd.DataFrame:
+    """*aggregate_arch_coefs()* compute one architecture-level coefficient set by summing raw per-node variables first and dividing after; the PACS-iter2 aggregation pattern.
 
-    This answers *"what is the TAS as a WHOLE doing?"* rather than *"what is the typical node doing?"*. The per-node `coefficients_to_network` averages pre-computed per-node coefficients; this one sums raw L, K, lambda, ... across every artifact in the network and derives ONE theta / sigma / eta / phi / epsilon at the architecture level.
+    This answers *"what is the TAS as a WHOLE doing?"* rather than *"what is the typical node doing?"*. The per-node `coefs_to_net` averages pre-computed per-node coefficients; this one sums raw L, K, lambda, ... across every artifact in the network and derives ONE theta / sigma / eta / phi / epsilon at the architecture level.
 
     Aggregation rules (match `__OLD__/src/exports/dimensional_2_draft.py`):
 

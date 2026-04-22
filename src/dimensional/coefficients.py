@@ -15,7 +15,7 @@ Config-driven derivation of operationally meaningful coefficients (theta, sigma,
 `{pi[i]}` placeholders resolve to the i-th Pi coefficient key as it sits in `engine.coefficients` after `run_analysis()`. Must be called AFTER analysis, else no Pi-groups exist yet.
 
 Public API:
-    - `derive_coefficients(engine, specs, artifact_key)` apply every spec in order and return `{full_sym: Coefficient}` for the derived ones only.
+    - `derive_coefs(engine, specs, artifact_key)` apply every spec in order and return `{full_sym: Coefficient}` for the derived ones only.
 
 *IMPORTANT:* Pi-index ordering is stable across adaptations for a given artifact but can shift if the variable set changes. Re-verify with a spot test when the profile schema is edited.
 """
@@ -61,11 +61,11 @@ def _resolve_expr(expr_pattern: str, pi_keys: list[str]) -> str:
     return _PI_PAT.sub(_sub, expr_pattern)
 
 
-def derive_coefficients(engine: AnalysisEngine,
-                        specs: list[dict[str, Any]],
-                        *,
-                        artifact_key: str) -> dict[str, Any]:
-    """*derive_coefficients()* apply named coefficient specs to a post-analysis engine.
+def derive_coefs(engine: AnalysisEngine,
+                 specs: list[dict[str, Any]],
+                 *,
+                 artifact_key: str) -> dict[str, Any]:
+    """*derive_coefs()* apply named coefficient specs to a post-analysis engine.
 
     Each spec's `symbol` is subscripted with `artifact_key` so the final coefficient symbol becomes e.g. `\\theta_{TAS_{1}}`.
 

@@ -18,8 +18,7 @@ solver (no PyDASA round-trip):
     - theta = L / K              (Occupancy)
     - sigma = lambda * W / L     (Stall, ~1 in steady state)
     - eta   = chi * K / (mu * c) (Effective-yield)
-    - phi   = M_act / M_buf      (Memory-use, collapses to theta
-                                  under L * delta / K * delta)
+    - phi   = M_act / M_buf      (Memory-use, collapses to theta under L * delta / K * delta)
 
 *IMPORTANT:* the sweep is deterministic (not Monte Carlo). For
 stochastic sampling go through `src.methods.dimensional` plus the
@@ -51,8 +50,7 @@ def _setpoint(vars_block: Dict[str, Dict[str, Any]],
 
     Args:
         vars_block (Dict[str, Dict[str, Any]]): per-artifact `vars` dict.
-        prefix (str): LaTeX symbol prefix (e.g. `"\\lambda"`,
-            `"\\mu"`, `"K"`).
+        prefix (str): LaTeX symbol prefix (e.g. `"\\lambda"`, `"\\mu"`, `"K"`).
         artifact_key (str): artifact identifier in LaTeX subscript form.
 
     Raises:
@@ -226,7 +224,7 @@ def _find_max_stable_lambda_factor(cfg: NetworkConfig,
                                    c_int: int,
                                    util_threshold: float,
                                    iters: int = 40) -> float:
-    """*_find_max_stable_lambda_factor()* binary-searches the max scalar on `cfg.lambda_z_vector()` that keeps every Jackson-propagated rho below `util_threshold`.
+    """*_find_max_stable_lambda_factor()* binary-searches the max scalar on `cfg.build_lam_z_vec()` that keeps every Jackson-propagated rho below `util_threshold`.
 
     Args:
         cfg (NetworkConfig): resolved network configuration.
@@ -236,10 +234,10 @@ def _find_max_stable_lambda_factor(cfg: NetworkConfig,
         iters (int): binary-search iterations. Defaults to `40` (convergence to ~1e-12 relative).
 
     Returns:
-        float: the greatest factor `f` such that at `f * cfg.lambda_z_vector()` every node has `rho < util_threshold`. Returns `0.0` if the stable region is empty at this `(mu_vec, c_int)`.
+        float: the greatest factor `f` such that at `f * cfg.build_lam_z_vec()` every node has `rho < util_threshold`. Returns `0.0` if the stable region is empty at this `(mu_vec, c_int)`.
     """
     _P = cfg.routing
-    _lz = cfg.lambda_z_vector()
+    _lz = cfg.build_lam_z_vec()
 
     # initial bracket; hi is large enough that saturation is hit at any reasonable mu/c
     _lo = 0.0
@@ -295,7 +293,7 @@ def sweep_architecture(cfg: NetworkConfig,
     # pre-read per-node seeds for the scaling + failure-probability access
     _arts = cfg.artifacts
     _mu_base = np.array([float(_a.mu) for _a in _arts], dtype=float)
-    _lz_base = cfg.lambda_z_vector()
+    _lz_base = cfg.build_lam_z_vec()
 
     # per-node accumulators (lists now, ndarrays at return time)
     _per_art: Dict[str, Dict[str, List[float]]] = {}

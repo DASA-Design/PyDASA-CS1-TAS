@@ -23,7 +23,7 @@ import pytest
 from src.dimensional import (analyse_symbolic,
                              build_engine,
                              build_schema,
-                             derive_coefficients)
+                             derive_coefs)
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -70,10 +70,10 @@ def engine_bare(schema, tas1_vars):
 
 @pytest.fixture(scope="module")
 def engine_ready(schema, tas1_vars, method_cfg):
-    """*engine_ready()* TAS_{1} engine post `run_analysis()` + `derive_coefficients()`, setpoints evaluated.
+    """*engine_ready()* TAS_{1} engine post `run_analysis()` + `derive_coefs()`, setpoints evaluated.
 
     Returns:
-        tuple: `(engine, derived)` where `derived` is the 4-entry dict returned by `derive_coefficients`.
+        tuple: `(engine, derived)` where `derived` is the 4-entry dict returned by `derive_coefs`.
     """
     # build engine and run the Buckingham analysis
     _eng = build_engine("TAS_{1}", tas1_vars, schema)
@@ -84,8 +84,8 @@ def engine_ready(schema, tas1_vars, method_cfg):
         _c.calculate_setpoint()
 
     # derive named coefficients and evaluate their setpoints
-    _der = derive_coefficients(_eng, method_cfg["coefficients"],
-                               artifact_key="TAS_{1}")
+    _der = derive_coefs(_eng, method_cfg["coefficients"],
+                        artifact_key="TAS_{1}")
     for _c in _der.values():
         _c.calculate_setpoint()
 

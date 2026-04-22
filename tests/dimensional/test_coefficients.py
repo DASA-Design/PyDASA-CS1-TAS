@@ -13,7 +13,7 @@ Semantic pin: PyDASA's `Coefficient.calculate_setpoint()` evaluates at each vari
 """
 import pytest
 
-from src.dimensional import build_engine, derive_coefficients
+from src.dimensional import build_engine, derive_coefs
 
 
 def _std_mean(engine, sym: str) -> float:
@@ -47,7 +47,7 @@ class TestCoefficientDerivation:
         for _artifact_key, _artifact in _artifacts.items():
             _engine = build_engine(_artifact_key, _artifact["vars"], schema)
             _engine.run_analysis()
-            _derived = derive_coefficients(
+            _derived = derive_coefs(
                 _engine, method_cfg["coefficients"], artifact_key=_artifact_key
             )
             assert len(_derived) == 4, (
@@ -123,4 +123,4 @@ class TestExpressionGuardrails:
             }
         ]
         with pytest.raises(IndexError, match="pi\\[99\\]"):
-            derive_coefficients(_engine, _bad_spec, artifact_key="TAS_{1}")
+            derive_coefs(_engine, _bad_spec, artifact_key="TAS_{1}")
