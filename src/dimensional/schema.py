@@ -26,7 +26,7 @@ def build_schema(fdus: list[dict[str, Any]],
     """*build_schema()* construct a PyDASA `Schema` from a list of FDU dicts.
 
     Args:
-        fdus (list[dict[str, Any]]): FDU dicts with keys `_idx`, `_sym`, `_fwk`, `_name`, `_unit`, `description`. Shape must match `Schema._fdu_lt`; typically loaded from`data/config/method/dimensional.json`.
+        fdus (list[dict[str, Any]]): FDU dicts with keys `_idx`, `_sym`, `_fwk`, `_name`, `_unit`, `description`. Shape must match `Schema._fdu_lt`; typically loaded from `data/config/method/dimensional.json`.
         fwk (str): framework name; every FDU's `_fwk` field must match this. Defaults to `"CUSTOM"`.
 
     Raises:
@@ -42,7 +42,8 @@ def build_schema(fdus: list[dict[str, Any]],
         _msg = f"FDUs with _fwk != {fwk!r}: {_syms}"
         raise ValueError(_msg)
 
-    # build the pydasa Schema and run its setup routine
-    _sch = Schema(_fwk=fwk, _fdu_lt=list(fdus), _idx=0)  # type: ignore[call-arg]
+    _sch = Schema(_fwk=fwk,
+                  _fdu_lt=list(fdus),
+                  _idx=0)  # type: ignore[call-arg]
     _sch._setup_fdus()
     return _sch
