@@ -18,8 +18,7 @@ independent stack. It does NOT reproduce the original authors'
 ReSeP / Java numbers.
 
 Public API:
-    - `run(adp, prf, scn, wrt, method_cfg=None)` standard
-      orchestrator contract.
+    - `run(adp, prf, scn, wrt, method_cfg=None)` standard orchestrator contract.
     - `main()` CLI entry point.
 
 CLI::
@@ -56,19 +55,15 @@ _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
 
 
-def _service_df_from_logs(cfg: NetworkConfig,
-                          log_dir: Path,
-                          duration_s: float) -> pd.DataFrame:
-    """*_service_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs.
+def _build_svc_df_from_logs(cfg: NetworkConfig,
+                            log_dir: Path,
+                            duration_s: float) -> pd.DataFrame:
+    """*_build_svc_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs.
 
     Cleanly separates two failure modes:
 
-        - `epsilon`: Bernoulli business failure
-          `count(200 AND success=False) / count(200)`. Directly
-          comparable to the profile's `_setpoint` for epsilon (what
-          R1 validates).
-        - `buffer_reject_rate`: `count(503) / count(all)`. Capacity
-          overflow, not a reliability signal.
+        - `epsilon`: Bernoulli business failure `count(200 AND success=False) / count(200)`. Directly comparable to the profile's `_setpoint` for epsilon (what R1 validates).
+        - `buffer_reject_rate`: `count(503) / count(all)`. Capacity overflow, not a reliability signal.
 
     Both are stored on the DataFrame; downstream R1 checks use
     `epsilon` only.
@@ -76,12 +71,10 @@ def _service_df_from_logs(cfg: NetworkConfig,
     Args:
         cfg (NetworkConfig): resolved profile + scenario.
         log_dir (Path): directory carrying `<service>.csv` files.
-        duration_s (float): wall-clock duration the measurement
-            covers; used to compute lambda.
+        duration_s (float): wall-clock duration the measurement covers; used to compute lambda.
 
     Returns:
-        pd.DataFrame: one row per artifact with the analytic-schema
-            columns plus `buffer_reject_rate`.
+        pd.DataFrame: one row per artifact with the analytic-schema columns plus `buffer_reject_rate`.
     """
     _rows: List[Dict[str, Any]] = []
 
@@ -156,23 +149,20 @@ def _service_df_from_logs(cfg: NetworkConfig,
     return pd.DataFrame(_rows)
 
 
-async def _async_run(cfg: NetworkConfig,
+async def _run_async(cfg: NetworkConfig,
                      method_cfg: Dict[str, Any],
                      adp: str,
                      log_dir: Path) -> Dict[str, Any]:
-    """*_async_run()* drive one adaptation end-to-end: launch mesh, snapshot effective config (FR-3.3), run ramp, flush logs.
+    """*_run_async()* drive one adaptation end-to-end: launch mesh, snapshot effective config (FR-3.3), run ramp, flush logs.
 
     Args:
         cfg (NetworkConfig): resolved profile + scenario.
         method_cfg (Dict[str, Any]): experiment method config.
-        adp (str): adaptation label (`baseline` / `s1` / `s2` /
-            `aggregate`).
-        log_dir (Path): directory that receives the per-service CSVs
-            and the config snapshot.
+        adp (str): adaptation label (`baseline` / `s1` / `s2` / `aggregate`).
+        log_dir (Path): directory that receives the per-service CSVs and the config snapshot.
 
     Returns:
-        Dict[str, Any]: ramp output plus `duration_s` and
-            `service_log_counts`.
+        Dict[str, Any]: ramp output plus `duration_s` and `service_log_counts`.
     """
     async with ExperimentLauncher(cfg=cfg,
                                   method_cfg=method_cfg,
@@ -231,19 +221,14 @@ def run(adp: Optional[str] = None,
     """*run()* execute the architectural experiment for one (profile, scenario) pair.
 
     Args:
-        adp (Optional[str]): adaptation value; one of `baseline`,
-            `s1`, `s2`, `aggregate`.
+        adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`.
         prf (Optional[str]): profile stem (`dflt` / `opti`).
         scn (Optional[str]): explicit scenario name.
-        wrt (bool): if True, write artifacts under
-            `data/results/experiment/<scenario>/`. Defaults to True.
-        method_cfg (Optional[Dict[str, Any]]): inline config override;
-            used by `_QUICK_CFG` tests to skip the JSON read.
+        wrt (bool): if True, write artifacts under `data/results/experiment/<scenario>/`. Defaults to True.
+        method_cfg (Optional[Dict[str, Any]]): inline config override; used by `_QUICK_CFG` tests to skip the JSON read.
 
     Returns:
-        Dict[str, Any]: result envelope with `config`,
-            `method_config`, `nodes`, `network`, `requirements`,
-            `probes`, `saturation_rate`, `stopped_reason`, `paths`.
+        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `paths`.
     """
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
     _mcfg = (method_cfg if method_cfg is not None
@@ -253,13 +238,13 @@ def run(adp: Optional[str] = None,
     if wrt:
         _log_dir = _RESULTS_DIR / _cfg.scenario / _cfg.profile
         _log_dir.mkdir(parents=True, exist_ok=True)
-        _run_out = asyncio.run(_async_run(_cfg, _mcfg, _adp, _log_dir))
-        _nds = _service_df_from_logs(_cfg, _log_dir, _run_out["duration_s"])
+        _run_out = asyncio.run(_run_async(_cfg, _mcfg, _adp, _log_dir))
+        _nds = _build_svc_df_from_logs(_cfg, _log_dir, _run_out["duration_s"])
     else:
         with tempfile.TemporaryDirectory() as _tmp_str:
             _log_dir = Path(_tmp_str)
-            _run_out = asyncio.run(_async_run(_cfg, _mcfg, _adp, _log_dir))
-            _nds = _service_df_from_logs(_cfg, _log_dir,
+            _run_out = asyncio.run(_run_async(_cfg, _mcfg, _adp, _log_dir))
+            _nds = _build_svc_df_from_logs(_cfg, _log_dir,
                                          _run_out["duration_s"])
 
     _net = aggregate_network(_nds)
@@ -293,18 +278,14 @@ def _write_results(cfg: NetworkConfig,
 
     Args:
         cfg (NetworkConfig): resolved profile + scenario.
-        method_cfg (Dict[str, Any]): experiment method config,
-            copied verbatim into the envelope so the run is
-            self-describing on disk.
+        method_cfg (Dict[str, Any]): experiment method config, copied verbatim into the envelope so the run is self-describing on disk.
         nds (pd.DataFrame): per-service metrics frame.
         net (pd.DataFrame): network aggregate (one row).
         req (dict): R1 / R2 / R3 verdict dict.
-        run_out (Dict[str, Any]): async runtime output (probes,
-            saturation, counts).
+        run_out (Dict[str, Any]): async runtime output (probes, saturation, counts).
 
     Returns:
-        Dict[str, str]: on-disk paths keyed by `profile` and
-            `requirements`, relative to the repo root.
+        Dict[str, str]: on-disk paths keyed by `profile` and `requirements`, relative to the repo root.
     """
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
@@ -329,7 +310,7 @@ def _write_results(cfg: NetworkConfig,
         "saturation_rate": run_out["saturation_rate"],
         "stopped_reason": run_out["stopped_reason"],
         "routing": cfg.routing.tolist(),
-        "lambda_z": cfg.lambda_z_vector().tolist(),
+        "lambda_z": cfg.build_lam_z_vec().tolist(),
     }
 
     _profile_path = _out_dir / f"{cfg.profile}.json"

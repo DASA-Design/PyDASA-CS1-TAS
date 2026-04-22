@@ -8,11 +8,7 @@ study. Mirrors the analytic method's contract call-for-call so the
 two can be compared directly downstream.
 
 Public API:
-    - `run(adp, prf, scn, wrt)` loads a resolved `NetworkConfig`
-      (same `profile/*.json` as analytic) plus the stochastic method
-      config (`data/config/method/stochastic.json`), runs the DES
-      engine (`src.stochastic.solve_network`), and returns per-node
-      metrics + network aggregate + R1 / R2 / R3 verdict.
+    - `run(adp, prf, scn, wrt)` loads a resolved `NetworkConfig` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_network`), and returns per-node metrics + network aggregate + R1 / R2 / R3 verdict.
 
 Aggregation and threshold checks reuse `src.analytic.metrics`
 (`aggregate_network` / `check_requirements`) since the math is
@@ -61,32 +57,21 @@ def run(adp: Optional[str] = None,
     Optionally writes the JSON artifacts to disk.
 
     Args:
-        adp (Optional[str]): adaptation value; one of `baseline`,
-            `s1`, `s2`, `aggregate`. Resolves to (profile, scenario)
-            via `src.io.load_profile`.
-        prf (Optional[str]): profile file stem (`dflt` or `opti`);
-            overrides `adp`'s implied profile when paired with `scn`.
+        adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`. Resolves to (profile, scenario) via `src.io.load_profile`.
+        prf (Optional[str]): profile file stem (`dflt` or `opti`); overrides `adp`'s implied profile when paired with `scn`.
         scn (Optional[str]): explicit scenario name within the profile.
-        wrt (bool): if True, write JSON artifacts under
-            `data/results/stochastic/<scenario>/`. Defaults to True.
-        method_cfg (Optional[Dict[str, Any]]): inline override for
-            the stochastic method parameters (`seed`,
-            `horizon_invocations`, `warmup_invocations`,
-            `replications`, ...). When `None`, loads
-            `data/config/method/stochastic.json`. Useful for tests
-            that want a tiny horizon so the run finishes in seconds.
+        wrt (bool): if True, write JSON artifacts under `data/results/stochastic/<scenario>/`. Defaults to True.
+        method_cfg (Optional[Dict[str, Any]]): inline override for the stochastic method parameters (`seed`, `horizon_invocations`, `warmup_invocations`, `replications`, ...). When `None`, loads `data/config/method/stochastic.json`. Useful for tests that want a tiny horizon so the run finishes in seconds.
 
     Returns:
         Dict[str, Any]: result dict with keys:
 
             - `config` (NetworkConfig): resolved config.
             - `method_config` (Dict): stochastic method parameters.
-            - `nodes` (pd.DataFrame): per-node frame (analytic schema
-              plus `_std` columns).
+            - `nodes` (pd.DataFrame): per-node frame (analytic schema plus `_std` columns).
             - `network` (pd.DataFrame): network aggregate (one row).
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
-            - `paths` (Dict[str, str]): written file paths; empty
-              when `wrt=False`.
+            - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
     # load the profile (artifact nodes + routing); method config is
     # either passed in (tests) or loaded from disk (CLI / notebook).
@@ -145,7 +130,7 @@ def _write_results(cfg: NetworkConfig,
         "network": net.iloc[0].to_dict(),
         "nodes": nds.to_dict(orient="records"),
         "routing": cfg.routing.tolist(),
-        "lambda_z": cfg.lambda_z_vector().tolist(),
+        "lambda_z": cfg.build_lam_z_vec().tolist(),
     }
 
     _profile_path = _out_dir / f"{cfg.profile}.json"

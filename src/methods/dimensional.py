@@ -13,15 +13,11 @@ coefficient specs (theta, sigma, eta, phi) from
 pass at the variable means, and emits a PyDASA-style JSON.
 
 Public API:
-    - `run(adp, prf, scn, wrt)` resolves the profile + method config,
-      loops artifacts, and returns per-artifact `pi_groups`,
-      `coefficients`, `sensitivity` blocks.
+    - `run(adp, prf, scn, wrt)` resolves the profile + method config, loops artifacts, and returns per-artifact `pi_groups`, `coefficients`, `sensitivity` blocks.
 
 Private helpers:
-    - `_analyse_artifact(artifact, schema, ...)` full DA workflow on
-      one artifact.
-    - `_write_results(cfg, method_cfg, results)` serialises the
-      envelope to `data/results/dimensional/<scenario>/<profile>.json`.
+    - `_analyse_artifact(artifact, schema, ...)` full DA workflow on one artifact.
+    - `_write_results(cfg, method_cfg, results)` serialises the envelope to `data/results/dimensional/<scenario>/<profile>.json`.
 
 *IMPORTANT:* the dimensional method is static (no
 `requirements.json`). It characterises the design space; R1 / R2 /
@@ -48,7 +44,7 @@ from typing import Any, Dict, Optional
 from src.dimensional import (analyse_symbolic,
                              build_engine,
                              build_schema,
-                             derive_coefficients)
+                             derive_coefs)
 from src.io import NetworkConfig, load_method_config, load_profile
 
 
@@ -67,18 +63,13 @@ def _analyse_artifact(artifact: Any,
     setpoints, and runs one symbolic sensitivity pass.
 
     Args:
-        artifact (ArtifactSpec): one resolved artifact from the
-            `NetworkConfig`.
+        artifact (ArtifactSpec): one resolved artifact from the `NetworkConfig`.
         schema (Schema): framework schema built once for the full run.
-        coeff_specs (list[dict[str, Any]]): coefficient specs from
-            the method config.
-        sens_cfg (dict[str, Any]): sensitivity sub-config keyed by
-            `val_type` and `cat`.
+        coeff_specs (list[dict[str, Any]]): coefficient specs from the method config.
+        sens_cfg (dict[str, Any]): sensitivity sub-config keyed by `val_type` and `cat`.
 
     Returns:
-        Dict[str, Any]: per-artifact block with `name`, `type`,
-            `lambda_z`, `L_z`, `pi_groups`, `coefficients`,
-            `sensitivity`.
+        Dict[str, Any]: per-artifact block with `name`, `type`, `lambda_z`, `L_z`, `pi_groups`, `coefficients`, `sensitivity`.
     """
     # build engine and derive Pi-groups via Buckingham's theorem
     _eng = build_engine(artifact.key, artifact.vars, schema)
@@ -90,7 +81,7 @@ def _analyse_artifact(artifact: Any,
         _eng.coefficients[_k].calculate_setpoint()
 
     # derive the named coefficients from the spec list
-    _der = derive_coefficients(_eng, coeff_specs, artifact_key=artifact.key)
+    _der = derive_coefs(_eng, coeff_specs, artifact_key=artifact.key)
     for _c in _der.values():
         _c.calculate_setpoint()
 
@@ -133,30 +124,19 @@ def run(adp: Optional[str] = None,
     Optionally writes the JSON artifact to disk.
 
     Args:
-        adp (Optional[str]): adaptation value; one of `baseline`,
-            `s1`, `s2`, `aggregate`. Resolves to (profile, scenario)
-            via `src.io.load_profile`.
-        prf (Optional[str]): profile file stem (`dflt` or `opti`);
-            overrides `adp`'s implied profile when paired with `scn`.
+        adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`. Resolves to (profile, scenario) via `src.io.load_profile`.
+        prf (Optional[str]): profile file stem (`dflt` or `opti`); overrides `adp`'s implied profile when paired with `scn`.
         scn (Optional[str]): explicit scenario name within the profile.
-        wrt (bool): if True, write JSON artifact to
-            `data/results/dimensional/<scenario>/<profile>.json`.
-            Defaults to True.
-        method_cfg (Optional[Dict[str, Any]]): inline override for
-            the dimensional method parameters (`fdus`,
-            `coefficients`, `sensitivity`, ...). When `None`, loads
-            `data/config/method/dimensional.json`. Useful for tests
-            that want a trimmed coefficient spec.
+        wrt (bool): if True, write JSON artifact to `data/results/dimensional/<scenario>/<profile>.json`. Defaults to True.
+        method_cfg (Optional[Dict[str, Any]]): inline override for the dimensional method parameters (`fdus`, `coefficients`, `sensitivity`, ...). When `None`, loads `data/config/method/dimensional.json`. Useful for tests that want a trimmed coefficient spec.
 
     Returns:
         Dict[str, Any]: result dict with keys:
 
             - `config` (NetworkConfig): resolved config.
             - `method_config` (Dict): dimensional method parameters.
-            - `artifacts` (Dict[str, Dict]): per-artifact analysis
-              blocks keyed by artifact key.
-            - `paths` (Dict[str, str]): written file paths; empty
-              when `wrt=False`.
+            - `artifacts` (Dict[str, Dict]): per-artifact analysis blocks keyed by artifact key.
+            - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
     # resolve profile + method config (disk or injected override)
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
@@ -213,7 +193,7 @@ def _write_results(cfg: NetworkConfig,
         "method_config": method_cfg,
         "artifacts": artifacts,
         "routing": cfg.routing.tolist(),
-        "lambda_z": cfg.lambda_z_vector().tolist(),
+        "lambda_z": cfg.build_lam_z_vec().tolist(),
     }
 
     _profile_path = _out_dir / f"{cfg.profile}.json"

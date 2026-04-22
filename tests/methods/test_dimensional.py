@@ -12,9 +12,7 @@ Each class groups tests by the contract under verification:
     - **TestResultEnvelope**: the JSON envelope written to `data/results/dimensional/<scenario>/<profile>.json` is well-formed and round-trips on disk.
     - **TestMethodCfgOverride**: the `method_cfg=` kwarg lets callers inject a trimmed spec so tests do not depend on disk state.
 
-*IMPORTANT:* every adaptation is solved ONCE in a module-scope fixture;
-per-test assertions reuse the cached dict. One full solve of the 13-artifact
-network takes about 1.5 s on current hardware, so the full file runs in ~5 s.
+*IMPORTANT:* every adaptation is solved ONCE in a module-scope fixture; per-test assertions reuse the cached dict. One full solve of the 13-artifact network takes about 1.5 s on current hardware, so the full file runs in ~5 s.
 """
 # native python modules
 import json

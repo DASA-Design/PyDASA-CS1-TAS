@@ -3,17 +3,14 @@
 Module test_experiment.py
 =========================
 
-End-to-end tests for the experiment-method orchestrator in `src.methods.experiment`.
-Uses `_QUICK_CFG` (one low rate, `min_samples_per_kind=32` at CLT floor) so the
-suite stays under ~20 s.
+End-to-end tests for the experiment-method orchestrator in `src.methods.experiment`. Uses `_QUICK_CFG` (one low rate, `min_samples_per_kind=32` at the CLT floor) so the suite stays under ~20 s.
 
-    - **TestExperimentEndToEnd** baseline + s1 adaptations solve end-to-end, produce 13 nodes, and expose the R1 / R2 / R3 verdict schema.
-    - **TestResultEnvelope** the written envelope is well-formed and carries the ramp `probes` list.
+Each class groups tests by the contract under verification:
 
-*IMPORTANT:* tests use an in-process ASGI mesh (no real port binding), so the run
-time reflects compute + event-loop overhead, not TCP round trips. That is a
-deliberate unit-test trade-off; the notebook can opt into real ports via
-`uvicorn.Server` if / when needed.
+    - **TestExperimentEndToEnd**: `baseline` and `s1` adaptations solve end-to-end, produce 13 nodes, and expose the R1 / R2 / R3 verdict schema plus the ramp `probes` stats.
+    - **TestResultEnvelope**: the written envelope is well-formed and carries the ramp `probes` list (with per-probe `records` stripped before persistence).
+
+*IMPORTANT:* tests use an in-process ASGI mesh (no real port binding), so the run time reflects compute + event-loop overhead, not TCP round trips. This is a deliberate unit-test trade-off; the notebook can opt into real ports via `uvicorn.Server` if needed.
 """
 # native python modules
 import json
@@ -86,13 +83,16 @@ class TestExperimentEndToEnd:
 
     @pytest.fixture(params=["baseline", "s1"])
     def _result(self, request, _result_baseline, _result_s1):
+        """*_result()* parametrised indirection so each test body stays fixture-free; returns the right per-adaptation result."""
         return _result_baseline if request.param == "baseline" else _result_s1
 
     def test_runs_and_produces_thirteen_nodes(self, _result):
+        """*test_runs_and_produces_thirteen_nodes()* every adaptation returns a 13-node frame."""
         _nds = _result["nodes"]
         assert len(_nds) == 13
 
     def test_requirements_shape(self, _result):
+        """*test_requirements_shape()* verdict dict exposes R1, R2, R3 with the writer-critical fields."""
         _req = _result["requirements"]
         assert set(_req.keys()) == {"R1", "R2", "R3"}
         for _k in ("R1", "R2", "R3"):
@@ -101,6 +101,7 @@ class TestExperimentEndToEnd:
             assert "metric" in _req[_k]
 
     def test_probes_present(self, _result):
+        """*test_probes_present()* ramp output carries at least one probe with the full stats schema."""
         _probes = _result["probes"]
         assert len(_probes) >= 1
         for _p in _probes:
@@ -113,13 +114,13 @@ class TestExperimentEndToEnd:
             assert "stopped_reason" in _p
 
     def test_buffer_reject_rate_column_present(self, _result):
-        """Business failure (epsilon) and infrastructure failure (buffer_reject_rate) are split."""
+        """*test_buffer_reject_rate_column_present()* business failure (epsilon) and infrastructure failure (buffer_reject_rate) are split into distinct columns."""
         _nds = _result["nodes"]
         assert "epsilon" in _nds.columns
         assert "buffer_reject_rate" in _nds.columns
 
     def test_entry_service_received_traffic(self, _result):
-        """*TAS_{1}* must have non-zero measured lambda (it's the entry point)."""
+        """*test_entry_service_received_traffic()* TAS_{1} must carry non-zero measured lambda since it is the entry point."""
         _nds = _result["nodes"]
         _tas1 = _nds[_nds["key"] == "TAS_{1}"]
         assert len(_tas1) == 1
@@ -130,6 +131,7 @@ class TestResultEnvelope:
     """**TestResultEnvelope** the on-disk envelope is well-formed when `wrt=True`."""
 
     def test_wrt_true_writes_json(self, tmp_path, monkeypatch):
+        """*test_wrt_true_writes_json()* writing to a tmp_path results dir produces a well-formed JSON file with probes but no inline records."""
         from src.methods import experiment as _mod
         monkeypatch.setattr(_mod, "_ROOT", tmp_path)
         monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")

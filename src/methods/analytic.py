@@ -49,9 +49,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "analytic"
 
 
-def _nodes_to_variables(nds: pd.DataFrame,
-                        cfg: NetworkConfig) -> Dict[str, dict]:
-    """*_nodes_to_variables()* turn the solved node DataFrame into a PACS-style `variables` dict.
+def _build_vars_from_nodes(nds: pd.DataFrame,
+                                cfg: NetworkConfig) -> Dict[str, dict]:
+    """*_build_vars_from_nodes()* turn the solved node DataFrame into a PACS-style `variables` dict.
 
     One entry per artifact; each carries the original config
     variables plus updated `_setpoint` / `_data` on the output
@@ -59,16 +59,11 @@ def _nodes_to_variables(nds: pd.DataFrame,
     the effective throughput `lambda * (1 - epsilon)`.
 
     Args:
-        nds (pd.DataFrame): per-node metrics frame produced by
-            `solve_network()`.
-        cfg (NetworkConfig): resolved network configuration; provides
-            the PACS Variable dict for each artifact.
+        nds (pd.DataFrame): per-node metrics frame produced by `solve_network()`.
+        cfg (NetworkConfig): resolved network configuration; provides the PACS Variable dict for each artifact.
 
     Returns:
-        Dict[str, dict]: PACS-style `variables` block keyed by
-            artifact key. Each entry carries `name`, `type`,
-            `lambda_z`, `L_z`, `rho`, and a `vars` sub-dict with
-            refreshed setpoints.
+        Dict[str, dict]: PACS-style `variables` block keyed by artifact key. Each entry carries `name`, `type`, `lambda_z`, `L_z`, `rho`, and a `vars` sub-dict with refreshed setpoints.
     """
     _out: Dict[str, dict] = {}
 
@@ -126,14 +121,10 @@ def run(adp: Optional[str] = None,
     Optionally writes the JSON artifacts to disk.
 
     Args:
-        adp (Optional[str]): adaptation value; one of `baseline`,
-            `s1`, `s2`, `aggregate`. Resolves to (profile, scenario)
-            via `src.io.load_profile`.
-        prf (Optional[str]): profile file stem (`dflt` or `opti`);
-            overrides `adp`'s implied profile when paired with `scn`.
+        adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`. Resolves to (profile, scenario) via `src.io.load_profile`.
+        prf (Optional[str]): profile file stem (`dflt` or `opti`); overrides `adp`'s implied profile when paired with `scn`.
         scn (Optional[str]): explicit scenario name within the profile.
-        wrt (bool): if True, write JSON artifacts to
-            `data/results/analytic/<scenario>/`. Defaults to True.
+        wrt (bool): if True, write JSON artifacts to `data/results/analytic/<scenario>/`. Defaults to True.
 
     Returns:
         Dict[str, Any]: result dict with keys:
@@ -142,8 +133,7 @@ def run(adp: Optional[str] = None,
             - `nodes` (pd.DataFrame): per-node DataFrame.
             - `network` (pd.DataFrame): network aggregate (one row).
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
-            - `paths` (Dict[str, str]): written file paths; empty
-              when `wrt=False`.
+            - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
     # resolve the config then solve the network end-to-end
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
@@ -193,9 +183,9 @@ def _write_results(cfg: NetworkConfig,
         "label": cfg.label,
         "method": "analytic",
         "network": net.iloc[0].to_dict(),
-        "variables": _nodes_to_variables(nds, cfg),
+        "variables": _build_vars_from_nodes(nds, cfg),
         "routing": cfg.routing.tolist(),
-        "lambda_z": cfg.lambda_z_vector().tolist(),
+        "lambda_z": cfg.build_lam_z_vec().tolist(),
     }
 
     # write the per-profile result blob

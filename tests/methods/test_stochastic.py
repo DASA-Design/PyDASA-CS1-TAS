@@ -9,13 +9,9 @@ End-to-end sanity checks for the stochastic-method orchestrator in
 Each class groups tests by the contract under verification:
 
     - **TestStochasticEndToEnd**: each adaptation solves end-to-end via SimPy DES, produces 13 stable nodes and a full R1 / R2 / R3 verdict with the expected schema.
-    - **TestAnalyticAgreement**: the stochastic DES solution for the baseline must agree with the closed-form analytic solution on the network-wide averages (avg_rho, W_net) within Monte-Carlo tolerance. This is the cross-method sanity that makes the two methods mutually validating.
+    - **TestAnalyticAgreement**: the stochastic DES solution for the baseline must agree with the closed-form analytic solution on the network-wide averages (avg_rho, W_net) within Monte-Carlo tolerance. This cross-method sanity makes the two methods mutually validating.
 
-*IMPORTANT:* tests use `_QUICK_CFG` (3 reps x 2000 invocations) not the production config (10 reps x 10 000 invocations).
-
-This cuts the per-adaptation run time by ~30x with the trade-off of wider CIs.
-
-The rho/W agreement tolerances are loosened to match. To re-run any test at full fidelity just swap `method_cfg=_QUICK_CFG` for `method_cfg=None` in the call.
+*IMPORTANT:* tests use `_QUICK_CFG` (3 reps x 1000 invocations) not the production config (10 reps x 10 000 invocations). This cuts the per-adaptation run time by ~30x with the trade-off of wider CIs; the rho / W agreement tolerances are loosened to match. To re-run any test at full fidelity just swap `method_cfg=_QUICK_CFG` for `method_cfg=None` in the call.
 """
 # native python modules
 # (none)
