@@ -286,7 +286,7 @@ class HttpForward:
             ServiceResponse: parsed body. Business failure (eps fired) comes back as HTTP 200 with `success=False`.
         """
         _r = await self._client.post(
-            self._registry.invoke_url(target),
+            self._registry.build_invoke_url(target),
             json=req.model_dump(),
             headers={"X-Request-Id": req.request_id,
                      "X-Request-Size-Bytes": str(req.size_bytes),
