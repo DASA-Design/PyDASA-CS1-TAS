@@ -43,11 +43,13 @@ import numpy as np
 import pandas as pd
 
 # local modules
+from src.analytic.jackson import build_rho_grid
 from src.analytic.metrics import aggregate_network, check_requirements
 from src.experiment.client import ClientConfig
 from src.experiment.client import ClientSimulator
 from src.experiment.client import build_ramp_cfg
 from src.experiment.launcher import ExperimentLauncher
+from src.experiment.services import derive_seed
 from src.io import NetworkConfig, load_method_config, load_profile
 
 
@@ -174,13 +176,31 @@ async def _run_async(cfg: NetworkConfig,
         # scalar fallback kept for back-compat with tests that don't define
         # a full sizes-by-kind map; defaults to the analyse_request size
         _req_size = int(_sizes_by_kind.get("analyse_request", 256))
+
+        # FR-3.5: if ramp.rho_grid is set, invert it to rates via the
+        # analytic Jackson solver and keep the per-point metadata for
+        # post-run probe annotation. Either rates or rho_grid is
+        # authoritative (validate_ramp rejects both).
+        _ramp_block = dict(method_cfg["ramp"])
+        _rho_grid_meta: List[Dict[str, Any]] = []
+        if _ramp_block.get("rho_grid"):
+            _grid = build_rho_grid(cfg, list(_ramp_block["rho_grid"]))
+            _ramp_block["rates"] = [float(_lz) for (_, _lz, _) in _grid]
+            _ramp_block.pop("rho_grid", None)
+            _rho_grid_meta = [
+                {"rho_target": float(_r),
+                 "lambda_z_inverted": float(_lz),
+                 "bottleneck_artifact_idx": int(_b)}
+                for (_r, _lz, _b) in _grid
+            ]
+
         _client_cfg = ClientConfig(
             entry_service="TAS_{1}",
             seed=_seed,
             request_size_bytes=_req_size,
             request_sizes_by_kind=_sizes_by_kind,
             kind_weights=dict(_lnc.kind_weights),
-            ramp=build_ramp_cfg(method_cfg["ramp"]),
+            ramp=build_ramp_cfg(_ramp_block),
         )
         _sim = ClientSimulator(_lnc.client, _lnc.registry, _client_cfg)
 
@@ -198,6 +218,13 @@ async def _run_async(cfg: NetworkConfig,
 
         _ramp_out = await _sim.run_ramp()
         _counts = _lnc.flush_logs(log_dir)
+
+    # FR-3.5: if the ramp was driven from a rho_grid, thread the
+    # per-point metadata back into each probe record so downstream
+    # analysis knows which rho-target each probe was anchored to.
+    if _rho_grid_meta:
+        for _probe, _meta in zip(_ramp_out["probes"], _rho_grid_meta):
+            _probe.update(_meta)
 
     # total wall-clock duration across all probes
     _duration = float(sum(_p.get("duration_s", 0.0)
@@ -235,34 +262,78 @@ def run(adp: Optional[str] = None,
              else load_method_config("experiment"))
     _adp = adp or "baseline"
 
-    if wrt:
-        _log_dir = _RESULTS_DIR / _cfg.scenario / _cfg.profile
-        _log_dir.mkdir(parents=True, exist_ok=True)
-        _run_out = asyncio.run(_run_async(_cfg, _mcfg, _adp, _log_dir))
-        _nds = _build_svc_df_from_logs(_cfg, _log_dir, _run_out["duration_s"])
-    else:
-        with tempfile.TemporaryDirectory() as _tmp_str:
-            _log_dir = Path(_tmp_str)
-            _run_out = asyncio.run(_run_async(_cfg, _mcfg, _adp, _log_dir))
-            _nds = _build_svc_df_from_logs(_cfg, _log_dir,
-                                         _run_out["duration_s"])
+    # FR-3.8: replicate loop. Per-replicate seed = derive_seed(root, "rep_<k>")
+    # using the same FNV-1a machine that seeds every per-service RNG, so
+    # replicate seeds are stable across processes and distinct from every
+    # per-service seed. R=1 keeps the flat log-dir layout (back-compat).
+    _replications = int(_mcfg.get("replications", 1))
+    _root_seed = int(_mcfg.get("seed", 0))
+    _replicates: List[Dict[str, Any]] = []
 
-    _net = aggregate_network(_nds)
-    _req = check_requirements(_nds)
+    for _k in range(_replications):
+        _rep_seed = (_root_seed if _replications == 1
+                     else int(derive_seed(_root_seed, f"rep_{_k}")))
+        _rep_mcfg = dict(_mcfg)
+        _rep_mcfg["seed"] = _rep_seed
+
+        if wrt:
+            _log_dir = (_RESULTS_DIR / _cfg.scenario / _cfg.profile
+                        if _replications == 1
+                        else _RESULTS_DIR / _cfg.scenario / _cfg.profile
+                             / f"rep_{_k}")
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            _run_out = asyncio.run(
+                _run_async(_cfg, _rep_mcfg, _adp, _log_dir))
+            _nds = _build_svc_df_from_logs(_cfg, _log_dir,
+                                           _run_out["duration_s"])
+        else:
+            with tempfile.TemporaryDirectory() as _tmp_str:
+                _log_dir = Path(_tmp_str)
+                _run_out = asyncio.run(
+                    _run_async(_cfg, _rep_mcfg, _adp, _log_dir))
+                _nds = _build_svc_df_from_logs(_cfg, _log_dir,
+                                               _run_out["duration_s"])
+
+        _net = aggregate_network(_nds)
+        _req = check_requirements(_nds)
+        _replicates.append({
+            "replicate_id": _k,
+            "seed": _rep_seed,
+            "nodes": _nds,
+            "network": _net,
+            "requirements": _req,
+            "probes": _run_out["probes"],
+            "saturation_rate": _run_out["saturation_rate"],
+            "stopped_reason": _run_out["stopped_reason"],
+            "log_dir": str(_log_dir) if wrt else None,
+        })
+
+    # top-level fields point at replicate 0 for back-compat with consumers
+    # that expect the flat envelope shape. Cross-replicate aggregation lives
+    # downstream in 06-comparison.ipynb per FR-3.8.
+    _first = _replicates[0]
 
     _paths: Dict[str, str] = {}
     if wrt:
-        _paths = _write_results(_cfg, _mcfg, _nds, _net, _req, _run_out)
+        _run_out_first = {
+            "probes": _first["probes"],
+            "saturation_rate": _first["saturation_rate"],
+            "stopped_reason": _first["stopped_reason"],
+        }
+        _paths = _write_results(_cfg, _mcfg, _first["nodes"],
+                                _first["network"], _first["requirements"],
+                                _run_out_first)
 
     ans = {
         "config": _cfg,
         "method_config": _mcfg,
-        "nodes": _nds,
-        "network": _net,
-        "requirements": _req,
-        "probes": _run_out["probes"],
-        "saturation_rate": _run_out["saturation_rate"],
-        "stopped_reason": _run_out["stopped_reason"],
+        "nodes": _first["nodes"],
+        "network": _first["network"],
+        "requirements": _first["requirements"],
+        "probes": _first["probes"],
+        "saturation_rate": _first["saturation_rate"],
+        "stopped_reason": _first["stopped_reason"],
+        "replicates": _replicates,
         "paths": _paths,
     }
     return ans

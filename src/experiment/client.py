@@ -175,11 +175,15 @@ class ClientConfig:
 def validate_ramp(ramp: Dict[str, Any]) -> None:
     """*validate_ramp()* check the `ramp` sub-dict of `experiment.json`.
 
+    Accepts either `rates` (legacy, direct request-rate list) or
+    `rho_grid` (FR-3.5, target-utilisation list that the orchestrator
+    inverts to rates via the analytic Jackson solver); never both.
+
     Args:
         ramp (Dict[str, Any]): raw `ramp` block from the method config.
 
     Raises:
-        ValueError: when any knob is out of the supported range.
+        ValueError: when any knob is out of the supported range or when both `rates` and `rho_grid` are supplied.
     """
     _n = int(ramp.get("min_samples_per_kind", 32))
     if _n < 32:
@@ -187,10 +191,25 @@ def validate_ramp(ramp: Dict[str, Any]) -> None:
             f"ramp.min_samples_per_kind must be >= 32 for CLT validity; got {_n}")
 
     _rates = ramp.get("rates", [])
-    if not _rates or any(float(_r) <= 0 for _r in _rates):
-        raise ValueError("ramp.rates must be a non-empty list of positive floats")
-    if _rates != sorted(_rates):
-        raise ValueError("ramp.rates must be monotonically increasing")
+    _rho_grid = ramp.get("rho_grid", [])
+    if _rates and _rho_grid:
+        raise ValueError(
+            "ramp accepts either 'rates' or 'rho_grid', not both")
+    if not _rates and not _rho_grid:
+        raise ValueError(
+            "ramp must specify 'rates' (legacy) or 'rho_grid' (FR-3.5)")
+
+    if _rates:
+        if any(float(_r) <= 0 for _r in _rates):
+            raise ValueError("ramp.rates must be a list of positive floats")
+        if _rates != sorted(_rates):
+            raise ValueError("ramp.rates must be monotonically increasing")
+
+    if _rho_grid:
+        if any(not 0.0 < float(_r) < 1.0 for _r in _rho_grid):
+            raise ValueError("ramp.rho_grid values must be in (0, 1)")
+        if _rho_grid != sorted(_rho_grid):
+            raise ValueError("ramp.rho_grid must be monotonically increasing")
 
     _cas = ramp.get("cascade", {})
     _mode = _cas.get("mode", "rolling")
@@ -353,7 +372,11 @@ class ClientSimulator:
         # two runs at the same seed produce identical payloads
         _payload = _generate_payload(kind, _size, rng=self._rng)
 
-        _req = ServiceRequest(request_id=str(uuid.uuid4()),
+        # FR-3.7: derive request_id from the client's seeded RNG rather
+        # than an unseeded uuid4(), so two runs at the same config seed
+        # produce byte-identical request streams (payload + id).
+        _rid = str(uuid.UUID(int=self._rng.getrandbits(128), version=4))
+        _req = ServiceRequest(request_id=_rid,
                               kind=kind,
                               size_bytes=_size,
                               payload=_payload.to_dict())
