@@ -6,23 +6,15 @@ Module simulation.py
 SimPy DES engine for the open Jackson queueing network used by the
 CS-01 TAS case study. Two collaborating layers:
 
-    - **QueueNode** per-node SimPy `Resource` with finite capacity K
-      and c parallel servers, plus per-job timing collection (service
-      time, queue wait, total system time) and event-driven L / Lq
-      tracking for time-weighted averages.
-    - **simulate_network()** top-level driver. Spawns a `QueueNode`
-      per slot, fires Poisson arrivals at the externally-driven
-      nodes, runs each replication for `horizon` seconds with a
-      `warmup` cut-off, repeats `reps` times, and returns one summary
-      DataFrame with mean and std per node across replications.
+    - **QueueNode** per-node SimPy `Resource` with finite capacity K and c parallel servers, plus per-job timing collection (service time, queue wait, total system time) and event-driven L / Lq tracking for time-weighted averages.
+    - **simulate_network()** top-level driver. Spawns a `QueueNode` per slot, fires Poisson arrivals at the externally-driven nodes, runs each replication for `horizon` seconds with a `warmup` cut-off, repeats `reps` times, and returns one summary DataFrame with mean and std per node across replications.
 
 Public API:
     - `QueueNode` node class.
     - `job(env, node_id, nodes, P, results)` single-job SimPy generator.
     - `job_generator(env, node_id, rate, nodes, P, results)` Poisson source.
     - `simulate_network(mu, lambda_zero, c, K, P, ...)` multi-rep driver.
-    - `solve_network(cfg, method_cfg)` NetworkConfig adapter mirroring
-      `src.analytic.jackson.solve_network`.
+    - `solve_network(cfg, method_cfg)` NetworkConfig adapter mirroring `src.analytic.jackson.solve_network`.
 
 *IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation
 counts. The method-config JSON declares the latter; the orchestrator
@@ -68,11 +60,9 @@ class QueueNode:
         node_id (int): positional slot in the network's node list.
         mu (float): per-server service rate in jobs per time unit.
         c (int): number of parallel servers.
-        K (Optional[int]): system capacity (queue + service); `None`
-            for an unbounded queue.
+        K (Optional[int]): system capacity (queue + service); `None` for an unbounded queue.
         server (simpy.Resource): resource pool of capacity c.
-        blocked_jobs (int): count of jobs that arrived while the
-            system was at capacity K and were dropped.
+        blocked_jobs (int): count of jobs that arrived while the system was at capacity K and were dropped.
     """
 
     def __init__(self,
@@ -146,8 +136,7 @@ class QueueNode:
         time-weighted averages stay accurate.
 
         Args:
-            env (simpy.Environment): active simulation environment,
-                used for the current `env.now` timestamp.
+            env (simpy.Environment): active simulation environment, used for the current `env.now` timestamp.
         """
         _now = env.now
         _delta = _now - self.last_event_time
@@ -549,7 +538,7 @@ def solve_network(cfg: NetworkConfig,
     _mu = [float(_a.mu) for _a in cfg.artifacts]
     _c = [int(_a.c) for _a in cfg.artifacts]
     _K = [int(_a.K) if _a.K is not None else None for _a in cfg.artifacts]
-    _lambda_z = cfg.lambda_z_vector().tolist()
+    _lambda_z = cfg.build_lam_z_vec().tolist()
     _P = cfg.routing
 
     # convert invocation counts into SimPy seconds. With Poisson
