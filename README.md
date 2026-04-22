@@ -15,10 +15,10 @@ Reproducible DASA (Dimensional Analysis for Software Architecture) evaluation of
 | 1 | **analytic** | `src/methods/analytic.py` | `01-analytic.ipynb` | Closed-form QN metrics (M/M/c/K + Jackson). |
 | 2 | **stochastic** | `src/methods/stochastic.py` | `02-stochastic.ipynb` | SimPy DES ground truth with 95 % CIs. |
 | 3 | **dimensional** | `src/methods/dimensional.py` | `03-dimensional.ipynb` + `04-yoly.ipynb` | π-groups, derived coefficients (θ, σ, η, φ), sensitivity, design-space yoly clouds. |
-| 4 | **experiment** | *planned* | `05-experiment.ipynb` | ReSeP-lite + ActivFORMS-lite reference run. |
+| 4 | **experiment** | `src/methods/experiment.py` | `05-experiment.ipynb` | FastAPI microservice replication of the TAS topology (tech-agnostic validation of DASA predictions). |
 | 5 | **comparison** | *planned* | `06-comparison.ipynb` | Cross-method deltas + R1/R2/R3 verdicts. |
 
-Status: methods 1–3 done with tests; methods 4–5 planned.
+Status: methods 1–4 done with tests (177 total); method 5 planned.
 
 ## Adaptation axis
 
@@ -204,7 +204,7 @@ pytest tests/ -v             # full suite (analytic + stochastic + dimensional +
 pytest tests/dimensional/    # just the dimensional engine tests
 ```
 
-Current count: **145 tests** passing. Full run ~5 min on baseline hardware.
+Current count: **177 tests** passing. Full run ~3 min on baseline hardware.
 
 ## License
 
