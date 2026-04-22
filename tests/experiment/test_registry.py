@@ -3,14 +3,19 @@
 Module test_registry.py
 =======================
 
-Unit tests for `src.experiment.registry.ServiceRegistry`. Covers:
+Unit tests for `src.experiment.registry.ServiceRegistry`:
 
-    - **TestFromConfig** dict → registry mapping + port-offset resolution + `base_port_override`.
-    - **TestInvokeUrl** URL shape per service type (third-party `/invoke` vs TAS `/TAS_<i>/invoke`).
-    - **TestHealthzUrl** every service's `/healthz` URL is the same shape regardless of type.
-    - **TestRoleFilters** `names()` and `names_by_role()` return the right sets.
-    - **TestTasComponentsShareAPort` six TAS_{i} entries at `port_offset=0` map to the same port but distinct URLs (Option-B topology).
-    - **TestUnknownName** asking for a name that is not in the registry raises `KeyError`.
+    - **TestFromConfig** dict-to-registry mapping, port-offset resolution,
+      and `base_port_override`.
+    - **TestBuildInvokeUrl** URL shape per service type (third-party `/invoke`
+      vs TAS `/TAS_<i>/invoke`).
+    - **TestBuildHealthzUrl** every `/healthz` URL is the same shape regardless
+      of service type.
+    - **TestRoleFilters** `list_names()` and `filter_names_by_role()` return
+      the expected sets.
+    - **TestTasComponentsShareAPort** six TAS_{i} entries at `port_offset=0`
+      map to one port but distinct URLs (Option-B topology).
+    - **TestUnknownName** names absent from the registry raise `KeyError`.
 """
 # native python modules
 from typing import Any, Dict
@@ -23,7 +28,7 @@ from src.experiment.registry import RegistryEntry, ServiceRegistry
 
 
 def _cs01_like_cfg() -> Dict[str, Any]:
-    """*_cs01_like_cfg()* a minimal `experiment.json`-shaped dict covering every service role."""
+    """*_cs01_like_cfg()* produce a minimal `experiment.json`-shaped dict covering every service role."""
     return {
         "host": "127.0.0.1",
         "base_port": 8001,
@@ -46,7 +51,7 @@ def _cs01_like_cfg() -> Dict[str, Any]:
 
 
 class TestFromConfig:
-    """**TestFromConfig** dict → registry mapping."""
+    """**TestFromConfig** dict-to-registry mapping."""
 
     def test_host_and_base_port(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
@@ -81,8 +86,8 @@ class TestFromConfig:
         assert _r.base_port == 8001
 
 
-class TestInvokeUrl:
-    """**TestInvokeUrl** TAS names → per-component path; third-party names → plain `/invoke`."""
+class TestBuildInvokeUrl:
+    """**TestBuildInvokeUrl** TAS names use per-component paths; third-party names get plain `/invoke`."""
 
     @pytest.fixture
     def _reg(self) -> ServiceRegistry:
@@ -94,7 +99,7 @@ class TestInvokeUrl:
         ("TAS_{6}", "http://127.0.0.1:8001/TAS_6/invoke"),
     ])
     def test_tas_component_paths(self, _reg, _name, _expected):
-        assert _reg.invoke_url(_name) == _expected
+        assert _reg.build_invoke_url(_name) == _expected
 
     @pytest.mark.parametrize("_name, _expected", [
         ("MAS_{1}", "http://127.0.0.1:8007/invoke"),
@@ -102,53 +107,53 @@ class TestInvokeUrl:
         ("DS_{3}", "http://127.0.0.1:8009/invoke"),
     ])
     def test_third_party_path(self, _reg, _name, _expected):
-        assert _reg.invoke_url(_name) == _expected
+        assert _reg.build_invoke_url(_name) == _expected
 
 
-class TestHealthzUrl:
-    """**TestHealthzUrl** one `/healthz` path per port; not affected by TAS-component addressing."""
+class TestBuildHealthzUrl:
+    """**TestBuildHealthzUrl** one `/healthz` path per port; not affected by TAS-component addressing."""
 
     def test_healthz_shape(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        assert _r.healthz_url("TAS_{1}") == "http://127.0.0.1:8001/healthz"
-        assert _r.healthz_url("TAS_{6}") == "http://127.0.0.1:8001/healthz"
-        assert _r.healthz_url("MAS_{1}") == "http://127.0.0.1:8007/healthz"
+        assert _r.build_healthz_url("TAS_{1}") == "http://127.0.0.1:8001/healthz"
+        assert _r.build_healthz_url("TAS_{6}") == "http://127.0.0.1:8001/healthz"
+        assert _r.build_healthz_url("MAS_{1}") == "http://127.0.0.1:8007/healthz"
 
 
 class TestRoleFilters:
-    """**TestRoleFilters** `names()` returns every entry; `names_by_role()` subsets correctly."""
+    """**TestRoleFilters** `list_names()` returns every entry; `filter_names_by_role()` subsets correctly."""
 
-    def test_names_returns_all(self):
+    def test_list_names_returns_all(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        _names = list(_r.names())
+        _names = list(_r.list_names())
         assert len(_names) == 9
         assert set(_names) == set(_cs01_like_cfg()["service_registry"].keys())
 
-    def test_names_by_role_composite_client(self):
+    def test_filter_names_composite_client(self):
         # client-facing composites: ingress (TAS_{1}) + egress (TAS_{5}, TAS_{6}).
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        assert list(_r.names_by_role("composite_client")) == [
+        assert list(_r.filter_names_by_role("composite_client")) == [
             "TAS_{1}", "TAS_{5}", "TAS_{6}"]
 
-    def test_names_by_role_per_workflow_stage(self):
+    def test_filter_names_per_workflow_stage(self):
         # each of the three internal-routing composites has exactly one artifact.
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        assert list(_r.names_by_role("composite_medical")) == ["TAS_{2}"]
-        assert list(_r.names_by_role("composite_alarm")) == ["TAS_{3}"]
-        assert list(_r.names_by_role("composite_drug")) == ["TAS_{4}"]
+        assert list(_r.filter_names_by_role("composite_medical")) == ["TAS_{2}"]
+        assert list(_r.filter_names_by_role("composite_alarm")) == ["TAS_{3}"]
+        assert list(_r.filter_names_by_role("composite_drug")) == ["TAS_{4}"]
 
-    def test_names_by_role_atomic(self):
+    def test_filter_names_atomic(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        assert list(_r.names_by_role("atomic")) == [
+        assert list(_r.filter_names_by_role("atomic")) == [
             "MAS_{1}", "AS_{1}", "DS_{3}"]
 
-    def test_names_by_role_unknown_returns_empty(self):
+    def test_filter_names_unknown_role_returns_empty(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        assert list(_r.names_by_role("made_up")) == []
+        assert list(_r.filter_names_by_role("made_up")) == []
 
 
 class TestTasComponentsShareAPort:
-    """**TestTasComponentsShareAPort** six TAS_{i} entries at offset 0 → one port, six distinct URLs (Option-B)."""
+    """**TestTasComponentsShareAPort** six TAS_{i} entries at offset 0 collapse to one port but six distinct URLs (Option-B)."""
 
     def test_ports_identical(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
@@ -157,24 +162,24 @@ class TestTasComponentsShareAPort:
 
     def test_invoke_urls_distinct(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
-        _urls = {_r.invoke_url(f"TAS_{{{_i}}}") for _i in range(1, 7)}
+        _urls = {_r.build_invoke_url(f"TAS_{{{_i}}}") for _i in range(1, 7)}
         assert len(_urls) == 6
 
 
 class TestUnknownName:
-    """**TestUnknownName** unknown service names raise KeyError consistently."""
+    """**TestUnknownName** unknown service names raise `KeyError` consistently."""
 
-    def test_invoke_url_unknown_raises(self):
+    def test_build_invoke_url_unknown_raises(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
         with pytest.raises(KeyError):
-            _r.invoke_url("NOT_A_SERVICE")
+            _r.build_invoke_url("NOT_A_SERVICE")
 
-    def test_healthz_url_unknown_raises(self):
+    def test_build_healthz_url_unknown_raises(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
         with pytest.raises(KeyError):
-            _r.healthz_url("NOT_A_SERVICE")
+            _r.build_healthz_url("NOT_A_SERVICE")
 
-    def test_url_unknown_raises(self):
+    def test_resolve_base_url_unknown_raises(self):
         _r = ServiceRegistry.from_config(_cs01_like_cfg())
         with pytest.raises(KeyError):
-            _r.url("NOT_A_SERVICE")
+            _r.resolve_base_url("NOT_A_SERVICE")

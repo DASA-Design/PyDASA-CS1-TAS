@@ -4,9 +4,10 @@ demo_registry.py
 ================
 
 Show what `ServiceRegistry.from_config(method_cfg)` builds, and how
-`invoke_url` / `healthz_url` resolve each name into a URL. The six
-TAS_{i} components share a port and get distinct `/TAS_<i>/invoke`
-routes; third-party services each have their own port and `/invoke`.
+`build_invoke_url` / `build_healthz_url` resolve each service name
+into a URL. The six TAS_{i} components share a port and get distinct
+`/TAS_<i>/invoke` routes; third-party services each have their own
+port and `/invoke`.
 
 Role vocabulary in use (per `experiment.json`):
 
@@ -30,14 +31,16 @@ from src.experiment.registry import ServiceRegistry  # noqa: E402
 from src.io import load_method_config  # noqa: E402
 
 
-def _banner(_s: str) -> None:
+def _banner(s: str) -> None:
+    """*_banner()* print a centred header band to stdout."""
     print()
     print("=" * 72)
-    print(f"  {_s}")
+    print(f"  {s}")
     print("=" * 72)
 
 
 def main() -> None:
+    """*main()* walk through every public registry helper with live output."""
     _mcfg = load_method_config("experiment")
 
     _banner("1. raw registry block from experiment.json")
@@ -45,25 +48,26 @@ def main() -> None:
     print(f"  base_port   = {_mcfg.get('base_port')}")
     print(f"  entries     = {len(_mcfg['service_registry'])}")
     for _name, _spec in _mcfg["service_registry"].items():
-        print(f"    {_name:<14}  offset={_spec['port_offset']}  role={_spec['role']!r}")
+        print(f"    {_name:<14}  offset={_spec['port_offset']}  "
+              f"role={_spec['role']!r}")
 
-    _banner("2. ServiceRegistry.from_config() resolves offsets → concrete ports")
+    _banner("2. ServiceRegistry.from_config() resolves offsets to concrete ports")
     _reg = ServiceRegistry.from_config(_mcfg)
     print(f"  host={_reg.host}  base_port={_reg.base_port}")
     for _name, _entry in _reg.table.items():
         print(f"    {_name:<14}  port={_entry.port}  role={_entry.role!r}")
 
-    _banner("3. URL resolution — note TAS components SHARE a port + have distinct paths")
+    _banner("3. URL resolution; TAS components SHARE a port and have distinct paths")
     for _name in _reg.table:
-        _inv = _reg.invoke_url(_name)
-        _hz = _reg.healthz_url(_name)
-        print(f"    {_name:<14}  invoke → {_inv}")
-        print(f"                  healthz → {_hz}")
+        _inv = _reg.build_invoke_url(_name)
+        _hz = _reg.build_healthz_url(_name)
+        print(f"    {_name:<14}  invoke  -> {_inv}")
+        print(f"                  healthz -> {_hz}")
 
     _banner("4. role filter helpers (one per CS-01 workflow stage)")
     for _role in ("composite_client", "composite_medical",
                   "composite_alarm", "composite_drug", "atomic"):
-        print(f"  {_role:<20}: {list(_reg.names_by_role(_role))}")
+        print(f"  {_role:<20}: {list(_reg.filter_names_by_role(_role))}")
 
 
 if __name__ == "__main__":
