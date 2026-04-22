@@ -5,9 +5,7 @@ Module test_instruments.py
 
 Unit tests for `src/experiment/services/instruments.py`:
 
-    - **TestLogger** the `@logger(ctx)` decorator appends one correctly-shaped
-      row per call; local success is NOT contaminated by downstream failure;
-      exceptions are recorded as failure rows.
+    - **TestLogger** the `@logger(ctx)` decorator appends one correctly-shaped row per call; local success is NOT contaminated by downstream failure; exceptions are recorded as failure rows.
 """
 # testing framework
 import pytest

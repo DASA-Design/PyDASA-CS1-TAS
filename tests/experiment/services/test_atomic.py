@@ -5,8 +5,7 @@ Module test_atomic.py
 
 Unit tests for `src/experiment/services/atomic.py`:
 
-    - **TestMountAtomicService** healthz + terminal path + ε=1 business failure
-      + non-terminal single-target forward.
+    - **TestMountAtomicService** healthz + terminal path + ε=1 business failure + non-terminal single-target forward.
 """
 # native python modules
 import asyncio

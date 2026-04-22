@@ -5,8 +5,7 @@ Module test_composite.py
 
 Unit tests for `src/experiment/services/composite.py`:
 
-    - **TestMountCompositeService** per-member context + internal routing
-      between members + external forward boundary.
+    - **TestMountCompositeService** per-member context + internal routing between members + external forward boundary.
     - **TestParseTasIdx** extract the numeric index from a `TAS_{i}` key.
 """
 # native python modules
