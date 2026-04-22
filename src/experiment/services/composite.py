@@ -7,34 +7,41 @@ Composite-service module (no class). One function,
 `mount_composite_service`, attaches N atomic handlers to one FastAPI
 app and wires their in-process routing. We use it for the TAS target
 system: six atomic handlers (TAS_{1..6}) behind a single port with
-six per-component routes.
+six per-member routes.
 
-Members dispatch to each other in-process through a direct `await`,
-so no HTTP hop runs between sibling members. Non-member targets go
-through `external_forward`, typically an `HttpForward` instance that
-reaches third-party services (MAS, AS, DS).
+Each member is mounted through `services.atomic.mount_atomic_service`
+with two extension kwargs:
 
-Every member handler is wrapped with `@logger(ctx)`, so each
-component keeps its own CSV log. Queueing stays emergent, same as in
-`services.atomic`.
+    - `pick_target`: at the entry member, resolves the target via the
+      `kind_to_target` table (raising HTTP 400 on unknown kind); every
+      other member falls back to atomic's default Jackson pick.
+    - `dispatch`: checks the shared `_handlers` dict first so sibling
+      members dispatch to each other in-process via a direct `await`;
+      non-member targets fall through to `external_forward` (typically
+      `HttpForward`).
+
+The shared `_handlers` dict closes over `dispatch` and is populated
+as each member mounts; by the time a request actually runs, every
+member's handler is registered, so the late-bound lookup resolves.
+
+Queueing stays emergent, same as in `services.atomic`.
 """
 # native python modules
 from __future__ import annotations
 
-import asyncio
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # web stack
 from fastapi import FastAPI, HTTPException
 
 # local modules
+from src.experiment.services.atomic import mount_atomic_service
 from src.experiment.services.base import (ExternalForwardFn,
                                           ServiceContext,
                                           ServiceRequest,
                                           ServiceResponse,
                                           ServiceSpec)
-from src.experiment.services.instruments import logger
 
 
 def parse_tas_idx(name: str) -> int:
@@ -53,22 +60,22 @@ def mount_composite_service(
         external_forward: ExternalForwardFn,
         *,
         entry_name: str,
-        route_for=None,
+        route_for: Optional[Callable[[str], str]] = None,
 ) -> Dict[str, ServiceContext]:
-    """*mount_composite_service()* attach N atomic-like members inside one FastAPI app.
+    """*mount_composite_service()* attach N atomic members inside one FastAPI app.
 
-    Each member owns its own `ServiceContext` (spec, log, rng), its
-    own `@logger`-wrapped handler, and a route at
-    `route_for(member_name)`. Internal hops run via `await` through a
-    shared handler dict, one entry per member. External hops go
-    through `external_forward`.
+    Every member is mounted via `mount_atomic_service` with a shared
+    `dispatch` that prefers in-process sibling handlers over the HTTP
+    `external_forward`, plus a kind-dispatch `pick_target` at the
+    entry member. External hops continue to go through
+    `external_forward`.
 
     Args:
         app (FastAPI): app to attach the routes to.
         specs (Dict[str, ServiceSpec]): spec per member, keyed by artifact name.
         routing_rows (Dict[str, List[Tuple[str, float]]]): per-member routing row. Targets may be members (in-process) or external (via forward).
         kind_to_target (Dict[str, str]): kind-based dispatch table for the entry member.
-        external_forward (ExternalForwardFn): async `(target, req) -> ServiceResponse`. Called when the routing picks a non-member target.
+        external_forward (ExternalForwardFn): async `(target, req) -> ServiceResponse`. Called when the shared dispatch lookup misses the `_handlers` dict (non-member target).
         entry_name (str): which member runs the kind-router, typically `TAS_{1}`.
         route_for (Callable[[str], str] | None): `member_name -> URL path`. Defaults to `/TAS_<i>/invoke` based on the numeric index in the name.
 
@@ -79,81 +86,50 @@ def mount_composite_service(
         raise ValueError(
             f"entry_name={entry_name!r} not in specs: {list(specs)}")
     if route_for is None:
-        def route_for(_n):
+        def route_for(_n: str) -> str:
             return f"/TAS_{parse_tas_idx(_n)}/invoke"
 
-    _contexts: Dict[str, ServiceContext] = {
-        _n: ServiceContext(spec=_s) for _n, _s in specs.items()
-    }
-    app.state.tas_components = _contexts
-
-    # built lazily below so late-binding of `handlers[target]` works
+    # shared in-process handler table; populated as each member mounts.
+    # `_dispatch` captures by reference, so late-bound lookups resolve
+    # once every member is registered (order is mount-first, invoke-later).
     _handlers: Dict[str, Any] = {}
 
-    def _make_handler(_name: str):
-        _ctx = _contexts[_name]
-        _row = routing_rows.get(_name, [])
-        _row_names = [_t for _t, _ in _row]
-        _row_weights = [float(_w) for _, _w in _row]
+    async def _dispatch(_target: str,
+                        _req: ServiceRequest) -> ServiceResponse:
+        if _target in _handlers:
+            return await _handlers[_target](_req)
+        return await external_forward(_target, _req)
 
-        @logger(_ctx)
-        async def _handler(req: ServiceRequest) -> ServiceResponse:
-            # simulate service time
-            _svc = _ctx.draw_svc_time()
-            if _svc > 0:
-                await asyncio.sleep(_svc)
+    def _pick_for(member_name: str):
+        """Return a kind-dispatch picker for the entry member; None elsewhere (falls back to atomic's default Jackson pick)."""
+        if member_name != entry_name or not kind_to_target:
+            return None
 
-            # Bernoulli ε
-            if _ctx.draw_eps():
-                return ServiceResponse(request_id=req.request_id,
-                                       service_name=_name,
-                                       success=False,
-                                       message="bernoulli failure")
+        def _pick(_ctx: ServiceContext,
+                  _req: ServiceRequest) -> str:
+            _t = kind_to_target.get(_req.kind)
+            if _t is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"unknown kind {_req.kind!r}; "
+                            f"known kinds: {list(kind_to_target)}"))
+            return _t
 
-            # kind-based dispatch at the entry member
-            if _name == entry_name and kind_to_target:
-                _target = kind_to_target.get(req.kind)
-                if _target is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(f"unknown kind {req.kind!r}; "
-                                f"known kinds: {list(kind_to_target)}"))
-            elif _row_names:
-                _target = _ctx.rng.choices(_row_names,
-                                           weights=_row_weights, k=1)[0]
-            else:
-                return ServiceResponse(request_id=req.request_id,
-                                       service_name=_name,
-                                       success=True,
-                                       message="terminal")
+        return _pick
 
-            # in-process (sibling member) vs external (HTTP forward)
-            if _target in _handlers:
-                _inner = await _handlers[_target](req)
-            else:
-                _inner = await external_forward(_target, req)
-            return ServiceResponse(request_id=req.request_id,
-                                   service_name=_name,
-                                   success=_inner.success,
-                                   message=_inner.message)
+    _contexts: Dict[str, ServiceContext] = {}
+    for _name, _spec in specs.items():
+        _ctx = mount_atomic_service(
+            app,
+            _spec,
+            routing_rows.get(_name, []),
+            external_forward,
+            route=route_for(_name),
+            pick_target=_pick_for(_name),
+            dispatch=_dispatch,
+        )
+        _contexts[_name] = _ctx
+        _handlers[_name] = _ctx.handler
 
-        return _handler
-
-    # instantiate each member's handler and register on the shared dict
-    # so internal dispatches resolve via late-binding
-    for _n in _contexts:
-        _handlers[_n] = _make_handler(_n)
-
-    # mount one POST route per member
-    def _make_route(_name: str):
-        async def _route(req: ServiceRequest) -> ServiceResponse:
-            return await _handlers[_name](req)
-        return _route
-
-    for _n in _contexts:
-        app.add_api_route(route_for(_n),
-                          _make_route(_n),
-                          methods=["POST"],
-                          response_model=ServiceResponse)
-
+    app.state.tas_components = _contexts
     return _contexts

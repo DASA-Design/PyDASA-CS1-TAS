@@ -169,10 +169,12 @@ LOG_COLUMNS = (
 class ServiceContext:
     """**ServiceContext** mutable per-service state.
 
-    Carries exactly the three things the `@logger` decorator needs:
-    the spec (so rows carry `service_name`), a log list (where rows
-    are appended), and a seeded RNG (so service-time and Bernoulli
-    draws stay reproducible under the single config seed).
+    Carries the four things that downstream code needs: the spec (so
+    rows carry `service_name`), a log list (where `@logger` appends
+    rows), a seeded RNG (so service-time and Bernoulli draws stay
+    reproducible under the single config seed), and the bound request
+    handler (set by `mount_atomic_service` after the handler is built,
+    so composite callers can dispatch siblings in-process).
 
     Holds no admission counter, no semaphore, and no `in_system`.
     Concurrency is whatever uvicorn and asyncio produce naturally
@@ -187,6 +189,9 @@ class ServiceContext:
 
     # per-service RNG seeded from spec.seed
     rng: random.Random = field(init=False)
+
+    # bound request handler; set by mount_atomic_service after build
+    handler: Optional[Callable[..., Any]] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.rng = random.Random(self.spec.seed) if self.spec.seed else random.Random()

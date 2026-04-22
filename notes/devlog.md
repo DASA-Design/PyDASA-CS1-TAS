@@ -4,6 +4,22 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-22 — Refactor: `composite` now layers on `atomic` via extension points
+
+Removed the duplicated handler step-order body that had grown in `services/atomic.py` and `services/composite.py`. The two handlers were functionally identical — service-time sleep, epsilon Bernoulli, routing pick, dispatch, wrap with `@logger(ctx)` — but with three composite-only wrinkles (kind-dispatch at entry, in-process sibling lookup, per-member routes). The duplication was bounded but about to cost us: `notes/experiment.md §6.3` pins several observables (`mu_measured`, `epsilon_measured`, `chi_measured`, Little's-law check) that would have forced parallel edits in both files before method 5 could land.
+
+- **`src/experiment/services/atomic.py`** — added two keyword-only extension points: `pick_target(ctx, req) -> target | None` (default: Jackson-weighted pick over `targets`) and `dispatch(target, req) -> ServiceResponse` (default: `await external_forward(target, req)`). Both defaults reproduce the pre-refactor atomic behaviour byte-for-byte. `mount_atomic_service` now also stashes the `@logger`-wrapped handler on `ctx.handler` so composite callers can reach it for sibling dispatch.
+- **`src/experiment/services/base.py`** — `ServiceContext` gains one optional field: `handler: Optional[Callable] = field(default=None, init=False, repr=False)`. Set by `mount_atomic_service` after the handler is built; unused by atomic-only callers (third-party services).
+- **`src/experiment/services/composite.py`** — rewritten to call `mount_atomic_service` once per member, injecting a shared `_handlers` dict through a `_dispatch` closure (in-process first, external-forward second) and an entry-only `_pick` closure that reads `kind_to_target` (raising HTTP 400 on unknown kind, matching the prior behaviour). The handler step-order now lives in ONE function.
+- **Line count**: atomic 97 -> 129, composite 160 -> 135. Net ~neutral; the win is structural, not size.
+- **Tests**: 147 experiment tests pass unchanged (byte-equivalent behaviour). Both demos (`demo_tas.py`, `demo_third_party.py`) still run clean.
+
+**Why not yesterday.** Yesterday's style passes kept the two handlers sibling (deliberately — scope discipline, see `feedback_skill_pass_scope_discipline.md`). Today the question "can composite be rewritten on atomic?" made it worth the separate commit: the tradeoff flipped once the prototype audit listed multiple upcoming M/M/c/K observables that would land in the step-order code path.
+
+**Where the subtlety went.** The trick that made the old code non-trivial — "shared `_handlers` dict populated after each member is mounted, consulted at request time via late-bound lookup" — is still in composite, but now it's one 4-line `_dispatch` closure instead of 40 lines of inline plumbing. That is the legitimate thing to understand when reading composite; everything else is library.
+
+---
+
 ## 2026-04-22 — Style + documentation pass: `experiment/instances/tas`
 
 Second module covered by the 2026-04-22 skill-pass sweep (`third_party` was first; pattern captured earlier in the day).
