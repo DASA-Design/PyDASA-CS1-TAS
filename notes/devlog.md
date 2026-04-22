@@ -4,6 +4,19 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-22 — Style + documentation pass: `experiment/instances/tas`
+
+Second module covered by the 2026-04-22 skill-pass sweep (`third_party` was first; pattern captured earlier in the day).
+
+- **`src/experiment/instances/tas.py`** — tightened module docstring (added usage example; removed the imprecise "TAS_{2..4} Jackson-weighted / TAS_{5,6} terminal" phrasing that did not match `composite.py`'s real dispatch tree; stated kind-dispatch-vs-Jackson split up front). Function docstring now mentions the HTTP 400 on unknown kind, the `app.state.tas_components` side-effect, and the `entry_name` keyword-only default.
+- **`tests/experiment/instances/test_tas.py`** — dropped the back-compat alias `build_tas as make_tas_service` (exactly the kind of drift the verb-first-rename memory flags). Scrubbed stale jargon from the module docstring ("Option-B" is a registry-level vocabulary term; "M/M/c/K invariants per component" is wrong — the apparatus explicitly does not enforce those). Added `*test_name()*` lead-ins to every test method; tightened fixture docstrings; ASCII'd `>= 1` (was Unicode `>=`).
+- **`src/scripts/demo_tas.py`** (new) — three-section walkthrough: kind-dispatch at TAS_{1}, in-process chain TAS_{1} -> TAS_{2} -> TAS_{3} with per-member logs, external-forward boundary at TAS_{2} -> MAS_{1}. Same idiom as `demo_third_party.py` / `demo_services.py`. Verified by invocation.
+- **Suite**: 147 experiment-side tests pass in 11.7 s. `tests/methods/test_experiment.py` drift is still there and still out of scope (same orthogonal `ClientConfig.kind_weights` failure as the earlier `third_party` pass).
+
+**Scope discipline.** Sibling files surfaced `Option-B` / `ServiceState` references in `test_registry.py` + `test_seed.py` but those cover different source modules (`registry.py`, `base.py`) — left alone per the scope-discipline rule (see `feedback_skill_pass_scope_discipline.md`).
+
+---
+
 ## 2026-04-22 — Style + documentation pass: `experiment/instances/third_party`
 
 Applied the code-documentation + coding-conventions + test-layout skills to `src/experiment/instances/third_party.py` and its associated tests.
