@@ -3,9 +3,7 @@
 Module coefficients.py
 ======================
 
-Config-driven derivation of operationally meaningful coefficients (theta,
-sigma, eta, phi) from a post-`run_analysis` engine. Specs come from
-`data/config/method/dimensional.json` under `coefficients`:
+Config-driven derivation of operationally meaningful coefficients (theta, sigma, eta, phi) from a post-`run_analysis` engine. Specs come from `data/config/method/dimensional.json` under `coefficients`::
 
     {
         "symbol": "theta",
@@ -14,14 +12,12 @@ sigma, eta, phi) from a post-`run_analysis` engine. Specs come from
         "description": "theta = L/K - queue fill ratio"
     }
 
-`{pi[i]}` placeholders resolve to the i-th Pi coefficient key as it sits in
-`engine.coefficients` after `run_analysis()`. Must be called AFTER analysis, else no Pi-groups exist yet.
+`{pi[i]}` placeholders resolve to the i-th Pi coefficient key as it sits in `engine.coefficients` after `run_analysis()`. Must be called AFTER analysis, else no Pi-groups exist yet.
 
-    - `derive_coefficients(engine, specs, artifact_key)` applies every spec in order and returns `{full_sym: Coefficient}` for the derived ones only.
+Public API:
+    - `derive_coefficients(engine, specs, artifact_key)` apply every spec in order and return `{full_sym: Coefficient}` for the derived ones only.
 
-*IMPORTANT:* Pi-index ordering is stable across adaptations for a given
-artifact but can shift if the variable set changes. Re-verify with a spot
-test when the profile schema is edited.
+*IMPORTANT:* Pi-index ordering is stable across adaptations for a given artifact but can shift if the variable set changes. Re-verify with a spot test when the profile schema is edited.
 """
 # native python modules
 from __future__ import annotations
@@ -41,14 +37,14 @@ _PI_PAT = re.compile(r"\{pi\[(\d+)\]\}")
 
 
 def _resolve_expr(expr_pattern: str, pi_keys: list[str]) -> str:
-    """*_resolve_expr()* substitutes `{pi[i]}` tokens in `expr_pattern` with the i-th key in `pi_keys`.
+    """*_resolve_expr()* substitute `{pi[i]}` tokens with the i-th key in `pi_keys`.
 
     Args:
         expr_pattern (str): spec `expr_pattern` with `{pi[i]}` placeholders.
         pi_keys (list[str]): Pi coefficient keys in the order returned by `run_analysis()`.
 
     Raises:
-        IndexError: If any `{pi[i]}` references an index outside `pi_keys`.
+        IndexError: when any `{pi[i]}` references an index outside `pi_keys`.
 
     Returns:
         str: expression ready to pass to `engine.derive_coefficient(expr=...)`.
@@ -69,10 +65,9 @@ def derive_coefficients(engine: AnalysisEngine,
                         specs: list[dict[str, Any]],
                         *,
                         artifact_key: str) -> dict[str, Any]:
-    """*derive_coefficients()* applies named coefficient specs to a post-analysis engine.
+    """*derive_coefficients()* apply named coefficient specs to a post-analysis engine.
 
-    Each spec's `symbol` is subscripted with `artifact_key` so the final
-    coefficient symbol becomes e.g. `\\theta_{TAS_{1}}`.
+    Each spec's `symbol` is subscripted with `artifact_key` so the final coefficient symbol becomes e.g. `\\theta_{TAS_{1}}`.
 
     Args:
         engine (AnalysisEngine): engine with Pi-groups already derived (`run_analysis()` must have been called).

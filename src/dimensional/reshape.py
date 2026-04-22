@@ -3,17 +3,22 @@
 Module reshape.py
 =================
 
-Result-envelope reshapers for the dimensional method. Turn the per-artifact
-dict produced by `src.methods.dimensional.run` into the flat pandas shapes
-the existing `src.view.qn_diagram` plotters consume.
+Result-envelope reshapers for the dimensional method. Turn the
+per-artifact dict produced by `src.methods.dimensional.run` into the
+flat pandas shapes the existing `src.view.qn_diagram` plotters
+consume.
 
-    - `coefficients_to_nodes(result)` returns a per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
-    - `coefficients_to_network(result, agg="mean")` returns a single-row DataFrame of network-wide aggregates across artifacts.
-    - `coefficients_delta(nds_dflt, nds_other, *, pct=True)` returns the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
+Public API:
+    - `coefficients_to_nodes(result)` per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
+    - `coefficients_to_network(result, agg="mean")` single-row DataFrame of network-wide aggregates across artifacts.
+    - `coefficients_delta(nds_dflt, nds_other, *, pct=True)` the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
+    - `aggregate_architecture_coefficients(result, tag="TAS")` PACS- iter2-style architecture-level aggregate (sum first, divide after).
+    - `aggregate_sweep_to_arch(sweep_data, tag="TAS")` collapse per-artifact sweep arrays into flat architecture-level arrays.
+    - `network_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
 
-*IMPORTANT:* coefficient names drop the artifact subscript here (e.g. the
-symbol `\\theta_{TAS_{1}}` becomes the column `theta`) so the plotters see
-uniform column names across artifacts.
+*IMPORTANT:* coefficient names drop the artifact subscript here (the
+symbol `\\theta_{TAS_{1}}` becomes column `theta`) so the plotters
+see uniform column names across artifacts.
 """
 # native python modules
 from __future__ import annotations
@@ -145,13 +150,9 @@ def coefficients_delta(nds_dflt: pd.DataFrame,
 def aggregate_architecture_coefficients(result: Dict[str, Any],
                                         *,
                                         tag: str = "TAS") -> pd.DataFrame:
-    """*aggregate_architecture_coefficients()* computes one architecture-level coefficient set by summing raw per-node variables first and dividing after -- the PACS-iter2 aggregation pattern.
+    """*aggregate_architecture_coefficients()* compute one architecture-level coefficient set by summing raw per-node variables first and dividing after; the PACS-iter2 aggregation pattern.
 
-    This answers *"what is the TAS as a WHOLE doing?"* rather than *"what is
-    the typical node doing?"*. The per-node `coefficients_to_network` averages
-    pre-computed per-node coefficients; this one sums raw L, K, lambda, ...
-    across every artifact in the network and derives ONE theta / sigma / eta /
-    phi / epsilon at the architecture level.
+    This answers *"what is the TAS as a WHOLE doing?"* rather than *"what is the typical node doing?"*. The per-node `coefficients_to_network` averages pre-computed per-node coefficients; this one sums raw L, K, lambda, ... across every artifact in the network and derives ONE theta / sigma / eta / phi / epsilon at the architecture level.
 
     Aggregation rules (match `__OLD__/src/exports/dimensional_2_draft.py`):
 
@@ -231,8 +232,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
                             tag: str = "TAS") -> Dict[str, np.ndarray]:
     """*aggregate_sweep_to_arch()* collapses per-artifact sweep arrays (from `sweep_architecture`) into flat architecture-level arrays via PACS-iter2 aggregation applied point-by-point.
 
-    Expects the per-node arrays to be aligned across artifacts (same row = same
-    whole-network sweep point), as produced by `sweep_architecture`.
+    Expects the per-node arrays to be aligned across artifacts (same row = same whole-network sweep point), as produced by `sweep_architecture`.
 
     Aggregation at each sweep index `k`:
 

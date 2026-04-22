@@ -58,7 +58,7 @@ class TestCoefficientValues:
     """Numerical setpoints match the by-hand formulas evaluated at PyDASA's `_std_mean`.
 
     Values are read from the engine at test time so the tests track whatever
-    is in `data/config/profile/dflt.json` — in particular the seeded values
+    is in `data/config/profile/dflt.json`; in particular the seeded values
     written by `src.utils.seed_dim_from_analytic` after the analytic solver
     is run.
     """

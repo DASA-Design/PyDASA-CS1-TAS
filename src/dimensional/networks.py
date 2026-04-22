@@ -7,29 +7,29 @@ Configuration-sweep helpers for the dimensional method's yoly notebook.
 
 Two sweeps, answering different questions:
 
-    - `sweep_artifacts(cfg, sweep_grid)` -- INDEPENDENT per-artifact sweep. Each node's lambda is the seeded analytic value; no routing propagation. Answers *"what is the design space of THIS node in isolation?"*. Useful for per-node introspection but not architecture-level analysis.
-
-    - `sweep_architecture(cfg, sweep_grid, tag="TAS")` -- JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lambdas(P, f * lambda_z)` redistributes external arrivals to per-node rates before the M/M/c/K solve. First node to saturate stops that combo's ramp -- the whole network's instability is dominated by its busiest node.
-
-    - `sweep_artifact(key, vars_block, sweep_grid, ...)` -- underlying single-artifact helper used by `sweep_artifacts`.
+    - `sweep_artifacts(cfg, sweep_grid)` is an INDEPENDENT per-artifact sweep. Each node's lambda is the seeded analytic value; no routing propagation. Answers *"what is the design space of THIS node in isolation?"*. Useful for per-node introspection but not architecture-level analysis.
+    - `sweep_architecture(cfg, sweep_grid, tag="TAS")` is a JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from  `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lambdas(P, f * lambda_z)` redistributes external  arrivals to per-node rates before the M/M/c/K solve; the first node to saturate stops that combo's ramp, since the whole network's instability is dominated by its busiest node.
+    - `sweep_artifact(key, vars_block, sweep_grid, ...)` is the underlying single-artifact helper used by `sweep_artifacts`.
 
 All three return dicts shape-compatible with the dc_charts plotters.
 Coefficients are derived via closed-form directly from the M/M/c/K
 solver (no PyDASA round-trip):
 
-    - theta = L / K           (Occupancy)
-    - sigma = lambda * W / L  (Stall, ~1 in steady state)
+    - theta = L / K              (Occupancy)
+    - sigma = lambda * W / L     (Stall, ~1 in steady state)
     - eta   = chi * K / (mu * c) (Effective-yield)
-    - phi   = M_act / M_buf   (Memory-use, collapses to theta under L*delta / K*delta)
+    - phi   = M_act / M_buf      (Memory-use, collapses to theta
+                                  under L * delta / K * delta)
 
-*IMPORTANT:* the sweep is deterministic (not Monte Carlo). For stochastic
-sampling go through `src.methods.dimensional` + the dimensional notebook.
+*IMPORTANT:* the sweep is deterministic (not Monte Carlo). For
+stochastic sampling go through `src.methods.dimensional` plus the
+dimensional notebook.
 """
 # native python modules
 from __future__ import annotations
 
 # data types
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 # scientific stack
 import numpy as np
@@ -47,18 +47,19 @@ _UTIL_THLD_DEFAULT = 0.95
 def _setpoint(vars_block: Dict[str, Dict[str, Any]],
               prefix: str,
               artifact_key: str) -> float:
-    """*_setpoint()* returns the `_setpoint` of a variable identified by `<prefix>_{<artifact_key>}`.
+    """*_setpoint()* read the `_setpoint` of a variable identified by `<prefix>_{<artifact_key>}`.
 
     Args:
         vars_block (Dict[str, Dict[str, Any]]): per-artifact `vars` dict.
-        prefix (str): LaTeX symbol prefix (e.g. `"\\lambda"`, `"\\mu"`, `"K"`).
+        prefix (str): LaTeX symbol prefix (e.g. `"\\lambda"`,
+            `"\\mu"`, `"K"`).
         artifact_key (str): artifact identifier in LaTeX subscript form.
 
     Raises:
-        KeyError: If no matching variable is present.
+        KeyError: when no matching variable is present.
 
     Returns:
-        float: the setpoint value (cast to float).
+        float: setpoint value, cast to float.
     """
     _sym = f"{prefix}_{{{artifact_key}}}"
     if _sym not in vars_block:
@@ -322,8 +323,10 @@ def sweep_architecture(cfg: NetworkConfig,
                     continue
 
                 # binary-search the max stable external-arrival factor
-                _f_max = _find_max_stable_lambda_factor(cfg, _mu_vec,
-                                                       _c_int, _util)
+                _f_max = _find_max_stable_lambda_factor(cfg,
+                                                        _mu_vec,
+                                                        _c_int,
+                                                        _util)
                 if _f_max <= 0.0:
                     continue
 

@@ -3,9 +3,9 @@
 Module schema.py
 ================
 
-Config-driven PyDASA `Schema` construction for the TAS case study. Kept
-deliberately thin: PyDASA validates the framework and builds the FDU matrix; this layer only shuttles the FDU list from `data/config/method/dimensional.json` into a `Schema(...)` call.
+Config-driven PyDASA `Schema` construction for the TAS case study. Kept deliberately thin: PyDASA validates the framework and builds the FDU matrix; this layer only shuttles the FDU list from `data/config/method/dimensional.json` into a `Schema(...)` call.
 
+Public API:
     - `build_schema(fdus, fwk="CUSTOM")` returns a `Schema` with `_setup_fdus()` already applied, ready to attach to an `AnalysisEngine`.
 
 *IMPORTANT:* every FDU dict must carry `_fwk == fwk`; mismatches raise early with an explicit list of offenders.
@@ -23,14 +23,14 @@ from pydasa.dimensional.vaschy import Schema
 def build_schema(fdus: list[dict[str, Any]],
                  *,
                  fwk: str = "CUSTOM") -> Schema:
-    """*build_schema()* returns a PyDASA `Schema` built from a list of FDU dicts.
+    """*build_schema()* construct a PyDASA `Schema` from a list of FDU dicts.
 
     Args:
-        fdus (list[dict[str, Any]]): FDU dicts with keys `_idx`, `_sym`, `_fwk`, `_name`, `_unit`, `description`. Shape must match `Schema._fdu_lt`. Typically loaded from `data/config/method/dimensional.json`.
+        fdus (list[dict[str, Any]]): FDU dicts with keys `_idx`, `_sym`, `_fwk`, `_name`, `_unit`, `description`. Shape must match `Schema._fdu_lt`; typically loaded from`data/config/method/dimensional.json`.
         fwk (str): framework name; every FDU's `_fwk` field must match this. Defaults to `"CUSTOM"`.
 
     Raises:
-        ValueError: If any FDU dict has `_fwk` different from `fwk`.
+        ValueError: when any FDU dict has `_fwk` different from `fwk`.
 
     Returns:
         Schema: initialised `Schema` with `_setup_fdus()` already called.
