@@ -1,31 +1,39 @@
-"""CS-01 service instantiations.
+"""Shared service building blocks.
 
-This layer names what a reader thinks in case-study terms: the TAS
-target system (ONE FastAPI app with six embedded atomic components)
-and the third-party services (one FastAPI app per artifact).
+Four modules, one responsibility each:
 
-Both are FUNCTIONS, not classes — they construct generic `AtomicQueue`
-/ `CompositeQueue` instances from `core/` with CS-01-specific
-parameters and mount them via `http/`. No TAS-specific or third-party-
-specific inheritance anywhere; parameterised construction only.
+    - `base.py`: `ServiceSpec`, `ServiceContext`, wire schemas, `LOG_COLUMNS`, `make_base_app`, `HttpForward`, `derive_seed`.
+    - `instruments.py`: `@logger(ctx)` annotation that records one CSV row per invocation. No queueing state.
+    - `atomic.py`: `mount_atomic_service(app, spec, targets, forward)` attaches an atomic handler to a FastAPI app.
+    - `composite.py`: `mount_composite_service(app, specs, rows, k2t, forward, entry)` attaches N members to one app with in-process dispatch between them.
 
-    - `build_tas(specs, routing_rows, kind_to_target, forward)` → FastAPI
-    - `build_third_party(spec, targets, forward)` → FastAPI
+CS-01 instantiations live in `src/experiment/instances/`.
 """
 
-# re-export the wire schemas + spec dataclass so external callers can keep
-# a stable `from src.experiment.services import ServiceRequest, ServiceSpec`
-# import even while the implementation migrates into `core/` + `http/`
-from src.experiment.core import (ServiceRequest,
-                                 ServiceResponse,
-                                 ServiceSpec)
-from src.experiment.services.tas import build_tas
-from src.experiment.services.third_party import build_third_party
+from src.experiment.services.atomic import mount_atomic_service
+from src.experiment.services.base import (LOG_COLUMNS,
+                                          ExternalForwardFn,
+                                          HttpForward,
+                                          ServiceContext,
+                                          ServiceRequest,
+                                          ServiceResponse,
+                                          ServiceSpec,
+                                          derive_seed,
+                                          make_base_app)
+from src.experiment.services.composite import mount_composite_service
+from src.experiment.services.instruments import logger
 
 __all__ = [
+    "ExternalForwardFn",
+    "HttpForward",
+    "LOG_COLUMNS",
+    "ServiceContext",
     "ServiceRequest",
     "ServiceResponse",
     "ServiceSpec",
-    "build_tas",
-    "build_third_party",
+    "derive_seed",
+    "logger",
+    "make_base_app",
+    "mount_atomic_service",
+    "mount_composite_service",
 ]
