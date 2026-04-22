@@ -49,12 +49,11 @@ def _resolve_expr(expr_pattern: str, pi_keys: list[str]) -> str:
     Returns:
         str: expression ready to pass to `engine.derive_coefficient(expr=...)`.
     """
-    # substitute each placeholder or raise if the index is out of range
     def _sub(m: re.Match[str]) -> str:
         _i = int(m.group(1))
         if _i >= len(pi_keys):
-            _msg = (f"expr_pattern references pi[{_i}] but only {len(pi_keys)} "
-                    "Pi-groups were derived; check variable/FDU counts.")
+            _msg = f"expr_pattern references pi[{_i}] but only {len(pi_keys)} "
+            _msg += "Pi-groups were derived; check variable/FDU counts."
             raise IndexError(_msg)
         return pi_keys[_i]
 
@@ -80,22 +79,19 @@ def derive_coefs(engine: AnalysisEngine,
     # collect the Pi-group keys in order so expr_pattern indices line up
     _pi_keys = [_k for _k in engine.coefficients.keys() if _k.startswith("\\Pi_")]
 
-    # apply each spec in declaration order
     _der: dict[str, Any] = {}
     for _sp in specs:
-        # build the artifact-qualified coefficient symbol
         _sym = _sp["symbol"]
         _full = f"\\{_sym}_{{{artifact_key}}}"
 
-        # resolve the expression against the actual Pi-keys
         _exp = _resolve_expr(_sp["expr_pattern"], _pi_keys)
 
-        # delegate to pydasa; `idx=-1` appends to the coefficient list
-        _coeff = engine.derive_coefficient(expr=_exp,
-                                           symbol=_full,
-                                           name=f"{artifact_key} {_sp['name']} coefficient",
-                                           description=_sp["description"],
-                                           idx=-1)
+        # `idx=-1` appends to pydasa's coefficient list rather than overwriting a slot
+        _coeff = engine.derive_coefficient(_exp,
+                                           _full,
+                                           f"{artifact_key} {_sp['name']} coefficient",
+                                           _sp["description"],
+                                           -1)
         _der[_full] = _coeff
 
     return _der
