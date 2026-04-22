@@ -67,8 +67,7 @@ def generate_payload(kind: str,
     Args:
         kind (str): request kind label the payload belongs to.
         size_bytes (int): requested payload size in bytes; must be `>= 0`.
-        rng (Optional[random.Random]): dedicated RNG for reproducibility.
-            When `None`, a fresh `random.Random()` is used.
+        rng (Optional[random.Random]): dedicated RNG for reproducibility. When `None`, a fresh `random.Random()` is used.
 
     Raises:
         ValueError: if `size_bytes < 0`.

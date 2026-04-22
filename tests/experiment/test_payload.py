@@ -7,10 +7,8 @@ Unit tests for the mock-payload generator (`src.experiment.payload`).
 Pins FR-2.3 behaviour:
 
     - **TestMockPayload** frozen dataclass + `to_dict` round-trip.
-    - **TestGeneratePayload** exact byte size, determinism under a seeded
-      RNG, and negative-size rejection.
-    - **TestResolveSizeForKind** exact keys, `<kind>_request` aliases,
-      `response_default` fallback, and caller-supplied default.
+    - **TestGeneratePayload** exact byte size, determinism under a seeded RNG, and negative-size rejection.
+    - **TestResolveSizeForKind** exact keys, `<kind>_request` aliases, `response_default` fallback, and caller-supplied default.
 """
 # native python modules
 import random
