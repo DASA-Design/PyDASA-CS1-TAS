@@ -44,16 +44,15 @@ def gfactorial(x: Union[int, float],
     """
     if isinstance(x, int) and x >= 0:
         # Standard factorial for non-negative integers
-        result = math.factorial(x)
+        _result = math.factorial(x)
     elif isinstance(x, int) and x < 0:
         # Factorial is not defined for negative integers
         raise ValueError("Factorial is not defined for negative integers")
     else:
         # For floats, use the gamma function: Γ(x+1)
-        result = math.gamma(x + 1)
+        _result = math.gamma(x + 1)
 
-    # Apply precision if specified
     if prec is not None:
-        result = round(result, prec)
+        _result = round(_result, prec)
 
-    return result
+    return _result
