@@ -7,27 +7,17 @@ Unit tests for `src.experiment.client`. Use `httpx.MockTransport` so
 nothing depends on spinning up the real apparatus; every test runs in
 well under a second.
 
-    - **TestInvocationRecord** `(status_code, success)` maps to
-      `infra_failure` / `business_failure` / `response_time_s` derived
-      properties.
+    - **TestInvocationRecord** `(status_code, success)` maps to `infra_failure` / `business_failure` / `response_time_s` derived properties.
     - **TestCascadeConfigDefaults** dataclass defaults.
     - **TestRampConfigDefaults** dataclass defaults.
-    - **TestClientConfigKindWeights** `ClientConfig` kind-weights
-      validation fires at `ClientSimulator.__init__` time, not at
-      dataclass construction.
-    - **TestPickKind** `_pick_kind` respects the declared weights under
-      a seeded RNG and is deterministic given the same seed.
-    - **TestValidateRamp** min_samples_per_kind floor, rates
-      monotonicity, cascade mode, threshold and window bounds.
-    - **TestBuildRampCfg** builds a `RampConfig` plus `CascadeConfig`
-      from a dict; validates first.
+    - **TestClientConfigKindWeights** `ClientConfig` kind-weights validation fires at `ClientSimulator.__init__` time, not at dataclass construction.
+    - **TestPickKind** `_pick_kind` respects the declared weights under a seeded RNG and is deterministic given the same seed.
+    - **TestValidateRamp** min_samples_per_kind floor, rates monotonicity, cascade mode, threshold and window bounds.
+    - **TestBuildRampCfg** builds a `RampConfig` plus `CascadeConfig` from a dict; validates first.
     - **TestCascadeDetectorFailFast** trips on the first infra failure.
-    - **TestCascadeDetectorRolling** trips only once the threshold is
-      breached over a full window.
-    - **TestSendOne** payload blob, `size_bytes`, and `X-Request-*`
-      headers propagate to the outbound request.
-    - **TestProbeStopsOnCascade** `_probe_at_rate` reports `cascade: ...`
-      when the detector trips.
+    - **TestCascadeDetectorRolling** trips only once the threshold is breached over a full window.
+    - **TestSendOne** payload blob, `size_bytes`, and `X-Request-*` headers propagate to the outbound request.
+    - **TestProbeStopsOnCascade** `_probe_at_rate` reports `cascade: ...` when the detector trips.
 """
 # native python modules
 import asyncio

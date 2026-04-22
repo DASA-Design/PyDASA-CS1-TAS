@@ -10,23 +10,11 @@ layer (503 / timeout / real 500).
 
 Key design choices (see `notes/experiment.md` for rationale):
 
-    - **Deterministic interarrival** via `await asyncio.sleep(1/rate)`.
-      Poisson emerges naturally from downstream routing and service-time
-      variability; not enforced here.
-    - **Kind weights from the profile routing matrix**. The CLIENT
-      samples the request kind according to `TAS_{1}`'s routing-row
-      probabilities; the architecture then routes deterministically on
-      `req.kind`.
-    - **Sample-count probes**. At each rate in the schedule, send until
-      every kind has `>= min_samples_per_kind` completed requests (or a
-      safety timeout fires), then step to the next rate.
-    - **Cascade stop on infrastructure failures only**. Business
-      failures (HTTP 200 with `success=False`) are counted but do NOT
-      stop the ramp; they are the adaptation-target signal we want to
-      measure. Only 503 / timeout / 5xx trigger stop, per the configured
-      cascade rule (rolling-window or fail-fast).
-    - **No cost field**. Cost is a domain concept (R3); the client
-      records only what is architecturally observable.
+    - **Deterministic interarrival** via `await asyncio.sleep(1/rate)`. Poisson emerges naturally from downstream routing and service-time variability; not enforced here.
+    - **Kind weights from the profile routing matrix**. The CLIENT samples the request kind according to `TAS_{1}`'s routing-row probabilities; the architecture then routes deterministically on `req.kind`.
+    - **Sample-count probes**. At each rate in the schedule, send until every kind has `>= min_samples_per_kind` completed requests (or a safety timeout fires), then step to the next rate.
+    - **Cascade stop on infrastructure failures only**. Business failures (HTTP 200 with `success=False`) are counted but do NOT stop the ramp; they are the adaptation-target signal we want to measure. Only 503 / timeout / 5xx trigger stop, per the configured cascade rule (rolling-window or fail-fast).
+    - **No cost field**. Cost is a domain concept (R3); the client records only what is architecturally observable.
 
 Public API:
     - `InvocationRecord` one client-side measurement with derived failure flags.
@@ -74,10 +62,8 @@ class InvocationRecord:
         request_id (str): UUID4 identifying this invocation.
         kind (str): request kind label (e.g. `"TAS_{2}"`).
         send_ts (float): epoch seconds when the client dispatched the request.
-        recv_ts (float): epoch seconds when the response was received (or
-            the transport exception was captured).
-        status_code (int): HTTP status; `-1` means transport exception
-            (timeout, connection reset, DNS failure, etc.).
+        recv_ts (float): epoch seconds when the response was received (or the transport exception was captured).
+        status_code (int): HTTP status; `-1` means transport exception (timeout, connection reset, DNS failure, etc.).
         success (bool): body-level `success` flag; business-level outcome.
         size_bytes (int): declared payload size in bytes.
     """
@@ -119,8 +105,7 @@ class CascadeConfig:
     """*CascadeConfig* when to stop the ramp.
 
     Attributes:
-        mode (str): `"rolling"` (threshold over a rolling window) or
-            `"fail_fast"` (stop on any single infra failure).
+        mode (str): `"rolling"` (threshold over a rolling window) or `"fail_fast"` (stop on any single infra failure).
         threshold (float): rolling-mode only. Infra-fail rate above this stops the ramp.
         window (int): rolling-mode only. Size of the trailing window in number of requests.
     """
@@ -137,8 +122,7 @@ class RampConfig:
     """*RampConfig* the rate schedule + per-rate probe knobs + cascade rule.
 
     Attributes:
-        min_samples_per_kind (int): CLT floor; each probe runs until
-            every kind has at least this many successful responses.
+        min_samples_per_kind (int): CLT floor; each probe runs until every kind has at least this many successful responses.
         max_probe_window_s (float): safety timeout per probe, in seconds.
         rates (List[float]): monotonically increasing list of target rates (req/s).
         cascade (CascadeConfig): cascade-detection rule applied across probes.
@@ -166,16 +150,9 @@ class ClientConfig:
     Attributes:
         entry_service (str): name of the service that receives the client's traffic.
         seed (int): RNG seed for kind sampling + payload generation.
-        request_size_bytes (int): fallback size used when
-            `request_sizes_by_kind` has no entry for a kind.
-        request_sizes_by_kind (Dict[str, int]): FR-2.3 per-kind
-            payload-size map, read from the method config's
-            `request_size_bytes` block. Keys either match kind labels
-            exactly (e.g. `TAS_{2}`) or use the `<kind>_request` alias
-            form (e.g. `analyse_request`); `resolve_size_for_kind()`
-            resolves both.
-        kind_weights (Dict[str, float]): probability mass per request
-            kind for client-side sampling.
+        request_size_bytes (int): fallback size used when `request_sizes_by_kind` has no entry for a kind.
+        request_sizes_by_kind (Dict[str, int]): FR-2.3 per-kind payload-size map, read from the method config's `request_size_bytes` block. Keys either match kind labels exactly (e.g. `TAS_{2}`) or use the `<kind>_request` alias form (e.g. `analyse_request`); `resolve_size_for_kind()` resolves both.
+        kind_weights (Dict[str, float]): probability mass per request kind for client-side sampling.
         ramp (RampConfig): rate schedule + cascade rule.
     """
 
@@ -315,8 +292,7 @@ class ClientSimulator:
     """*ClientSimulator* async request generator + ramp driver.
 
     Attributes:
-        _client (httpx.AsyncClient): shared client (routed to the
-            in-process mesh or a real TCP target).
+        _client (httpx.AsyncClient): shared client (routed to the in-process mesh or a real TCP target).
         _registry (ServiceRegistry): service-name to URL resolver.
         _cfg (ClientConfig): static runtime config.
     """
@@ -419,9 +395,7 @@ class ClientSimulator:
             detector (_CascadeDetector): shared cascade state across probes.
 
         Returns:
-            Dict[str, Any]: probe summary with keys `rate`, `duration_s`,
-                `samples_per_kind`, `stats_per_kind`, `infra_fail_rate`,
-                `business_fail_rate`, `stopped_reason`.
+            Dict[str, Any]: probe summary with keys `rate`, `duration_s`, `samples_per_kind`, `stats_per_kind`, `infra_fail_rate`, `business_fail_rate`, `stopped_reason`.
         """
         _target = int(self._cfg.ramp.min_samples_per_kind)
         _max_s = float(self._cfg.ramp.max_probe_window_s)
