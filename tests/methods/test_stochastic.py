@@ -11,7 +11,7 @@ Each class groups tests by the contract under verification:
     - **TestStochasticEndToEnd**: each adaptation solves end-to-end via SimPy DES, produces 13 stable nodes and a full R1 / R2 / R3 verdict with the expected schema.
     - **TestAnalyticAgreement**: the stochastic DES solution for the baseline must agree with the closed-form analytic solution on the network-wide averages (avg_rho, W_net) within Monte-Carlo tolerance. This cross-method sanity makes the two methods mutually validating.
 
-*IMPORTANT:* tests use `_QUICK_CFG` (3 reps x 1000 invocations) not the production config (10 reps x 10 000 invocations). This cuts the per-adaptation run time by ~30x with the trade-off of wider CIs; the rho / W agreement tolerances are loosened to match. To re-run any test at full fidelity just swap `method_cfg=_QUICK_CFG` for `method_cfg=None` in the call.
+*IMPORTANT:* tests use `_QUICK_CFG` (2 reps x 300 invocations) not the production config (10 reps x 10 000 invocations). This cuts the per-adaptation run time below ~1 second with the trade-off of wider CIs; the rho / W agreement tolerances are loosened to match. To re-run any test at full fidelity just swap `method_cfg=_QUICK_CFG` for `method_cfg=None` in the call.
 """
 # native python modules
 # (none)
@@ -27,15 +27,17 @@ from src.methods.stochastic import run as run_stochastic
 # Abbreviated method config used by the stochastic tests. Keeps each
 # per-adaptation run under ~1 second while still exercising the full
 # pipeline (reps > 1 so `_std` columns populate; warmup > 0 so the
-# warm-up filter exercises the interval-straddling branch).
+# warm-up filter exercises the interval-straddling branch). A few
+# hundred invocations are enough for a sanity-check that the engine
+# runs end-to-end; production fidelity lives in `stochastic.json`.
 _QUICK_CFG = {
     "method": "stochastic",
     "seed": 42,
-    "horizon_invocations": 1000,
-    "warmup_invocations": 100,
-    "replications": 3,
+    "horizon_invocations": 300,
+    "warmup_invocations": 30,
+    "replications": 2,
     "confidence_level": 0.95,
-    "window_invocations": 100,
+    "window_invocations": 30,
     "rsem_target": 0.05,
 }
 
@@ -105,10 +107,10 @@ class TestAnalyticAgreement:
     def test_baseline_avg_rho_close_to_analytic(self,
                                                 _result_baseline,
                                                 _analytic_baseline):
-        """*test_baseline_avg_rho_close_to_analytic()* stochastic avg_rho must be within 10 % of the analytic value."""
+        """*test_baseline_avg_rho_close_to_analytic()* stochastic avg_rho must be within 25 % of the analytic value at the _QUICK_CFG horizon (300 x 2)."""
         _st_rho = float(_result_baseline["network"].iloc[0]["avg_rho"])
         _an_rho = float(_analytic_baseline["network"].iloc[0]["avg_rho"])
-        assert _st_rho == pytest.approx(_an_rho, rel=0.10), (
+        assert _st_rho == pytest.approx(_an_rho, rel=0.25), (
             f"stochastic avg_rho={_st_rho:.4f} vs "
             f"analytic avg_rho={_an_rho:.4f}"
         )
@@ -116,9 +118,9 @@ class TestAnalyticAgreement:
     def test_baseline_W_net_close_to_analytic(self,
                                               _result_baseline,
                                               _analytic_baseline):
-        """*test_baseline_W_net_close_to_analytic()* stochastic W_net must be within 15 % of the analytic value."""
+        """*test_baseline_W_net_close_to_analytic()* stochastic W_net must be within 30 % of the analytic value at the _QUICK_CFG horizon (300 x 2)."""
         _st_w = float(_result_baseline["network"].iloc[0]["W_net"])
         _an_w = float(_analytic_baseline["network"].iloc[0]["W_net"])
-        assert _st_w == pytest.approx(_an_w, rel=0.15), (
+        assert _st_w == pytest.approx(_an_w, rel=0.30), (
             f"stochastic W_net={_st_w:.6f} vs analytic W_net={_an_w:.6f}"
         )

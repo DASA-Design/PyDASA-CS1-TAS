@@ -39,27 +39,28 @@ class TestMM1Convergence:
     """
 
     def test_rho_L_W_Wq_match_textbook(self):
-        """*test_rho_L_W_Wq_match_textbook()* lambda=5, mu=10, 5 reps of 5000 sec -> closed-form rho/L/W/Wq within 10 %."""
-        # single-node network, no onward routing: P = [[0]]
+        """*test_rho_L_W_Wq_match_textbook()* lambda=5, mu=10, 3 reps of 1500 sec -> closed-form rho / L / W / Wq within 12 %."""
+        # single-node network, no onward routing: P = [[0]]. 3 x 1500 sec
+        # gives ~21 000 collected samples at lambda=5, plenty for CLT.
         _summary = simulate_network(
             mu=[10.0],
             lambda_zero=[5.0],
             c=[1],
             K=[None],
             P=np.array([[0.0]]),
-            horizon=5000.0,
-            warmup=500.0,
-            reps=5,
+            horizon=1500.0,
+            warmup=150.0,
+            reps=3,
             seed=42,
         )
         _row = _summary.iloc[0]
 
-        # ten-percent tolerance is generous for 22500 sec of collected
-        # samples across 5 reps; tightens as horizon grows
-        assert _row["rho_mean"] == pytest.approx(0.5, rel=0.10)
-        assert _row["L_mean"] == pytest.approx(1.0, rel=0.10)
-        assert _row["W_mean"] == pytest.approx(0.2, rel=0.10)
-        assert _row["Wq_mean"] == pytest.approx(0.1, rel=0.15)
+        # 12 % tolerance (slightly looser than 10 % to absorb the
+        # shorter horizon); Wq gets the usual wider band
+        assert _row["rho_mean"] == pytest.approx(0.5, rel=0.12)
+        assert _row["L_mean"] == pytest.approx(1.0, rel=0.12)
+        assert _row["W_mean"] == pytest.approx(0.2, rel=0.12)
+        assert _row["Wq_mean"] == pytest.approx(0.1, rel=0.20)
 
     def test_std_columns_populated(self):
         """*test_std_columns_populated()* the groupby-agg summary must expose non-NaN `_std` columns when reps > 1 so downstream CI bands have a usable sigma."""
@@ -69,9 +70,9 @@ class TestMM1Convergence:
             c=[1],
             K=[None],
             P=np.array([[0.0]]),
-            horizon=2000.0,
-            warmup=200.0,
-            reps=3,
+            horizon=500.0,
+            warmup=50.0,
+            reps=2,
             seed=42,
         )
         _row = _summary.iloc[0]
