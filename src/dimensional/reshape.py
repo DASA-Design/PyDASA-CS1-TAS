@@ -3,10 +3,7 @@
 Module reshape.py
 =================
 
-Result-envelope reshapers for the dimensional method. Turn the
-per-artifact dict produced by `src.methods.dimensional.run` into the
-flat pandas shapes the existing `src.view.qn_diagram` plotters
-consume.
+Result-envelope reshapers for the dimensional method. Turn the per-artifact dict produced by `src.methods.dimensional.run` into the flat pandas shapes the existing `src.view.qn_diagram` plotters consume.
 
 Public API:
     - `coefs_to_nodes(result)` per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
@@ -16,9 +13,7 @@ Public API:
     - `aggregate_sweep_to_arch(sweep_data, tag="TAS")` collapse per-artifact sweep arrays into flat architecture-level arrays.
     - `network_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
 
-*IMPORTANT:* coefficient names drop the artifact subscript here (the
-symbol `\\theta_{TAS_{1}}` becomes column `theta`) so the plotters
-see uniform column names across artifacts.
+*IMPORTANT:* coefficient names drop the artifact subscript here (the symbol `\\theta_{TAS_{1}}` becomes column `theta`) so the plotters see uniform column names across artifacts.
 """
 # native python modules
 from __future__ import annotations
@@ -36,8 +31,8 @@ import pandas as pd
 _COEF_NAMES = ("theta", "sigma", "eta", "phi")
 
 
-def _coef_column(full_sym: str) -> str:
-    """*_coef_column()* extracts the short coefficient name (e.g. `theta`) from a PACS-form symbol like `\\theta_{TAS_{1}}`.
+def _extract_coef_column(full_sym: str) -> str:
+    """*_extract_coef_column()* extract the short coefficient name (e.g. `theta`) from a PACS-form symbol like `\\theta_{TAS_{1}}`.
 
     Args:
         full_sym (str): coefficient symbol as stored in the orchestrator result.
@@ -45,7 +40,6 @@ def _coef_column(full_sym: str) -> str:
     Returns:
         str: the short name (one of `theta`, `sigma`, `eta`, `phi`, ...); returns the stem after the leading backslash if no match.
     """
-    # strip the leading backslash and split off the first subscript brace
     _stem = full_sym.lstrip("\\").split("_", 1)[0]
     return _stem
 
@@ -65,9 +59,8 @@ def coefs_to_nodes(result: Dict[str, Any]) -> pd.DataFrame:
     for _k, _a in result["artifacts"].items():
         _row = {"key": _k, "name": _a["name"], "type": _a["type"]}
 
-        # flatten each derived coefficient to a short column name
         for _sym, _co in _a["coefficients"].items():
-            _row[_coef_column(_sym)] = float(_co["setpoint"])
+            _row[_extract_coef_column(_sym)] = float(_co["setpoint"])
 
         _rows.append(_row)
 
@@ -90,10 +83,13 @@ def coefs_to_net(result: Dict[str, Any],
         pd.DataFrame: single-row frame with `nodes` (count) and one column per derived coefficient carrying the aggregate value.
     """
     # guard against typos in the reducer name
-    _fn_lt = {"mean": np.mean,
-              "median": np.median,
-              "max": np.max,
-              "min": np.min}
+    _fn_lt = {
+        "mean": np.mean,
+        "median": np.median,
+        "max": np.max,
+        "min": np.min
+    }
+
     if agg not in _fn_lt:
         _msg = f"unknown aggregator {agg!r}; expected one of {list(_fn_lt)}"
         raise ValueError(_msg)
@@ -123,14 +119,20 @@ def coefs_delta(nds_dflt: pd.DataFrame,
     Returns:
         pd.DataFrame: per-node delta frame with `key` and the shared coefficient columns. Only nodes present in BOTH frames are included; the order follows `nds_dflt`. This lets callers compare a 13-node baseline against a 16-node aggregate (the extra swap-slot nodes are silently dropped).
     """
-    # intersect node sets; preserve nds_dflt order so the output row
-    # order is deterministic and aligns with the baseline topology
-    _keys_common = [_k for _k in nds_dflt[cname]
-                    if _k in set(nds_other[cname])]
+    # intersect node sets; preserve nds_dflt order so the output aligns with the baseline topology
+    _other_keys = set(nds_other[cname])
+    _keys_common: List[str] = []
+    for _k in nds_dflt[cname]:
+        if _k in _other_keys:
+            _keys_common.append(_k)
 
     # restrict to the columns that both frames share (handles partial specs)
-    _metrics = [_c for _c in _COEF_NAMES
-                if _c in nds_dflt.columns and _c in nds_other.columns]
+    _metrics: List[str] = []
+    for _c in _COEF_NAMES:
+        _in_dflt = _c in nds_dflt.columns
+        _in_other = _c in nds_other.columns
+        if _in_dflt and _in_other:
+            _metrics.append(_c)
 
     # index both frames by node key so we can look up each row directly
     _d_idx = nds_dflt.set_index(cname)
@@ -142,7 +144,10 @@ def coefs_delta(nds_dflt: pd.DataFrame,
         _o = _o_idx.loc[_keys_common, _m].to_numpy(dtype=float)
         # fractional delta protected against zero reference values
         _denom = np.where(_d == 0, 1.0, np.abs(_d))
-        _out[_m] = (_o - _d) / _denom if pct else (_o - _d)
+        if pct:
+            _out[_m] = (_o - _d) / _denom
+        else:
+            _out[_m] = _o - _d
 
     return _out
 
@@ -154,13 +159,11 @@ def aggregate_arch_coefs(result: Dict[str, Any],
 
     This answers *"what is the TAS as a WHOLE doing?"* rather than *"what is the typical node doing?"*. The per-node `coefs_to_net` averages pre-computed per-node coefficients; this one sums raw L, K, lambda, ... across every artifact in the network and derives ONE theta / sigma / eta / phi / epsilon at the architecture level.
 
-    Aggregation rules (match `__OLD__/src/exports/dimensional_2_draft.py`):
-
         - theta_arch = (sum L_i) / (sum K_i)
-        - sigma_arch = (sum lambda_i * W_i) / (sum L_i)           # throughput-weighted
+        - sigma_arch = (sum lambda_i * W_i) / (sum L_i)
         - eta_arch   = (sum chi_i * K_i) / (sum mu_i * c_i)
         - phi_arch   = (sum M_act_i) / (sum M_buf_i)
-        - epsilon_arch = 1 - prod(1 - epsilon_i)                  # cumulative probability
+        - epsilon_arch = 1 - prod(1 - epsilon_i)
 
     Args:
         result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`. Must carry `config` (a `NetworkConfig`) so raw per-artifact variable setpoints can be read.
@@ -209,10 +212,26 @@ def aggregate_arch_coefs(result: Dict[str, Any],
         _prod_1_minus_eps *= (1.0 - _eps)
 
     # derive architecture-level coefficients (guard against zero denominators)
-    _theta_arch = (_sum_L / _sum_K) if _sum_K > 0 else 0.0
-    _sigma_arch = (_sum_lamW / _sum_L) if _sum_L > 0 else 0.0
-    _eta_arch = (_sum_chi_K / _sum_mu_c) if _sum_mu_c > 0 else 0.0
-    _phi_arch = (_sum_m_act / _sum_m_buf) if _sum_m_buf > 0 else 0.0
+    if _sum_K > 0:
+        _theta_arch = _sum_L / _sum_K
+    else:
+        _theta_arch = 0.0
+
+    if _sum_L > 0:
+        _sigma_arch = _sum_lamW / _sum_L
+    else:
+        _sigma_arch = 0.0
+
+    if _sum_mu_c > 0:
+        _eta_arch = _sum_chi_K / _sum_mu_c
+    else:
+        _eta_arch = 0.0
+
+    if _sum_m_buf > 0:
+        _phi_arch = _sum_m_act / _sum_m_buf
+    else:
+        _phi_arch = 0.0
+
     _eps_arch = 1.0 - _prod_1_minus_eps
 
     # assemble the single-row envelope; keys follow the PACS-style subscript
@@ -306,8 +325,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
                                  for _k in _art_keys]), axis=0)
     _K_mean = np.mean(np.stack([sweep_data[_k][f"K_{{{_k}}}"]
                                 for _k in _art_keys]), axis=0)
-
-    return {
+    ans = {
         f"\\theta_{{{tag}}}": _theta_arch,
         f"\\sigma_{{{tag}}}": _sigma_arch,
         f"\\eta_{{{tag}}}": _eta_arch,
@@ -317,6 +335,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         f"K_{{{tag}}}": _K_mean,
         f"\\lambda_{{{tag}}}": _sum_lam,
     }
+    return ans
 
 
 def network_delta(net_dflt: pd.DataFrame,
@@ -334,14 +353,24 @@ def network_delta(net_dflt: pd.DataFrame,
         pd.DataFrame: single-row frame with one column per shared coefficient.
     """
     # work only with shared coefficient columns, ignore `nodes` etc.
-    _metrics = [_c for _c in _COEF_NAMES
-                if _c in net_dflt.columns and _c in net_other.columns]
+    _metrics: List[str] = []
+    for _c in _COEF_NAMES:
+        _in_dflt = _c in net_dflt.columns
+        _in_other = _c in net_other.columns
+        if _in_dflt and _in_other:
+            _metrics.append(_c)
 
     _row: Dict[str, float] = {}
     for _m in _metrics:
         _d = float(net_dflt[_m].iloc[0])
         _o = float(net_other[_m].iloc[0])
-        _denom = abs(_d) if _d != 0 else 1.0
-        _row[_m] = (_o - _d) / _denom if pct else (_o - _d)
+        if _d != 0:
+            _denom = abs(_d)
+        else:
+            _denom = 1.0
+        if pct:
+            _row[_m] = (_o - _d) / _denom
+        else:
+            _row[_m] = _o - _d
 
     return pd.DataFrame([_row])

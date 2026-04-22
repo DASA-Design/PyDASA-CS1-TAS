@@ -35,67 +35,74 @@ def _dim_aggregate():
 
 
 class TestNodeShape:
-    """Per-node frame has one row per artifact with the expected columns."""
+    """**TestNodeShape** `coefs_to_nodes` produces one row per artifact with the expected column set."""
 
     def test_thirteen_rows_on_baseline(self, _dim_baseline):
+        """*test_thirteen_rows_on_baseline()* baseline has 13 artifacts; the per-node frame has 13 rows."""
         _nds = coefs_to_nodes(_dim_baseline)
         assert len(_nds) == 13
 
     def test_thirteen_rows_on_aggregate(self, _dim_aggregate):
-        """aggregate has the same artifact count as baseline; the 3 swap slots replace 3 originals."""
+        """*test_thirteen_rows_on_aggregate()* aggregate has the same artifact count as baseline; the 3 swap slots replace 3 originals."""
         _nds = coefs_to_nodes(_dim_aggregate)
         assert len(_nds) == 13
 
     def test_expected_columns_present(self, _dim_baseline):
+        """*test_expected_columns_present()* frame carries `key`, `name`, `type`, and one column per derived coefficient (`theta`, `sigma`, `eta`, `phi`)."""
         _nds = coefs_to_nodes(_dim_baseline)
         assert {"key", "name", "type", "theta", "sigma", "eta", "phi"} <= set(_nds.columns)
 
     def test_theta_varies_per_artifact_on_baseline(self, _dim_baseline):
-        """After seeding from analytic, theta reflects real per-artifact L/K ratios (Jackson-solved L varies); baseline should no longer be uniform."""
+        """*test_theta_varies_per_artifact_on_baseline()* after analytic seeding, theta reflects real per-artifact L/K ratios (Jackson-solved L varies); baseline should no longer be uniform."""
         _nds = coefs_to_nodes(_dim_baseline)
         _range = _nds["theta"].max() - _nds["theta"].min()
         assert _range > 0.05, f"theta range {_range} too small; seed may have failed"
 
 
 class TestNetworkShape:
-    """Network aggregate frame has one row and one column per coefficient."""
+    """**TestNetworkShape** `coefs_to_net` produces a single-row frame with one column per aggregated coefficient plus a `nodes` count."""
 
     def test_single_row(self, _dim_baseline):
+        """*test_single_row()* the network aggregate collapses to exactly one row."""
         _net = coefs_to_net(_dim_baseline)
         assert len(_net) == 1
 
     def test_nodes_count_matches(self, _dim_baseline):
+        """*test_nodes_count_matches()* the `nodes` column carries the artifact count."""
         _net = coefs_to_net(_dim_baseline)
         assert _net["nodes"].iloc[0] == 13
 
     def test_rejects_unknown_aggregator(self, _dim_baseline):
+        """*test_rejects_unknown_aggregator()* a bogus `agg` name raises `ValueError` before any work is done."""
         with pytest.raises(ValueError, match="unknown aggregator"):
             coefs_to_net(_dim_baseline, agg="bogus")
 
     def test_median_differs_from_mean(self, _dim_baseline):
-        """η has a skewed distribution on baseline; median < mean."""
+        """*test_median_differs_from_mean()* eta has a skewed distribution on baseline; median and mean diverge."""
         _mean = coefs_to_net(_dim_baseline, agg="mean")
         _med = coefs_to_net(_dim_baseline, agg="median")
         assert _med["eta"].iloc[0] != pytest.approx(_mean["eta"].iloc[0])
 
 
 class TestDeltaSemantics:
-    """Delta computations handle equal / mismatched node sets correctly."""
+    """**TestDeltaSemantics** `coefs_delta` gives zero delta on identical inputs and handles mismatched node sets (13-node baseline vs 16-node aggregate)."""
 
     def test_zero_delta_on_identical_inputs(self, _dim_baseline):
+        """*test_zero_delta_on_identical_inputs()* `coefs_delta(x, x)` returns all-zero columns for every derived coefficient."""
         _nds = coefs_to_nodes(_dim_baseline)
         _d = coefs_delta(_nds, _nds)
         for _m in ("theta", "sigma", "eta", "phi"):
             assert all(abs(_d[_m]) < 1e-12)
 
     def test_aggregate_delta_uses_intersection(self, _dim_baseline, _dim_aggregate):
-        """baseline and aggregate each have 13 artifacts; 3 are swapped (MAS_{3}/AS_{3}/DS_{3} -> MAS_{4}/AS_{4}/DS_{1}). The delta frame keeps only the 10 non-swap nodes."""
+        """*test_aggregate_delta_uses_intersection()* baseline and aggregate each have 13 artifacts; 3 are swapped (MAS_{3}/AS_{3}/DS_{3} -> MAS_{4}/AS_{4}/DS_{1}). The delta frame keeps only the 10 non-swap nodes."""
         _b = coefs_to_nodes(_dim_baseline)
         _a = coefs_to_nodes(_dim_aggregate)
         _d = coefs_delta(_b, _a)
         assert len(_d) == 10
 
     def test_network_delta_single_row(self, _dim_baseline, _dim_aggregate):
+        """*test_network_delta_single_row()* `network_delta` collapses two single-row network frames into one row with the shared coefficient columns."""
         _nb = coefs_to_net(_dim_baseline)
         _na = coefs_to_net(_dim_aggregate)
         _d = network_delta(_nb, _na)
@@ -104,23 +111,26 @@ class TestDeltaSemantics:
 
 
 class TestArchitectureAggregation:
-    """PACS-iter2-style variable-level aggregation (sum first, divide after)."""
+    """**TestArchitectureAggregation** PACS-iter2-style variable-level aggregation (sum raw vars first, divide after) produces one architecture-level coefficient per metric."""
 
     def test_single_row_output(self, _dim_baseline):
+        """*test_single_row_output()* `aggregate_arch_coefs` returns exactly one row."""
         _arch = aggregate_arch_coefs(_dim_baseline)
         assert len(_arch) == 1
 
     def test_default_tag_is_TAS(self, _dim_baseline):
+        """*test_default_tag_is_TAS()* default tag `"TAS"` produces `\\theta_{TAS}` / `\\sigma_{TAS}` / ... columns."""
         _arch = aggregate_arch_coefs(_dim_baseline)
         for _coef in ("theta", "sigma", "eta", "phi", "epsilon"):
             assert f"\\{_coef}_{{TAS}}" in _arch.columns
 
     def test_custom_tag_flows_through(self, _dim_baseline):
+        """*test_custom_tag_flows_through()* a caller-supplied `tag` becomes the subscript on every output column."""
         _arch = aggregate_arch_coefs(_dim_baseline, tag="TAS_base")
         assert "\\theta_{TAS_base}" in _arch.columns
 
     def test_theta_equals_sumL_over_sumK(self, _dim_baseline):
-        """theta_arch = (sum L_i) / (sum K_i) across every artifact."""
+        """*test_theta_equals_sumL_over_sumK()* theta_arch = (sum L_i) / (sum K_i) across every artifact, recomputed by hand from the config setpoints."""
         _cfg = _dim_baseline["config"]
         _sum_L = sum(float(_a.vars[f"L_{{{_a.key}}}"]["_setpoint"])
                      for _a in _cfg.artifacts)
