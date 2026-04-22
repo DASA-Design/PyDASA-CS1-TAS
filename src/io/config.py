@@ -193,16 +193,16 @@ class NetworkConfig:
         """*n_nodes* number of artifacts in this configuration."""
         return len(self.artifacts)
 
-    def node_keys(self) -> List[str]:
-        """*node_keys()* return the artifact keys in positional order.
+    def list_node_keys(self) -> List[str]:
+        """*list_node_keys()* return the artifact keys in positional order.
 
         Returns:
             List[str]: artifact keys aligned with `routing`.
         """
         return [_a.key for _a in self.artifacts]
 
-    def lambda_z_vector(self) -> np.ndarray:
-        """*lambda_z_vector()* return the external arrivals per node.
+    def build_lambda_z_vector(self) -> np.ndarray:
+        """*build_lambda_z_vector()* return the external arrivals per node.
 
         Returns:
             np.ndarray: `(n_nodes,)` vector of external arrival rates.

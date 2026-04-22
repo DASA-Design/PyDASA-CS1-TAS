@@ -41,7 +41,7 @@ class TestResolution:
         assert _cfg.scenario == "s1"
 
         # swap slots must show the dflt-variant keys under s1
-        _keys = _cfg.node_keys()
+        _keys = _cfg.list_node_keys()
         assert _keys[5] == "MAS_{3}"
         assert _keys[8] == "AS_{3}"
         assert _keys[10] == "DS_{3}"
@@ -52,7 +52,7 @@ class TestResolution:
         assert _cfg.profile == "opti"
 
         # swap slots must show the opti-variant keys under s2
-        _keys = _cfg.node_keys()
+        _keys = _cfg.list_node_keys()
         assert _keys[5] == "MAS_{4}"
         assert _keys[8] == "AS_{4}"
         assert _keys[10] == "DS_{1}"
@@ -63,7 +63,7 @@ class TestResolution:
         assert _cfg.scenario == "aggregate"
 
         # opti variants at the swap slots (spot check)
-        _keys = _cfg.node_keys()
+        _keys = _cfg.list_node_keys()
         assert _keys[5] == "MAS_{4}"
         assert _keys[10] == "DS_{1}"
 
