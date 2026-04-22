@@ -3,10 +3,7 @@
 Module registry.py
 ==================
 
-Resolve service-name to HTTP URL using the layout declared in
-`data/config/method/experiment.json::service_registry`. The registry
-is built once at experiment startup and shared across the composite
-services, the client simulator, and the launcher's health barrier.
+Resolve service-name to HTTP URL using the layout declared in `data/config/method/experiment.json::service_registry`. The registry is built once at experiment startup and shared across the composite services, the client simulator, and the launcher's health barrier.
 
 Public API:
     - `ServiceRegistry(host, base_port, table)` maps names to URLs.
@@ -14,7 +11,7 @@ Public API:
     - `ServiceRegistry.resolve_base_url(name)` returns the fully-qualified base URL.
     - `ServiceRegistry.build_invoke_url(name)` returns the per-service invoke endpoint.
     - `ServiceRegistry.build_healthz_url(name)` returns the `/healthz` endpoint.
-    - `ServiceRegistry.list_names()` / `filter_names_by_role(role)` enumerate the table.
+    - `ServiceRegistry.list_names()` / `filter_names_role(role)` enumerate the table.
 """
 # native python modules
 from __future__ import annotations
@@ -23,7 +20,7 @@ import re
 
 # data types
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, List
 
 
 # matches `TAS_{i}` keys; used to route into the six-in-one Option-B FastAPI app
@@ -34,10 +31,11 @@ _TAS_KEY_RE = re.compile(r"^TAS_\{(\d+)\}$")
 class RegistryEntry:
     """*RegistryEntry* one row of the registry: name, role, resolved port."""
 
+    # service name (e.g. `TAS_{1}`, `MAS_{1}`)
     name: str
-
+    # role label such as `"atomic"`, `"composite_client"`, etc. Used for filtering the registry table by workflow stage.
     role: str
-
+    # resolved 16-bit port number (base_port + port_offset from config)
     port: int
 
 
@@ -51,10 +49,11 @@ class ServiceRegistry:
         table (Dict[str, RegistryEntry]): keyed by service name (e.g. `TAS_{1}`, `MAS_{1}`); values are frozen `RegistryEntry` records.
     """
 
+    # service name (e.g. `TAS_{1}`, `MAS_{1}`); used as the key for registry lookup and URL resolution.
     host: str
-
+    # base port (int) from which each service's declared `port_offset`
     base_port: int
-
+    # mapping of service name to `RegistryEntry` record
     table: Dict[str, RegistryEntry]
 
     @classmethod
@@ -72,7 +71,10 @@ class ServiceRegistry:
             ServiceRegistry: populated registry.
         """
         _host = method_cfg.get("host", "127.0.0.1")
-        _base = base_port_override if base_port_override > 0 else int(method_cfg["base_port"])
+        if base_port_override > 0:
+            _base = base_port_override
+        else:
+            _base = int(method_cfg["base_port"])
         _table: Dict[str, RegistryEntry] = {}
         for _name, _spec in method_cfg["service_registry"].items():
             _port = _base + int(_spec["port_offset"])
@@ -99,10 +101,7 @@ class ServiceRegistry:
     def build_invoke_url(self, name: str) -> str:
         """*build_invoke_url()* return the per-service invoke endpoint URL.
 
-        The TAS target system (`TAS_{i}`) is one deployable unit hosting
-        six internal components on one port; each component is addressed
-        by its numeric index in the URL path (`/TAS_<i>/invoke`).
-        Third-party services keep a single `/invoke` route per port.
+        The TAS target system (`TAS_{i}`) is one deployable unit hosting six internal components on one port; each component is addressed by its numeric index in the URL path (`/TAS_<i>/invoke`). Third-party services keep a single `/invoke` route per port.
 
         Args:
             name (str): service name.
@@ -122,17 +121,21 @@ class ServiceRegistry:
         """*build_healthz_url()* return the `/healthz` endpoint URL for `name`."""
         return f"{self.resolve_base_url(name)}/healthz"
 
-    def list_names(self) -> Iterable[str]:
-        """*list_names()* yield every service name in declaration order."""
-        return self.table.keys()
+    def list_names(self) -> List[str]:
+        """*list_names()* return every service name in declaration order."""
+        return list(self.table.keys())
 
-    def filter_names_by_role(self, role: str) -> Iterable[str]:
-        """*filter_names_by_role()* yield names whose entry role matches `role`.
+    def filter_names_role(self, role: str) -> List[str]:
+        """*filter_names_role()* return every service name whose entry carries the given role label.
 
         Args:
             role (str): role label such as `"atomic"`, `"composite_client"`, `"composite_medical"`, `"composite_alarm"`, `"composite_drug"`.
 
         Returns:
-            Iterable[str]: lazy generator of matching service names.
+            List[str]: matching service names in declaration order.
         """
-        return (_n for _n, _e in self.table.items() if _e.role == role)
+        _matching: List[str] = []
+        for _name, _entry in self.table.items():
+            if _entry.role == role:
+                _matching.append(_name)
+        return _matching

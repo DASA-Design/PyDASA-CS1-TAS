@@ -67,7 +67,7 @@ def main() -> None:
     _banner("4. role filter helpers (one per CS-01 workflow stage)")
     for _role in ("composite_client", "composite_medical",
                   "composite_alarm", "composite_drug", "atomic"):
-        print(f"  {_role:<20}: {list(_reg.filter_names_by_role(_role))}")
+        print(f"  {_role:<20}: {list(_reg.filter_names_role(_role))}")
 
 
 if __name__ == "__main__":
