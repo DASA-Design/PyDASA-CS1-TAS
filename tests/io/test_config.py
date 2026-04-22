@@ -8,7 +8,7 @@ Sanity checks for the profile + scenario loader in `src.io.config`.
 Each class groups tests by the contract under verification:
 
     - **TestResolution**: the four adaptation aliases (`baseline`, `s1`, `s2`, `aggregate`) resolve to the correct (profile, scenario) pair and the expected artifacts land at the three swap slots.
-    - **TestSetpointFallback**: the `_setpoint` fallback path kicks in when the caller omits `adaptation` and/or `scenario`.
+    - **TestSetpointFallback**: the `_setpoint` fallback path kicks in when the caller omits `adaptation` or `scenario`.
     - **TestArtifactSpec**: the `ArtifactSpec` properties (`mu`, the setpoint lookup, `lambda_z`) read the PACS Variable dict correctly, including the opti-profile service swaps.
     - **TestErrors**: unknown adaptations and unknown scenarios raise clear errors before the solver is touched.
 

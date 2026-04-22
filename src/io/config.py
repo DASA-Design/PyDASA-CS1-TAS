@@ -18,10 +18,8 @@ Expected envelope shape::
     artifacts[<key>]        -> {name, type, lambda_z, L_z, vars: {sym: {...}}}
 
 Public API:
-    - `ArtifactSpec` frozen per-node dataclass with setpoint
-      accessors (`mu`, `c`, `K`, `epsilon`, `d_kb`, `d_bytes`).
-    - `NetworkConfig` normalised view of a resolved (profile,
-      scenario) pair.
+    - `ArtifactSpec` frozen per-node dataclass with setpoint accessors (`mu`, `c`, `K`, `epsilon`, `d_kb`, `d_bytes`).
+    - `NetworkConfig` normalised view of a resolved (profile, scenario) pair.
     - `load_profile(adaptation, profile, scenario)` main loader.
     - `load_method_config(name)` method-config JSON reader.
     - `load_reference(name)` reference-file JSON reader.
@@ -75,8 +73,7 @@ class ArtifactSpec:
         type_ (str): queue model string (e.g. `M/M/c/K`).
         lambda_z (float): external arrival rate entering this node.
         L_z (float): external queue length initialisation (currently 0).
-        vars (Dict[str, dict]): PyDASA `Variable`-dict block, keyed by
-            LaTeX symbol (e.g. `\\mu_{TAS_{1}}`).
+        vars (Dict[str, dict]): PyDASA `Variable`-dict block, keyed by LaTeX symbol (e.g. `\\mu_{TAS_{1}}`).
     """
 
     key: str
@@ -95,8 +92,7 @@ class ArtifactSpec:
         """*_setpoint()* read the `_setpoint` of the first variable whose LaTeX symbol starts with `prefix`.
 
         Args:
-            prefix (str): LaTeX-symbol prefix including the artifact's
-                own subscript (e.g. `\\mu_{TAS_{1}}`).
+            prefix (str): LaTeX-symbol prefix including the artifact's own subscript (e.g. `\\mu_{TAS_{1}}`).
 
         Raises:
             KeyError: when no variable on this artifact matches the prefix.
@@ -172,10 +168,8 @@ class NetworkConfig:
         profile (str): profile file stem (`dflt` or `opti`).
         scenario (str): scenario name within the profile.
         label (str): human-readable scenario label (from `_labels`).
-        artifacts (List[ArtifactSpec]): resolved artifact specs in
-            positional order.
-        routing (np.ndarray): NxN routing-probability matrix;
-            `row = source`, `col = dest`.
+        artifacts (List[ArtifactSpec]): resolved artifact specs in positional order.
+        routing (np.ndarray): NxN routing-probability matrix; `row = source`, `col = dest`.
     """
 
     profile: str
@@ -201,8 +195,8 @@ class NetworkConfig:
         """
         return [_a.key for _a in self.artifacts]
 
-    def build_lambda_z_vector(self) -> np.ndarray:
-        """*build_lambda_z_vector()* return the external arrivals per node.
+    def build_lam_z_vec(self) -> np.ndarray:
+        """*build_lam_z_vec()* return the external arrivals per node.
 
         Returns:
             np.ndarray: `(n_nodes,)` vector of external arrival rates.
@@ -284,24 +278,15 @@ def load_profile(
     """*load_profile()* load a resolved `NetworkConfig` for one `(profile, scenario)` pair.
 
     Args:
-        adaptation (Optional[str]): one of `baseline`, `s1`, `s2`,
-            `aggregate`. Maps to `(profile, scenario)` via
-            `_ADAPTATION_TO_SOURCE`.
-        profile (Optional[str]): profile file stem (`dflt` or `opti`);
-            overrides `adaptation`'s implied profile when paired with
-            `scenario`.
-        scenario (Optional[str]): explicit scenario name within the
-            profile. Defaults to the profile's
-            `environments._setpoint` when absent.
+        adaptation (Optional[str]): one of `baseline`, `s1`, `s2`, `aggregate`. Maps to `(profile, scenario)` via `_ADAPTATION_TO_SOURCE`.
+        profile (Optional[str]): profile file stem (`dflt` or `opti`); overrides `adaptation`'s implied profile when paired with `scenario`.
+        scenario (Optional[str]): explicit scenario name within the profile. Defaults to the profile's `environments._setpoint` when absent.
 
     Raises:
-        ValueError: when the scenario is not declared in the profile,
-            or when the routing matrix shape does not match the node
-            count.
+        ValueError: when the scenario is not declared in the profile, or when the routing matrix shape does not match the node count.
 
     Returns:
-        NetworkConfig: resolved artifacts plus the aligned routing
-            matrix for the requested scenario.
+        NetworkConfig: resolved artifacts plus the aligned routing matrix for the requested scenario.
     """
     # resolve user args into a concrete (profile, scenario) pair
     _profile, _scenario = _resolve_source(adaptation, profile, scenario)
