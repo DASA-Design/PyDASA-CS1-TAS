@@ -49,7 +49,7 @@ def _result_aggregate():
 
 
 class TestDimensionalEndToEnd:
-    """**TestDimensionalEndToEnd** verifies that the PyDASA pipeline runs end-to-end, produces one artifact block per queue node, and attaches the four derived coefficients plus sensitivity for every one. Runs on `baseline`, `s1`, and `aggregate` -- covering both profiles (`dflt` / `opti`) and both artifact counts (13 / 16)."""
+    """**TestDimensionalEndToEnd** verifies that the PyDASA pipeline runs end-to-end, produces one artifact block per queue node, and attaches the four derived coefficients plus sensitivity for every one. Runs on `baseline`, `s1`, and `aggregate`, covering both profiles (`dflt` / `opti`) and both artifact counts (13 / 16)."""
 
     @pytest.fixture(params=["baseline", "s1", "aggregate"])
     def _result(self, request, _result_baseline, _result_s1, _result_aggregate):

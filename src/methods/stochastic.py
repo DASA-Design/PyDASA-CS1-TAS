@@ -5,17 +5,28 @@ Module stochastic.py
 
 Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case
 study. Mirrors the analytic method's contract call-for-call so the
-two can be compared directly downstream:
+two can be compared directly downstream.
 
-    - `run(adp, prf, scn, wrt)` loads a resolved `NetworkConfig` (same `profile/*.json` as analytic) + the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_network`), and returns per-node metrics + network aggregate + R1/R2/R3 verdict.
-    - Aggregation + threshold checks reuse `src.analytic.metrics` (aggregate_network / check_requirements) since the math is identical.
+Public API:
+    - `run(adp, prf, scn, wrt)` loads a resolved `NetworkConfig`
+      (same `profile/*.json` as analytic) plus the stochastic method
+      config (`data/config/method/stochastic.json`), runs the DES
+      engine (`src.stochastic.solve_network`), and returns per-node
+      metrics + network aggregate + R1 / R2 / R3 verdict.
 
-*IMPORTANT:* the engine runs in SimPy SECONDS; the method config declares the horizon / warmup in INVOCATIONS. Conversion happens in `src.stochastic.network.solve_network`.
+Aggregation and threshold checks reuse `src.analytic.metrics`
+(`aggregate_network` / `check_requirements`) since the math is
+identical across the two methods.
 
-CLI:
+*IMPORTANT:* the engine runs in SimPy SECONDS; the method config
+declares the horizon and warmup in INVOCATIONS. Conversion happens
+in `src.stochastic.simulation.solve_network`.
+
+CLI::
+
     python -m src.methods.stochastic --adaptation baseline
     python -m src.methods.stochastic --adaptation s1 --profile opti
-    python -m src.methods.stochastic # uses _setpoint
+    python -m src.methods.stochastic  # uses _setpoint
 """
 # native python modules
 from __future__ import annotations
@@ -45,23 +56,37 @@ def run(adp: Optional[str] = None,
         scn: Optional[str] = None,
         wrt: bool = True,
         method_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """*run()* solve the stochastic Jackson network for one (profile, scenario) pair and optionally write its JSON artifacts.
+    """*run()* solve the stochastic Jackson network for one (profile, scenario) pair.
+
+    Optionally writes the JSON artifacts to disk.
 
     Args:
-        adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`. Resolves to (profile, scenario) via `src.io.load_profile`.
-        prf (Optional[str]): profile file stem (`dflt` or `opti`). Overrides `adp`'s implied profile if given with `scn`.
+        adp (Optional[str]): adaptation value; one of `baseline`,
+            `s1`, `s2`, `aggregate`. Resolves to (profile, scenario)
+            via `src.io.load_profile`.
+        prf (Optional[str]): profile file stem (`dflt` or `opti`);
+            overrides `adp`'s implied profile when paired with `scn`.
         scn (Optional[str]): explicit scenario name within the profile.
-        wrt (bool): if True, write JSON artifacts under `data/results/stochastic/<scenario>/`. Defaults to True.
-        method_cfg (Optional[Dict[str, Any]]): inline override for the stochastic method parameters (seed, horizon_invocations, warmup_invocations, replications, ...). When None, loads `data/config/method/stochastic.json`. Useful for tests that want a tiny horizon so the run finishes in seconds.
+        wrt (bool): if True, write JSON artifacts under
+            `data/results/stochastic/<scenario>/`. Defaults to True.
+        method_cfg (Optional[Dict[str, Any]]): inline override for
+            the stochastic method parameters (`seed`,
+            `horizon_invocations`, `warmup_invocations`,
+            `replications`, ...). When `None`, loads
+            `data/config/method/stochastic.json`. Useful for tests
+            that want a tiny horizon so the run finishes in seconds.
 
     Returns:
-        Dict[str, Any]: a result dict with keys:
+        Dict[str, Any]: result dict with keys:
+
             - `config` (NetworkConfig): resolved config.
             - `method_config` (Dict): stochastic method parameters.
-            - `nodes` (pd.DataFrame): per-node DataFrame (analytic schema + `_std` columns).
+            - `nodes` (pd.DataFrame): per-node frame (analytic schema
+              plus `_std` columns).
             - `network` (pd.DataFrame): network aggregate (one row).
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
-            - `paths` (Dict[str, str]): written file paths (only when `wrt=True`).
+            - `paths` (Dict[str, str]): written file paths; empty
+              when `wrt=False`.
     """
     # load the profile (artifact nodes + routing); method config is
     # either passed in (tests) or loaded from disk (CLI / notebook).
@@ -149,7 +174,8 @@ def main() -> None:
         "--adaptation",
         choices=["baseline", "s1", "s2", "aggregate"],
         default=None,
-        help="adaptation state (resolves to profile + scenario); " + "defaults to the profile's _setpoint",)
+        help=("adaptation state (resolves to profile + scenario); "
+              "defaults to the profile's _setpoint"),)
 
     _parser.add_argument(
         "--profile",

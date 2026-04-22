@@ -67,7 +67,7 @@ def _analytic_baseline():
 
 
 class TestStochasticEndToEnd:
-    """**TestStochasticEndToEnd** verifies that the DES pipeline solves end-to-end, produces 13 stable nodes, exposes the full R1 / R2 / R3 verdict, and attaches `_std` columns for every stochastic metric. Runs on `baseline` and `s1` only -- covering both profiles (`dflt` / `opti`) -- to keep the suite quick."""
+    """**TestStochasticEndToEnd** verifies that the DES pipeline solves end-to-end, produces 13 stable nodes, exposes the full R1 / R2 / R3 verdict, and attaches `_std` columns for every stochastic metric. Runs on `baseline` and `s1` only, covering both profiles (`dflt` / `opti`), to keep the suite quick."""
 
     @pytest.fixture(params=["baseline", "s1"])
     def _result(self, request, _result_baseline, _result_s1):

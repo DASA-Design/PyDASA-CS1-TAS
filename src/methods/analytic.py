@@ -5,15 +5,24 @@ Module analytic.py
 
 Analytic method orchestrator for the CS-01 TAS case study.
 
-Loads a resolved `NetworkConfig`, solves the Jackson network in closed form via M/M/c/K at each node, emits node + network metrics as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict alongside.
+Loads a resolved `NetworkConfig`, solves the Jackson network in
+closed form via M/M/c/K at each node, emits node + network metrics
+as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict
+alongside.
 
-*IMPORTANT:* the written result blob carries the full `routing` matrix and `lambda_z` vector so downstream consumers can reconstruct node paths without re-opening the config files.
+Public API:
+    - `run(adp, prf, scn, wrt)` standard orchestrator contract.
+    - `main()` CLI entry point.
 
-CLI:
+*IMPORTANT:* the written result blob carries the full `routing`
+matrix and `lambda_z` vector so downstream consumers can reconstruct
+node paths without re-opening the config files.
+
+CLI::
 
     python -m src.methods.analytic --adaptation baseline
     python -m src.methods.analytic --adaptation s1 --profile opti
-    python -m src.methods.analytic # uses _setpoint
+    python -m src.methods.analytic  # uses _setpoint
 
 # TODO: wire a real cost model (from the service catalogue) through the verdict writer so R3 carries a numeric value.
 """
@@ -42,16 +51,24 @@ _RESULTS_DIR = _ROOT / "data" / "results" / "analytic"
 
 def _nodes_to_variables(nds: pd.DataFrame,
                         cfg: NetworkConfig) -> Dict[str, dict]:
-    """*_nodes_to_variables()* turns the solved node DataFrame into a PACS-style `variables` dict.
+    """*_nodes_to_variables()* turn the solved node DataFrame into a PACS-style `variables` dict.
 
-    One entry per artifact; each carries the original config variables plus updated `_setpoint` / `_data` on the output variables (lambda, chi, L, Lq, W, Wq) from the solver. `chi` is the effective throughput `lambda * (1 - epsilon)`.
+    One entry per artifact; each carries the original config
+    variables plus updated `_setpoint` / `_data` on the output
+    variables (lambda, chi, L, Lq, W, Wq) from the solver. `chi` is
+    the effective throughput `lambda * (1 - epsilon)`.
 
     Args:
-        nds (pd.DataFrame): per-node metrics frame produced by `solve_network()`.
-        cfg (NetworkConfig): resolved network configuration (provides the PACS Variable dict for each artifact).
+        nds (pd.DataFrame): per-node metrics frame produced by
+            `solve_network()`.
+        cfg (NetworkConfig): resolved network configuration; provides
+            the PACS Variable dict for each artifact.
 
     Returns:
-        Dict[str, dict]: PACS-style `variables` block keyed by artifact key; each entry carries `name`, `type`, `lambda_z`, `L_z`, `rho`, and a `vars` sub-dict with refreshed setpoints.
+        Dict[str, dict]: PACS-style `variables` block keyed by
+            artifact key. Each entry carries `name`, `type`,
+            `lambda_z`, `L_z`, `rho`, and a `vars` sub-dict with
+            refreshed setpoints.
     """
     _out: Dict[str, dict] = {}
 
@@ -77,7 +94,7 @@ def _nodes_to_variables(nds: pd.DataFrame,
             f"W_{{q, {_sub}}}": float(_row["Wq"]),
         }
 
-        # chi = lambda * (1 - epsilon) — effective throughput under faults
+        # chi = lambda * (1 - epsilon); effective throughput under faults
         _eps = _a.vars.get(f"\\epsilon_{{{_sub}}}", {}).get("_setpoint", 0.0)
         _updates[f"\\chi_{{{_sub}}}"] = float(_row["lambda"]) * (1 - _eps)
 
@@ -104,23 +121,29 @@ def run(adp: Optional[str] = None,
         prf: Optional[str] = None,
         scn: Optional[str] = None,
         wrt: bool = True) -> Dict[str, Any]:
-    """*run()* solves the analytic Jackson network for one
-    (profile, scenario) pair and optionally writes its JSON artifacts.
+    """*run()* solve the analytic Jackson network for one (profile, scenario) pair.
+
+    Optionally writes the JSON artifacts to disk.
 
     Args:
-        adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`. Resolves to (profile, scenario) via `src.io.load_profile`.
-        prf (Optional[str]): profile file stem (`dflt` or `opti`). Overrides `adp`'s implied profile if given with `scn`.
+        adp (Optional[str]): adaptation value; one of `baseline`,
+            `s1`, `s2`, `aggregate`. Resolves to (profile, scenario)
+            via `src.io.load_profile`.
+        prf (Optional[str]): profile file stem (`dflt` or `opti`);
+            overrides `adp`'s implied profile when paired with `scn`.
         scn (Optional[str]): explicit scenario name within the profile.
-        wrt (bool): if True, write JSON artifacts to `data/results/analytic/<scenario>/`. Defaults to True.
+        wrt (bool): if True, write JSON artifacts to
+            `data/results/analytic/<scenario>/`. Defaults to True.
 
     Returns:
-        Dict[str, Any]: a result dict with keys:
+        Dict[str, Any]: result dict with keys:
 
             - `config` (NetworkConfig): resolved config (for display).
             - `nodes` (pd.DataFrame): per-node DataFrame.
             - `network` (pd.DataFrame): network aggregate (one row).
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
-            - `paths` (Dict[str, str]): written file paths (only when `wrt=True`; empty dict otherwise).
+            - `paths` (Dict[str, str]): written file paths; empty
+              when `wrt=False`.
     """
     # resolve the config then solve the network end-to-end
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
@@ -204,7 +227,8 @@ def main() -> None:
         "--adaptation",
         choices=["baseline", "s1", "s2", "aggregate"],
         default=None,
-        help="adaptation state (resolves to profile + scenario); " + "defaults to the profile's _setpoint",)
+        help=("adaptation state (resolves to profile + scenario); "
+              "defaults to the profile's _setpoint"),)
 
     _parser.add_argument(
         "--profile",
