@@ -3,15 +3,9 @@
 Module payload.py
 =================
 
-Mock-payload generator used by the client simulator to produce dummy
-request bodies of a configured byte size per kind.
+Mock-payload generator used by the client simulator to produce dummy request bodies of a configured byte size per kind.
 
-FR-2.3 of `notes/prototype.md`: each client-generated request carries
-a real payload of declared size. Downstream services never probe
-process memory (`psutil`); the payload bytes and the
-`X-Request-Size-Bytes` header ARE the memory-usage signal. The
-`memory-usage` dimensional coefficient is derived downstream from the
-product of per-kind payload size and per-component in-flight count L.
+Each client-generated request carries a real payload of declared size. Downstream services never probe process memory (`psutil`); the payload bytes and the `X-Request-Size-Bytes` header ARE the memory-usage signal. The `memory-usage` dimensional coefficient is derived downstream from the product of per-kind payload size and per-component in-flight count L.
 
 Public API:
     - `MockPayload(kind, size_bytes, blob)` the produced dataclass.
@@ -42,11 +36,11 @@ class MockPayload:
         size_bytes (int): declared payload size in bytes.
         blob (str): ASCII-only string of exactly `size_bytes` bytes.
     """
-
+    # request kind label, e.g. "analyse_request", "alarm_request", "drug_request", "response_default"
     kind: str
-
+    # declared payload size in bytes generated in UTF-8
     size_bytes: int
-
+    # ASCII-only string of exactly `size_bytes` bytes
     blob: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -61,8 +55,7 @@ def generate_payload(kind: str,
                      rng: Optional[random.Random] = None) -> MockPayload:
     """*generate_payload()* build a MockPayload of exactly `size_bytes` bytes for `kind`.
 
-    Draws from an ASCII-only alphabet so the UTF-8 encoding of the blob
-    equals its character count, making the declared byte size exact.
+    Draws from an ASCII-only alphabet so the UTF-8 encoding of the blob equals its character count, making the declared byte size exact.
 
     Args:
         kind (str): request kind label the payload belongs to.
@@ -78,7 +71,11 @@ def generate_payload(kind: str,
     if size_bytes < 0:
         raise ValueError(f"size_bytes must be >= 0, got {size_bytes}")
 
-    _rng = rng if rng is not None else random.Random()
+    if rng is None:
+        _rng = random.Random()
+    else:
+        _rng = rng
+
     # one char equals one UTF-8 byte under the ASCII alphabet
     _blob = "".join(_rng.choices(_ALPHABET, k=int(size_bytes)))
     return MockPayload(kind=kind, size_bytes=int(size_bytes), blob=_blob)
@@ -89,11 +86,7 @@ def resolve_size_for_kind(sizes_by_kind: Dict[str, int],
                           default: int = 256) -> int:
     """*resolve_size_for_kind()* look up the declared payload size for `kind`.
 
-    Matches the method config's `request_size_bytes` map (keys like
-    `analyse_request`, `alarm_request`, `drug_request`,
-    `response_default`). The client uses kind labels that equal target
-    artifact names (`TAS_{2}`, `TAS_{3}`, ...), so this helper also
-    accepts a `<kind>_request` alias for readability.
+    Matches the method config's `request_size_bytes` map (keys like `analyse_request`, `alarm_request`, `drug_request`, `response_default`). The client uses kind labels that equal target artifact names (`TAS_{2}`, `TAS_{3}`, ...), so this helper also accepts a `<kind>_request` alias for readability.
 
     Args:
         sizes_by_kind (Dict[str, int]): method-config's request-size map.
@@ -108,5 +101,4 @@ def resolve_size_for_kind(sizes_by_kind: Dict[str, int],
     _alias = f"{kind}_request"
     if _alias in sizes_by_kind:
         return int(sizes_by_kind[_alias])
-    # fallback for unknown kinds
     return int(sizes_by_kind.get("response_default", default))

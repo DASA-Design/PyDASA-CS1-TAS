@@ -26,11 +26,13 @@ class TestMockPayload:
     """**TestMockPayload** dataclass contract: frozen, `to_dict` round-trip."""
 
     def test_frozen_dataclass(self):
+        """*test_frozen_dataclass()* mutating a field on a frozen `MockPayload` raises."""
         _p = MockPayload(kind="analyse_request", size_bytes=4, blob="abcd")
         with pytest.raises(Exception):
             _p.kind = "other"  # type: ignore[misc]
 
     def test_to_dict_round_trip(self):
+        """*test_to_dict_round_trip()* `to_dict()` emits a plain dict matching the dataclass fields."""
         _p = generate_payload("drug_request", 64, rng=random.Random(7))
         _d = _p.to_dict()
         assert _d == {"kind": "drug_request",
@@ -43,6 +45,7 @@ class TestGeneratePayload:
 
     @pytest.mark.parametrize("_n", [0, 1, 16, 128, 256, 1024, 4096])
     def test_blob_is_exact_byte_size(self, _n):
+        """*test_blob_is_exact_byte_size()* the produced blob has exactly `_n` bytes under UTF-8 across the full size range."""
         _p = generate_payload("analyse_request", _n)
         assert isinstance(_p, MockPayload)
         assert len(_p.blob) == _n
@@ -50,6 +53,7 @@ class TestGeneratePayload:
         assert len(_p.blob.encode("utf-8")) == _n
 
     def test_seeded_rng_is_deterministic(self):
+        """*test_seeded_rng_is_deterministic()* two `Random(42)` streams produce byte-identical blobs."""
         _rng_a = random.Random(42)
         _rng_b = random.Random(42)
         _a = generate_payload("alarm_request", 128, rng=_rng_a)
@@ -57,11 +61,13 @@ class TestGeneratePayload:
         assert _a.blob == _b.blob
 
     def test_different_seeds_produce_different_blobs(self):
+        """*test_different_seeds_produce_different_blobs()* distinct seeds produce distinct blobs (independence check)."""
         _a = generate_payload("analyse_request", 128, rng=random.Random(1))
         _b = generate_payload("analyse_request", 128, rng=random.Random(2))
         assert _a.blob != _b.blob
 
     def test_negative_size_raises(self):
+        """*test_negative_size_raises()* `size_bytes < 0` is rejected at the boundary."""
         with pytest.raises(ValueError, match="size_bytes must be >= 0"):
             generate_payload("analyse_request", -1)
 
@@ -70,17 +76,20 @@ class TestResolveSizeForKind:
     """**TestResolveSizeForKind** resolves per-kind payload size from a config map."""
 
     def test_exact_key_match(self):
+        """*test_exact_key_match()* an exact kind-key hit in the map returns its size."""
         _map = {"analyse_request": 256, "alarm_request": 128}
         assert resolve_size_for_kind(_map, "analyse_request") == 256
 
     def test_kind_request_alias(self):
-        """Kind label `analyse` resolves to `analyse_request` in the map."""
+        """*test_kind_request_alias()* kind label `analyse` resolves via the `analyse_request` alias in the map."""
         _map = {"analyse_request": 256}
         assert resolve_size_for_kind(_map, "analyse") == 256
 
     def test_response_default_fallback(self):
+        """*test_response_default_fallback()* unknown kind falls through to the `response_default` entry."""
         _map = {"response_default": 42}
         assert resolve_size_for_kind(_map, "unknown_kind") == 42
 
     def test_default_when_nothing_matches(self):
+        """*test_default_when_nothing_matches()* empty map + missing `response_default` returns the caller's `default`."""
         assert resolve_size_for_kind({}, "whatever", default=99) == 99

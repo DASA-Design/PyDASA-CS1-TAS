@@ -14,9 +14,6 @@ Each class groups tests by the contract under verification:
 
 # TODO: extend with a regression case for a profile that omits `_labels[scenario]` (optional field) once we add new scenarios.
 """
-# native python modules
-# (none)
-
 # testing framework
 import pytest
 
