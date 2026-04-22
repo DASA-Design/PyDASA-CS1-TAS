@@ -79,11 +79,14 @@ def derive_coefs(engine: AnalysisEngine,
     # collect the Pi-group keys in order so expr_pattern indices line up
     _pi_keys = [_k for _k in engine.coefficients.keys() if _k.startswith("\\Pi_")]
 
+    # apply each spec in declaration order
     _der: dict[str, Any] = {}
     for _sp in specs:
+        # build the artifact-qualified coefficient symbol
         _sym = _sp["symbol"]
         _full = f"\\{_sym}_{{{artifact_key}}}"
 
+        # resolve the expression against the actual Pi-keys
         _exp = _resolve_expr(_sp["expr_pattern"], _pi_keys)
 
         # `idx=-1` appends to pydasa's coefficient list rather than overwriting a slot

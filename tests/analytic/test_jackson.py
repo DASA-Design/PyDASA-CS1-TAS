@@ -83,13 +83,14 @@ class TestPerArtifactLambdas:
     """**TestPerArtifactLambdas** Jackson lambda vector is linear in lambda_z."""
 
     def test_zero_entry_gives_zero_everywhere(self, _cfg):
+        """*test_zero_entry_gives_zero_everywhere()* with zero external entry rate, every artifact's lambda must be zero."""
         _lams = per_artifact_lambdas(_cfg, 0.0)
         assert np.allclose(_lams, 0.0)
 
     def test_linear_in_lambda_z(self, _cfg):
+        """*test_linear_in_lambda_z()* doubling lambda_z doubles every lambda_i (Jackson linearity)."""
         _a = per_artifact_lambdas(_cfg, 10.0)
         _b = per_artifact_lambdas(_cfg, 20.0)
-        # doubling lambda_z doubles every lambda_i
         assert np.allclose(_b, 2.0 * _a, rtol=1e-9)
 
 
@@ -97,13 +98,14 @@ class TestPerArtifactRhos:
     """**TestPerArtifactRhos** `rho_i = lam_i / (c_i * mu_i)`; finite for well-formed profiles."""
 
     def test_all_finite_at_reasonable_lambda(self, _cfg):
+        """*test_all_finite_at_reasonable_lambda()* every artifact's rho is finite at a plausible entry rate (no zero-capacity edge cases)."""
         _rhos = per_artifact_rhos(_cfg, 10.0)
         assert np.all(np.isfinite(_rhos))
 
     def test_monotone_in_lambda_z(self, _cfg):
+        """*test_monotone_in_lambda_z()* every component's rho is non-decreasing in lambda_z."""
         _lo = per_artifact_rhos(_cfg, 5.0)
         _hi = per_artifact_rhos(_cfg, 50.0)
-        # every component's rho should be at least as large at higher lambda_z
         assert np.all(_hi >= _lo - 1e-12)
 
 
@@ -112,17 +114,16 @@ class TestLambdaZForRho:
 
     @pytest.mark.parametrize("_rho_target", [0.05, 0.20, 0.50, 0.80, 0.95])
     def test_bottleneck_hits_target(self, _cfg, _rho_target):
+        """*test_bottleneck_hits_target()* inverted lambda_z makes the identified bottleneck hit rho_target exactly, and no other artifact exceeds that value."""
         _lam_z, _bottleneck, _per_unit = lambda_z_for_rho(_cfg, _rho_target)
-        # sanity
         assert _lam_z > 0
         assert _per_unit > 0
-        # at this lambda_z the identified bottleneck artifact has rho ~= target
         _rhos = per_artifact_rhos(_cfg, _lam_z)
         assert _rhos[_bottleneck] == pytest.approx(_rho_target, rel=1e-9)
-        # and no other artifact exceeds the target (it IS the bottleneck)
         assert _rhos.max() == pytest.approx(_rho_target, rel=1e-9)
 
     def test_rejects_invalid_targets(self, _cfg):
+        """*test_rejects_invalid_targets()* rho_target outside the open interval (0, 1) raises `ValueError`; the endpoints are included in the rejection set."""
         with pytest.raises(ValueError, match="must be in"):
             lambda_z_for_rho(_cfg, 0.0)
         with pytest.raises(ValueError, match="must be in"):
@@ -135,6 +136,7 @@ class TestBuildRhoGrid:
     """**TestBuildRhoGrid** rho-grid to lambda-grid map for the orchestrator."""
 
     def test_experiment_md_grid_produces_increasing_lambda(self, _cfg):
+        """*test_experiment_md_grid_produces_increasing_lambda()* the full `notes/experiment.md` rho-grid maps to a monotonically increasing lambda_z sequence, with every tuple's rho matching its index."""
         _rho_grid = [0.05, 0.10, 0.20, 0.30, 0.40, 0.45, 0.50, 0.55,
                      0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
         _grid = build_rho_grid(_cfg, _rho_grid)

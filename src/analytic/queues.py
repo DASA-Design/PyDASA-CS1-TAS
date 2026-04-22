@@ -236,9 +236,11 @@ class QueueMM1(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
+        # utilisation and traffic intensity
         self.rho = self.lamb / self.mu
         self.tau = self.lamb / self.mu
 
+        # state-zero probability
         self.p_z = self.calculate_prob_zero()
 
         # mean number in system (L) and in queue (Lq)
@@ -313,9 +315,11 @@ class QueueMMs(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
+        # utilisation and traffic intensity
         self.rho = self.lamb / (self.c_max * self.mu)
         self.tau = self.lamb / self.mu
 
+        # state-zero probability
         self.p_z = self.calculate_prob_zero()
 
         # mean number in queue (Lq) via the Erlang-C expression
@@ -413,6 +417,7 @@ class QueueMM1K(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `lamb_eff`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
+        # utilisation and traffic intensity
         self.rho = self.lamb / self.mu
         self.tau = self.lamb / self.mu
 
@@ -515,9 +520,11 @@ class QueueMMsK(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `p_z`, `lamb_eff`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
+        # utilisation and traffic intensity
         self.rho = self.lamb / (self.c_max * self.mu)
         self.tau = self.lamb / self.mu
 
+        # state-zero probability
         self.p_z = self.calculate_prob_zero()
 
         # block probability and effective arrival rate

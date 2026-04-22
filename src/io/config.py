@@ -92,6 +92,7 @@ class ArtifactSpec:
         Returns:
             float: setpoint value of the matching variable.
         """
+        # walk the variable dict and return the first match
         for _sym, _var in self.vars.items():
             if _sym.startswith(prefix):
                 return float(_var["_setpoint"])
@@ -263,8 +264,10 @@ def load_profile(adaptation: Optional[str] = None,
     Returns:
         NetworkConfig: resolved artifacts plus the aligned routing matrix for the requested scenario.
     """
+    # resolve user args into a concrete (profile, scenario) pair
     _profile, _scenario = _resolve_source(adaptation, profile, scenario)
 
+    # load the raw envelope and pick out its environments block
     _doc = _read_profile(_profile)
     _env = _doc["environments"]
 
@@ -274,10 +277,12 @@ def load_profile(adaptation: Optional[str] = None,
         _msg += f"(available: {_env['_scenarios']})"
         raise ValueError(_msg)
 
+    # unpack the per-scenario pieces
     _node_keys = _env["_nodes"][_scenario]
     _routing = np.array(_env["_routs"][_scenario], dtype=float)
     _label = _env["_labels"].get(_scenario, "")
 
+    # resolve each positional slot to a concrete ArtifactSpec
     _artifacts: List[ArtifactSpec] = []
     for _key in _node_keys:
         _a = _doc["artifacts"][_key]

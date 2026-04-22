@@ -40,8 +40,10 @@ def build_engine(artifact_key: str,
     Returns:
         AnalysisEngine: engine with `engine.variables` already populated. Call `engine.run_analysis()` next to derive Pi-groups.
     """
+    # wrap each param dict into a pydasa Variable
     _vars = {_s: Variable(**_p) for _s, _p in artifact_vars.items()}
 
+    # spin up the engine with the schema and descriptive metadata
     _eng = AnalysisEngine(idx,
                           fwk,
                           schema,

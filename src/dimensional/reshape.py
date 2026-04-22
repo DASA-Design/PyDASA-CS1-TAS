@@ -40,6 +40,7 @@ def _extract_coef_column(full_sym: str) -> str:
     Returns:
         str: the short name (one of `theta`, `sigma`, `eta`, `phi`, ...); returns the stem after the leading backslash if no match.
     """
+    # strip the leading backslash and split off the first subscript brace
     _stem = full_sym.lstrip("\\").split("_", 1)[0]
     return _stem
 
@@ -59,6 +60,7 @@ def coefs_to_nodes(result: Dict[str, Any]) -> pd.DataFrame:
     for _k, _a in result["artifacts"].items():
         _row = {"key": _k, "name": _a["name"], "type": _a["type"]}
 
+        # flatten each derived coefficient to a short column name
         for _sym, _co in _a["coefficients"].items():
             _row[_extract_coef_column(_sym)] = float(_co["setpoint"])
 

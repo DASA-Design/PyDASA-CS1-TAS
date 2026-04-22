@@ -12,17 +12,13 @@ Public API:
     - `solve_network(cfg)` takes a resolved `NetworkConfig`, builds a `Queue` per artifact with the Jackson-solved `lamb`, calls `calculate_metrics()`, and returns a pandas DataFrame with one row per node.
     - rho-indexed helpers (`per_artifact_lambdas`, `per_artifact_rhos`, `lambda_z_for_rho`, `build_rho_grid`) drive the inverse direction used by the experiment orchestrator to build the rho-indexed operating-point grid. Since Jackson is linear in lambda_z, the inversion is one division.
 
-*IMPORTANT:* the routing matrix in `cfg.routing` is stored with
-`row = source, col = dest`, so it is transposed before solving the
-linear system.
+*IMPORTANT:* the routing matrix in `cfg.routing` is stored with `row = source, col = dest`, so it is transposed before solving the linear system.
 
 # TODO: add flow-conservation and row-stochasticity sanity checks on `P` before dispatching to `numpy.linalg.solve`.
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
 
-# data types
 from typing import List, Sequence, Tuple, Union
 
 # scientific stack
@@ -130,10 +126,7 @@ def per_artifact_lambdas(cfg: NetworkConfig,
                          lambda_z: float) -> np.ndarray:
     """*per_artifact_lambdas()* effective arrival rate per artifact at the given scalar entry rate.
 
-    Scales the profile's `lambda_z_vector()` (the entry-distribution of
-    λ_z across artifacts) by the scalar `lambda_z` so callers can sweep
-    the entry rate without editing the profile, then delegates to
-    `solve_jackson_lambdas` for the forward solve.
+    Scales the profile's `lambda_z_vector()` (the entry-distribution of λ_z across artifacts) by the scalar `lambda_z` so callers can sweep the entry rate without editing the profile, then delegates to `solve_jackson_lambdas` for the forward solve.
 
     Args:
         cfg (NetworkConfig): resolved profile + scenario.
@@ -145,8 +138,7 @@ def per_artifact_lambdas(cfg: NetworkConfig,
     _lam_z_vec = np.asarray(cfg.build_lam_z_vec(), dtype=float)
     _total = float(_lam_z_vec.sum())
     if _total <= 0:
-        # profile has no external arrivals declared; treat the first
-        # artifact as the entry
+        # profile has no external arrivals declared; treat the first artifact as the entry
         _entry_vec = np.zeros_like(_lam_z_vec)
         _entry_vec[0] = float(lambda_z)
     else:
@@ -159,8 +151,7 @@ def per_artifact_rhos(cfg: NetworkConfig,
                       lambda_z: float) -> np.ndarray:
     """*per_artifact_rhos()* per-artifact utilisation at the given entry rate.
 
-    `ρ_i = λ_i / (c_i · μ_i)`. Returns `+inf` for any artifact with
-    zero capacity (not present in well-formed profiles).
+    `ρ_i = λ_i / (c_i · μ_i)`. Returns `+inf` for any artifact with zero capacity (not present in well-formed profiles).
 
     Args:
         cfg (NetworkConfig): resolved profile + scenario.
@@ -183,9 +174,7 @@ def lambda_z_for_rho(cfg: NetworkConfig,
                      ) -> Tuple[float, int, float]:
     """*lambda_z_for_rho()* solve for the entry λ_z that makes the bottleneck artifact hit `rho_target`.
 
-    Since Jackson is linear in λ_z, one probe at any positive rate is
-    enough to identify the bottleneck (artifact with the highest ρ per
-    unit λ_z) and the linear scaling factor.
+    Since Jackson is linear in λ_z, one probe at any positive rate is enough to identify the bottleneck (artifact with the highest ρ per unit λ_z) and the linear scaling factor.
 
     Args:
         cfg (NetworkConfig): resolved profile + scenario.
@@ -201,13 +190,16 @@ def lambda_z_for_rho(cfg: NetworkConfig,
     if not 0.0 < rho_target < 1.0:
         raise ValueError(f"rho_target must be in (0, 1), got {rho_target}")
     _rhos = per_artifact_rhos(cfg, probe_lambda_z)
+
     if not np.all(np.isfinite(_rhos)):
         raise ValueError("at least one artifact has non-finite ρ; check μ and c")
     _bottleneck = int(np.argmax(_rhos))
     _per_unit = float(_rhos[_bottleneck]) / float(probe_lambda_z)
+
     if _per_unit <= 0:
         raise ValueError("bottleneck ρ per unit λ_z is non-positive; check routing")
     _lam_z = float(rho_target) / _per_unit
+
     return _lam_z, _bottleneck, _per_unit
 
 
