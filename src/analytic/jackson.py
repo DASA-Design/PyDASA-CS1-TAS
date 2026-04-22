@@ -5,11 +5,21 @@ Module jackson.py
 
 Jackson open-network solver for the analytic method of the TAS case
 study. Three layers, kept separate so each can be unit-tested
-independently:
+independently.
 
-    - `solve_jackson_lambdas(P, lambda_z)` — pure linear solve of `(I - P^T) lamb = lamb_z`, returning the per-node effective arrival rates.
-    - `solve_network(cfg)` — takes a resolved `NetworkConfig`, builds a `Queue` per artifact with the Jackson-solved `lamb`, calls `calculate_metrics()`, and returns a pandas DataFrame with one row per node.
-    - **ρ-indexed helpers** (`per_artifact_lambdas`, `per_artifact_rhos`, `lambda_z_for_rho`, `build_rho_grid`) — inverse direction used by the experiment orchestrator to drive the ρ-indexed operating-point grid. Since Jackson is linear in λ_z, the inversion is one division.
+Public API:
+    - `solve_jackson_lambdas(P, lambda_z)` pure linear solve of
+      `(I - P^T) lamb = lamb_z`, returning the per-node effective
+      arrival rates.
+    - `solve_network(cfg)` takes a resolved `NetworkConfig`, builds a
+      `Queue` per artifact with the Jackson-solved `lamb`, calls
+      `calculate_metrics()`, and returns a pandas DataFrame with one
+      row per node.
+    - rho-indexed helpers (`per_artifact_lambdas`, `per_artifact_rhos`,
+      `lambda_z_for_rho`, `build_rho_grid`) drive the inverse
+      direction used by the experiment orchestrator to build the
+      rho-indexed operating-point grid. Since Jackson is linear in
+      lambda_z, the inversion is one division.
 
 *IMPORTANT:* the routing matrix in `cfg.routing` is stored with
 `row = source, col = dest`, so it is transposed before solving the
@@ -118,9 +128,10 @@ def solve_network(cfg: NetworkConfig) -> pd.DataFrame:
     return pd.DataFrame(_rows)
 
 
-# --- ρ-indexed helpers (experiment orchestrator drives the grid in ρ, ----
-# --- the apparatus consumes λ; Jackson linearity makes the inverse one ---
-# --- division, so a single probe identifies the bottleneck + scaling). ---
+# --- rho-indexed helpers (experiment orchestrator drives the grid in --
+# --- rho; the apparatus consumes lambda; Jackson linearity makes the --
+# --- inverse one division, so a single probe identifies the --------
+# --- bottleneck plus scaling). -------------------------------------
 
 
 def per_artifact_lambdas(cfg: NetworkConfig,

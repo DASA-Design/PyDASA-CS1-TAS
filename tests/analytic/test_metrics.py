@@ -187,7 +187,7 @@ class TestCheckRequirements:
         _req = check_requirements(_nodes)
 
         # every verdict keeps the full schema (metric/value/threshold/
-        # operator/units/pass/notes) — operator + units come from the
+        # operator/units/pass/notes); operator + units come from the
         # reference JSON and flow through unchanged.
         _expected_keys = {
             "metric", "value", "threshold",
