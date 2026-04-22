@@ -5,16 +5,11 @@ Module test_registry.py
 
 Unit tests for `src.experiment.registry.ServiceRegistry`:
 
-    - **TestFromConfig** dict-to-registry mapping, port-offset resolution,
-      and `base_port_override`.
-    - **TestBuildInvokeUrl** URL shape per service type (third-party `/invoke`
-      vs TAS `/TAS_<i>/invoke`).
-    - **TestBuildHealthzUrl** every `/healthz` URL is the same shape regardless
-      of service type.
-    - **TestRoleFilters** `list_names()` and `filter_names_by_role()` return
-      the expected sets.
-    - **TestTasComponentsShareAPort** six TAS_{i} entries at `port_offset=0`
-      map to one port but distinct URLs (Option-B topology).
+    - **TestFromConfig** dict-to-registry mapping, port-offset resolution, and `base_port_override`.
+    - **TestBuildInvokeUrl** URL shape per service type (third-party `/invoke` vs TAS `/TAS_<i>/invoke`).
+    - **TestBuildHealthzUrl** every `/healthz` URL is the same shape regardless of service type.
+    - **TestRoleFilters** `list_names()` and `filter_names_by_role()` return the expected sets.
+    - **TestTasComponentsShareAPort** six TAS_{i} entries at `port_offset=0` map to one port but distinct URLs (Option-B topology).
     - **TestUnknownName** names absent from the registry raise `KeyError`.
 """
 # native python modules

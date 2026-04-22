@@ -48,8 +48,7 @@ class ServiceRegistry:
     Attributes:
         host (str): host address (usually `"127.0.0.1"`).
         base_port (int): first service port; each entry adds its `port_offset`.
-        table (Dict[str, RegistryEntry]): keyed by service name (e.g. `TAS_{1}`,
-            `MAS_{1}`); values are frozen `RegistryEntry` records.
+        table (Dict[str, RegistryEntry]): keyed by service name (e.g. `TAS_{1}`, `MAS_{1}`); values are frozen `RegistryEntry` records.
     """
 
     host: str
@@ -67,8 +66,7 @@ class ServiceRegistry:
 
         Args:
             method_cfg (Dict[str, Any]): parsed method config.
-            base_port_override (int): when non-zero, replaces
-                `method_cfg["base_port"]`. Used for CI / parallel runs via env var.
+            base_port_override (int): when non-zero, replaces `method_cfg["base_port"]`. Used for CI / parallel runs via env var.
 
         Returns:
             ServiceRegistry: populated registry.
@@ -132,8 +130,7 @@ class ServiceRegistry:
         """*filter_names_by_role()* yield names whose entry role matches `role`.
 
         Args:
-            role (str): role label such as `"atomic"`, `"composite_client"`,
-                `"composite_medical"`, `"composite_alarm"`, `"composite_drug"`.
+            role (str): role label such as `"atomic"`, `"composite_client"`, `"composite_medical"`, `"composite_alarm"`, `"composite_drug"`.
 
         Returns:
             Iterable[str]: lazy generator of matching service names.
