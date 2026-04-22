@@ -3,8 +3,7 @@
 Module queues.py
 ================
 
-Closed-form queue models used by the analytic method for the TAS case
-study. Field names follow the PyDASA acronym convention:
+Closed-form queue models used by the analytic method for the TAS case study. Field names follow the PyDASA acronym convention:
 
     - `lamb`: arrival rate lambda (avoids Python's reserved word).
     - `c_max`: number of servers c.
@@ -23,17 +22,13 @@ Formulas are drawn from standard queueing theory:
 # TODO: implement additional queue models (M/G/1, G/G/1, priority queues).
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
-from dataclasses import dataclass, field
 
-# data types
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-# abstract base class support
-from abc import ABC, abstractmethod
-
-# shared math helpers
+# local modules
 from src.utils.mathx import gfactorial
 
 
@@ -56,34 +51,36 @@ class BasicQueue(ABC):
         avg_wait_q (float): Wq, mean waiting time in the queue.
         lamb_eff (float): effective arrival rate for finite-K models.
     """
-
+    # input parameters
+    # arrival rate
     lamb: float = -1.0
-
+    # service rate
     mu: float = -1.0
-
+    # number of servers
     c_max: int = 1
-
+    # system capacity (None means infinite)
     K_max: Optional[int] = None
-
+    # derived metrics (set by calculate_metrics)
+    # server utilisation (rho = lamb / (c * mu))
     rho: float = field(default=0.0, init=False)
-
+    # traffic intensity (tau = lamb / mu)
     tau: float = field(default=0.0, init=False)
-
+    # probability of zero requests in the system
     p_z: float = field(default=0.0, init=False)
-
+    # probability of n requests in the system (set by calculate_prob_n)
     p_n: float = field(default=0.0, init=False)
-
+    # mean number in system (L)
     avg_len: float = field(default=0.0, init=False)
-
+    # mean number in queue (Lq)
     avg_len_q: float = field(default=0.0, init=False)
-
+    # mean waiting time in system (W)
     avg_wait: float = field(default=0.0, init=False)
-
+    # mean waiting time in queue (Wq)
     avg_wait_q: float = field(default=0.0, init=False)
-
+    # effective arrival rate (lamb_eff = lamb * (1 - P(K)) for finite-K models)
     lamb_eff: float = field(default=0.0, init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """*__post_init__()* coerce numeric types and run common plus model-specific validation.
 
         Raises:
@@ -101,8 +98,7 @@ class BasicQueue(ABC):
         """*_validate_basic_params()* check the parameters common to every queueing model.
 
         Raises:
-            ValueError: if arrival rate is negative, service rate is
-                non-positive, or server count is non-positive.
+            ValueError: if arrival rate is negative, service rate is non-positive, or server count is non-positive.
         """
         if self.lamb < 0:
             raise ValueError("Arrival rate must be non-negative.")
@@ -124,8 +120,7 @@ class BasicQueue(ABC):
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* compute the analytical metrics and write them in place.
 
-        Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`,
-        `avg_wait`, `avg_wait_q`, and for finite-K models `lamb_eff`.
+        Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q`, and for finite-K models `lamb_eff`.
         """
         pass
 
@@ -186,7 +181,11 @@ class BasicQueue(ABC):
         if self.K_max is not None:
             _output.append(f"\tK_max={self.K_max}")
 
-        _status = f"\tStatus: {'STABLE' if self.is_stable() else 'UNSTABLE'}"
+        if self.is_stable():
+            _status_word = "STABLE"
+        else:
+            _status_word = "UNSTABLE"
+        _status = f"\tStatus: {_status_word}"
         _output.append(_status)
 
         _metrics = self.get_metrics()
@@ -208,16 +207,14 @@ class QueueMM1(BasicQueue):
     """**QueueMM1** M/M/1 queueing model (1 server, infinite capacity).
 
     Raises:
-        ValueError: if server count is not 1, capacity is not infinite,
-            or the system is unstable (`lamb >= mu`).
+        ValueError: if server count is not 1, capacity is not infinite, or the system is unstable (`lamb >= mu`).
     """
 
     def _validate_params(self) -> None:
         """*_validate_params()* check the M/M/1 invariants.
 
         Raises:
-            ValueError: if server count is not 1, capacity is not
-                infinite, or the system is unstable.
+            ValueError: if server count is not 1, capacity is not infinite, or the system is unstable.
         """
         if self.c_max != 1:
             _msg = f"M/M/1 requires exactly 1 server. c={self.c_max}"
@@ -237,14 +234,11 @@ class QueueMM1(BasicQueue):
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* compute rho, L, Lq, W, Wq for the M/M/1 model.
 
-        Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`,
-        `avg_wait`, `avg_wait_q` on the instance.
+        Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
         self.rho = self.lamb / self.mu
         self.tau = self.lamb / self.mu
 
-        # state-zero probability
         self.p_z = self.calculate_prob_zero()
 
         # mean number in system (L) and in queue (Lq)
@@ -290,16 +284,14 @@ class QueueMMs(BasicQueue):
     """**QueueMMs** M/M/s queueing model (multi-server, infinite capacity).
 
     Raises:
-        ValueError: if server count is less than 1, capacity is not
-            infinite, or the system is unstable (`lamb >= c * mu`).
+        ValueError: if server count is less than 1, capacity is not infinite, or the system is unstable (`lamb >= c * mu`).
     """
 
     def _validate_params(self) -> None:
         """*_validate_params()* check the M/M/s invariants.
 
         Raises:
-            ValueError: if server count is less than 1, capacity is not
-                infinite, or the system is unstable.
+            ValueError: if server count is less than 1, capacity is not infinite, or the system is unstable.
         """
         if self.c_max < 1:
             _msg = f"M/M/s requires at least one server. c={self.c_max}"
@@ -319,14 +311,11 @@ class QueueMMs(BasicQueue):
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* compute rho, L, Lq, W, Wq via the Erlang-C formulas.
 
-        Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`,
-        `avg_wait`, `avg_wait_q` on the instance.
+        Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
         self.rho = self.lamb / (self.c_max * self.mu)
         self.tau = self.lamb / self.mu
 
-        # state-zero probability
         self.p_z = self.calculate_prob_zero()
 
         # mean number in queue (Lq) via the Erlang-C expression
@@ -393,8 +382,7 @@ class QueueMMs(BasicQueue):
 class QueueMM1K(BasicQueue):
     """**QueueMM1K** M/M/1/K queueing model (one server, finite capacity K).
 
-    Narrows the base class's `K_max: Optional[int]` to plain `int` so
-    downstream math does not need null-guards.
+    Narrows the base class's `K_max: Optional[int]` to plain `int` so downstream math does not need null-guards.
 
     Raises:
         ValueError: if server count is not 1 or capacity is not positive.
@@ -423,10 +411,8 @@ class QueueMM1K(BasicQueue):
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* compute metrics for M/M/1/K, handling both `rho<1` and `rho=1`.
 
-        Side effects: sets `rho`, `tau`, `lamb_eff`, `avg_len`,
-        `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
+        Side effects: sets `rho`, `tau`, `lamb_eff`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
         self.rho = self.lamb / self.mu
         self.tau = self.lamb / self.mu
 
@@ -501,8 +487,7 @@ class QueueMMsK(BasicQueue):
     """**QueueMMsK** M/M/c/K queueing model (finite capacity K, c servers).
 
     Raises:
-        ValueError: if server count is less than 1, or capacity is less
-            than the server count.
+        ValueError: if server count is less than 1, or capacity is less than the server count.
     """
 
     K_max: int = 0  # type: ignore[assignment]
@@ -511,8 +496,7 @@ class QueueMMsK(BasicQueue):
         """*_validate_params()* check the M/M/c/K invariants.
 
         Raises:
-            ValueError: if server count is less than 1 or capacity is
-                less than the server count.
+            ValueError: if server count is less than 1 or capacity is less than the server count.
         """
         if self.c_max < 1:
             _msg = f"M/M/c/K requires at least one server. c={self.c_max}"
@@ -529,14 +513,11 @@ class QueueMMsK(BasicQueue):
     def calculate_metrics(self) -> None:
         """*calculate_metrics()* compute metrics for M/M/c/K via truncated state sums.
 
-        Side effects: sets `rho`, `tau`, `p_z`, `lamb_eff`, `avg_len`,
-        `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
+        Side effects: sets `rho`, `tau`, `p_z`, `lamb_eff`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
         self.rho = self.lamb / (self.c_max * self.mu)
         self.tau = self.lamb / self.mu
 
-        # state-zero probability
         self.p_z = self.calculate_prob_zero()
 
         # block probability and effective arrival rate
@@ -586,8 +567,7 @@ class QueueMMsK(BasicQueue):
             n (int): number of requests in the system.
 
         Returns:
-            float: probability of n requests; `0.0` when n falls outside
-                `[0, K_max]`.
+            float: probability of n requests; `0.0` when n falls outside `[0, K_max]`.
         """
         if n < 0 or n > self.K_max:
             return 0.0
@@ -655,27 +635,21 @@ def Queue(model: str,
           K_max: Optional[int] = None) -> BasicQueue:
     """*Queue()* factory that returns a concrete queue model by string key.
 
-    NOTE: parameter names follow the PyDASA acronym convention (`lamb`
-    for lambda, `c_max` for server count, `K_max` for capacity).
+    NOTE: parameter names follow the PyDASA acronym convention (`lamb` for lambda, `c_max` for server count, `K_max` for capacity).
 
     Args:
-        model (str): queue model key. Supported: `"M/M/1"`, `"M/M/s"`,
-            `"M/M/1/K"`, `"M/M/c/K"`, plus `"M/M/s/K"` as an alias for
-            the `M/M/c/K` class.
+        model (str): queue model key. Supported: `"M/M/1"`, `"M/M/s"`, `"M/M/1/K"`, `"M/M/c/K"`, plus `"M/M/s/K"` as an alias for the `M/M/c/K` class.
         lamb (float): arrival rate (lambda).
         mu (float): service rate (mu).
         c_max (int): number of servers (c). Defaults to 1.
-        K_max (Optional[int]): maximum system capacity (K). Defaults to
-            `None` (infinite).
+        K_max (Optional[int]): maximum system capacity (K). Defaults to `None` (infinite).
 
     Raises:
         NotImplementedError: if `model` is not in the supported registry.
-        ValueError: when the model's parameter combination is invalid
-            (e.g. M/M/1 with finite K, or M/M/c/K with K < c).
+        ValueError: when the model's parameter combination is invalid (e.g. M/M/1 with finite K, or M/M/c/K with K < c).
 
     Returns:
-        BasicQueue: instance of a concrete queue model built on the
-            abstract `BasicQueue`.
+        BasicQueue: instance of a concrete queue model built on the abstract `BasicQueue`.
     """
     if model not in _QUEUE_MODELS:
         _msg = f"Unsupported queue model: {model}. "
@@ -706,14 +680,15 @@ def Queue(model: str,
         raise ValueError(_msg)
 
     # finite multi-server models additionally require K >= c
-    if _K_rule == "finite" and _c_rule == "multi" and K_max < c_max:
+    _finite = _K_rule == "finite"
+    _multi = _c_rule == "multi"
+    _undersized = _finite and _multi and K_max < c_max
+    if _undersized:
         _msg = f"{model} requires capacity K >= c. "
         _msg += f"K={K_max}, c={c_max}"
         raise ValueError(_msg)
 
-    # build the queue; every concrete class accepts the full
-    # (lamb, mu, c_max, K_max) shape through the inherited dataclass
-    # fields; validation above guarantees the values match the model.
+    # every concrete class accepts the full (lamb, mu, c_max, K_max) shape through the inherited dataclass fields; validation above guarantees the values match the model
     _queue = _cls(lamb, mu, c_max, K_max)
 
     # TODO: implement additional queue models (M/G/1, G/G/1, priority).

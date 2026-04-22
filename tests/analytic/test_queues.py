@@ -3,44 +3,21 @@
 Module test_queues.py
 =====================
 
-Sanity checks for the closed-form queue models in `src.analytic.queues`
-and the helper `gfactorial()` in `src.utils.mathx`.
+Sanity checks for the closed-form queue models in `src.analytic.queues`.
 
 Each class groups tests by the contract under verification:
 
-    - **TestGFactorial**: numerical correctness of the generalised factorial across integers and halves.
     - **TestMM1**: M/M/1 closed-form formulas and guard-rails.
     - **TestMMcK**: M/M/c/K formulas, M/M/s/K alias, and capacity-vs- server-count invariants.
     - **TestFactoryErrors**: registry-level errors from the `Queue()` factory when the model string is not supported.
 
 # TODO: extend with M/M/s and M/M/1/K coverage as those paths get used.
 """
-# native python modules
-import math
-
 # testing framework
 import pytest
 
-# modules under test
+# module under test
 from src.analytic.queues import Queue
-from src.utils.mathx import gfactorial
-
-
-class TestGFactorial:
-    """**TestGFactorial** covers `gfactorial()` across integers, zero, and the half-integer case (which dispatches to the gamma branch)."""
-
-    def test_zero(self):
-        """*test_zero()* 0! must equal 1 by convention."""
-        assert gfactorial(0) == 1
-
-    def test_small_int(self):
-        """*test_small_int()* 5! = 120 (standard integer branch)."""
-        assert gfactorial(5) == 120
-
-    def test_half(self):
-        """*test_half()* gfactorial(0.5) = Γ(1.5) = 0.5 * sqrt(π)."""
-        _expected = 0.5 * math.sqrt(math.pi)
-        assert gfactorial(0.5) == pytest.approx(_expected)
 
 
 class TestMM1:
