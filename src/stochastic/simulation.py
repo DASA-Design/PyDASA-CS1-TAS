@@ -6,10 +6,28 @@ Module simulation.py
 SimPy DES engine for the open Jackson queueing network used by the
 CS-01 TAS case study. Two collaborating layers:
 
-    - **QueueNode**: per-node SimPy `Resource` with finite capacity K, `c` parallel servers, and per-job timing collection (service time, queue wait, total system time) plus event-driven L / Lq tracking for time-weighted averages.
-    - `simulate_network()`: top-level driver. Spawns a `QueueNode` per slot, fires Poisson arrivals at the externally-driven nodes, runs the simulation for `horizon` seconds with a `warmup` seconds cut-off, repeats `reps` times, and returns one summary DataFrame with mean / std per node across replications.
+    - **QueueNode** per-node SimPy `Resource` with finite capacity K
+      and c parallel servers, plus per-job timing collection (service
+      time, queue wait, total system time) and event-driven L / Lq
+      tracking for time-weighted averages.
+    - **simulate_network()** top-level driver. Spawns a `QueueNode`
+      per slot, fires Poisson arrivals at the externally-driven
+      nodes, runs each replication for `horizon` seconds with a
+      `warmup` cut-off, repeats `reps` times, and returns one summary
+      DataFrame with mean and std per node across replications.
 
-*IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation counts. The method-config JSON declares the latter; the orchestrator in `src.methods stochastic` converts via `seconds = invocations / sum(lambda_z)` before calling here.
+Public API:
+    - `QueueNode` node class.
+    - `job(env, node_id, nodes, P, results)` single-job SimPy generator.
+    - `job_generator(env, node_id, rate, nodes, P, results)` Poisson source.
+    - `simulate_network(mu, lambda_zero, c, K, P, ...)` multi-rep driver.
+    - `solve_network(cfg, method_cfg)` NetworkConfig adapter mirroring
+      `src.analytic.jackson.solve_network`.
+
+*IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation
+counts. The method-config JSON declares the latter; the orchestrator
+in `src.methods.stochastic` converts via
+`seconds = invocations / sum(lambda_z)` before calling here.
 
 # TODO: replace the per-job blocked-after-warmup approximation with a state-conditioned counter (event-driven) once a regression test exists for the M/M/1/K Erlang-B formula.
 """
@@ -39,16 +57,22 @@ from src.io.config import NetworkConfig
 
 
 class QueueNode:
-    """**QueueNode** is one node in the open queueing network: a SimPy `Resource` (c servers) with a finite capacity K, plus the per-job and time-weighted bookkeeping needed to recover lambda / rho / L / Lq / W / Wq after a run.
+    """**QueueNode** one node in the open queueing network.
 
-    Attributes (selected):
-        env (simpy.Environment): the shared simulation environment.
+    Wraps a SimPy `Resource` (c servers) with a finite capacity K and
+    the per-job plus time-weighted bookkeeping needed to recover
+    lambda / rho / L / Lq / W / Wq after a run.
+
+    Attributes:
+        env (simpy.Environment): shared simulation environment.
         node_id (int): positional slot in the network's node list.
-        mu (float): per-server service rate (jobs / time unit).
+        mu (float): per-server service rate in jobs per time unit.
         c (int): number of parallel servers.
-        K (Optional[int]): system capacity (queue + service); None for an unbounded queue.
-        server (simpy.Resource): the resource pool, capacity = c.
-        blocked_jobs (int): count of jobs that arrived while the system was at capacity K and were dropped.
+        K (Optional[int]): system capacity (queue + service); `None`
+            for an unbounded queue.
+        server (simpy.Resource): resource pool of capacity c.
+        blocked_jobs (int): count of jobs that arrived while the
+            system was at capacity K and were dropped.
     """
 
     def __init__(self,
@@ -60,7 +84,7 @@ class QueueNode:
                  P: np.ndarray,
                  results: List[List[float]],
                  horizon: float):
-        """*__init__()* QueueNode constructor.
+        """*__init__()* bind env plus capacity knobs and initialise the bookkeeping buffers.
 
         Args:
             env (simpy.Environment): simulation environment.
@@ -112,14 +136,18 @@ class QueueNode:
         self.job_log: List[dict] = []
 
     def is_full(self) -> bool:
-        """*is_full()* True iff the system is at capacity K (queue + service combined)."""
+        """*is_full()* return True when the system is at capacity K (queue + service combined)."""
         return self.K is not None and (self.in_queue + self.in_service) >= self.K
 
     def record_state_change(self, env: simpy.Environment) -> None:
-        """*record_state_change()* close out the previous (length, duration) interval and start a new one. Called on every arrival, service start, and departure so the time-weighted averages stay accurate.
+        """*record_state_change()* close the previous (length, duration) interval and open a new one.
+
+        Called on every arrival, service start, and departure so the
+        time-weighted averages stay accurate.
 
         Args:
-            env (simpy.Environment): the active simulation environment (used for the current `env.now` timestamp).
+            env (simpy.Environment): active simulation environment,
+                used for the current `env.now` timestamp.
         """
         _now = env.now
         _delta = _now - self.last_event_time
@@ -168,7 +196,9 @@ def job_generator(env: simpy.Environment,
                   nodes: List[QueueNode],
                   P: np.ndarray,
                   results: List[List[float]]):
-    """*job_generator()* Poisson arrival source for one externally- driven node. Spawns a `job()` process per arrival, indefinitely.
+    """*job_generator()* drive Poisson arrivals at one externally-driven node.
+
+    Spawns a `job()` process per arrival, indefinitely.
 
     Args:
         env (simpy.Environment): simulation environment.
@@ -192,7 +222,11 @@ def job(env: simpy.Environment,
         nodes: List[QueueNode],
         P: np.ndarray,
         results: List[List[float]]):
-    """*job()* SimPy generator that walks one job through the network: arrive at `node_id`, queue, get served, then make a routing decision based on `P[current]` (or exit when no row weight pulls it onward).
+    """*job()* walk one job through the network.
+
+    Arrive at `node_id`, queue, get served, then make a routing
+    decision based on `P[current]` (or exit when no row weight pulls
+    the job onward).
 
     Args:
         env (simpy.Environment): simulation environment.
