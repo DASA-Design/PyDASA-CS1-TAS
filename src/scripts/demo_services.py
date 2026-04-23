@@ -3,11 +3,7 @@
 demo_services.py
 ================
 
-Walk through the generic `src/experiment/services/` layer piece by
-piece so a human can watch what each part produces and see that it
-behaves as intended. No queueing classes; the layer only provides
-specs, per-service contexts, an `@instrumented` annotation, and two
-mount helpers (atomic + composite).
+Walk through the generic `src/experiment/services/` layer piece by piece so a human can watch what each part produces and see that it behaves as intended. No queueing classes; the layer only provides specs, per-service contexts, an `@logger` annotation, and two mount helpers (atomic + composite).
 
 Run:
     python src/scripts/demo_services.py
@@ -39,6 +35,7 @@ from src.experiment.services import (  # noqa: E402
 
 
 def _banner(_s: str) -> None:
+    """*_banner()* print a centred header band to stdout."""
     print()
     print("=" * 72)
     print(f"  {_s}")
@@ -46,6 +43,7 @@ def _banner(_s: str) -> None:
 
 
 async def _recorded_forward_factory(_calls: List[Tuple[str, str]]):
+    """*_recorded_forward_factory()* build a forward closure that appends `(target, request_id)` to `_calls` and returns `success=True`."""
     async def _fwd(target: str, req: ServiceRequest) -> ServiceResponse:
         _calls.append((target, req.request_id))
         return ServiceResponse(request_id=req.request_id,
@@ -56,6 +54,7 @@ async def _recorded_forward_factory(_calls: List[Tuple[str, str]]):
 
 
 async def _demo() -> None:
+    """*_demo()* walk the six services-layer primitives (spec, derive_seed, ctx, @logger, atomic, composite) in sequence."""
     # -------- 1. ServiceSpec ---------------------------------------------
     _banner("1. ServiceSpec - frozen per-service knobs (no queueing logic)")
     _spec = ServiceSpec(name="MAS_{1}", role="atomic", port=8006,
@@ -90,10 +89,7 @@ async def _demo() -> None:
     print(f"  first 5 service_time draws (exponential at mu={_spec.mu}):")
     for _ in range(5):
         print(f"    {_ctx.draw_svc_time():.6f} s")
-    # 20 Bernoulli trials so the ~10% fire-rate is observable; 3 trials
-    # at eps=0.1 will hit zero fires ~73% of the time (sampling noise).
-    # True = Bernoulli FIRED (business FAILURE at this service);
-    # False = did not fire (this invocation would succeed locally).
+    # 20 Bernoulli trials so the ~10% fire-rate is observable; 3 trials at eps=0.1 would hit zero fires ~73% of the time (sampling noise). True = Bernoulli FIRED (business FAILURE at this service); False = did not fire (this invocation would succeed locally).
     _draws = [_ctx.draw_eps() for _ in range(20)]
     _fires = sum(_draws)
     print(f"  20 epsilon-Bernoulli draws (eps={_spec.epsilon}):")
@@ -113,9 +109,7 @@ async def _demo() -> None:
 
     @logger(_ctx2)
     async def _handler(req: ServiceRequest) -> ServiceResponse:
-        # small sleep so recv_ts < end_ts is visible in the row.
-        # in the real atomic handler this is `asyncio.sleep(expovariate(mu))`;
-        # here we just await a fixed 5 ms so the demo prints non-zero work.
+        # small sleep so recv_ts < end_ts is visible in the row. In the real atomic handler this is `asyncio.sleep(expovariate(mu))`; here we just await a fixed 5 ms so the demo prints non-zero work.
         await asyncio.sleep(0.005)
         return ServiceResponse(request_id=req.request_id,
                                service_name=_ctx2.spec.name,
@@ -193,6 +187,7 @@ async def _demo() -> None:
 
 
 def main() -> None:
+    """*main()* CLI entry point; wraps the async demo."""
     asyncio.run(_demo())
 
 

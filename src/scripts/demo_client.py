@@ -55,9 +55,7 @@ async def _demo() -> None:
     """*_demo()* spin up the launcher, send one request, show the InvocationRecord."""
     _cfg = load_profile(adaptation="baseline")
     _mcfg = load_method_config("experiment")
-    # keep the ramp tiny; we send ONE request manually below so ramp
-    # config values do not really matter but must be present to satisfy
-    # validation
+    # keep the ramp tiny; we send ONE request manually below so ramp config values do not really matter but must be present to satisfy validation
     _mcfg["ramp"] = {"min_samples_per_kind": 32,
                      "max_probe_window_s": 5.0,
                      "rates": [2.0],
@@ -128,10 +126,7 @@ async def _demo() -> None:
             print(f"  HTTP error: {_exc}")
 
         # ---- 4. the client-side InvocationRecord shape ----
-        # No second HTTP send; we construct the record directly from
-        # step 3's response. Calling `_sim._send_one()` here would fire
-        # another request through the mesh and this demo is meant to
-        # terminate quickly; the record shape is the interesting thing.
+        # No second HTTP send; we construct the record directly from step 3's response. Calling `_sim._send_one()` here would fire another request through the mesh and this demo is meant to terminate quickly; the record shape is the interesting thing.
         _banner("4. what an InvocationRecord would look like post-send")
         _body = _r.json()
         _rec = InvocationRecord(
@@ -157,9 +152,7 @@ async def _demo() -> None:
         _banner("5. shutting down")
         print("  stopping ExperimentLauncher context manager...")
 
-    # once the launcher's __aexit__ returns (client aclose + transport
-    # aclose), we're back at the async-fn top level with nothing left
-    # to do except print the farewell banner.
+    # once the launcher's __aexit__ returns (client aclose + transport aclose), we're back at the async-fn top level with nothing left to do except print the farewell banner
     _banner("demo complete; exiting")
     print("  ok")
 

@@ -49,15 +49,15 @@ def _banner(_s: str) -> None:
 
 def _mas_spec(*, epsilon: float = 0.0, seed: int = 42) -> ServiceSpec:
     """*_mas_spec()* stock MAS spec for the demo; `mu=1e9` keeps service time near-zero."""
-    inst = ServiceSpec(name="MAS_{1}",
-                       role="atomic",
-                       port=8006,
-                       mu=1e9,
-                       epsilon=epsilon,
-                       c=1,
-                       K=10,
-                       seed=seed)
-    return inst
+    _inst = ServiceSpec(name="MAS_{1}",
+                        role="atomic",
+                        port=8006,
+                        mu=1e9,
+                        epsilon=epsilon,
+                        c=1,
+                        K=10,
+                        seed=seed)
+    return _inst
 
 
 async def _no_forward(_target: str,
