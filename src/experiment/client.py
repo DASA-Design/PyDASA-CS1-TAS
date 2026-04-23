@@ -371,19 +371,19 @@ class ClientSimulator:
         _rec = InvocationRecord(request_id=_req.request_id,
                                 kind=kind,
                                 size_bytes=_req.size_bytes,
-                                send_ts=time.time())
+                                send_ts=time.perf_counter())
         try:
             _r = await self._client.post(_url,
                                          json=_req.model_dump(),
                                          headers=_headers,
                                          timeout=10.0)
-            _rec.recv_ts = time.time()
+            _rec.recv_ts = time.perf_counter()
             _rec.status_code = _r.status_code
             if _r.status_code == 200:
                 _body = _r.json()
                 _rec.success = bool(_body.get("success", False))
         except Exception:
-            _rec.recv_ts = time.time()
+            _rec.recv_ts = time.perf_counter()
             _rec.status_code = -1
             _rec.success = False
         return _rec
@@ -413,7 +413,7 @@ class ClientSimulator:
         _records: List[InvocationRecord] = []
         _in_flight: List[asyncio.Task] = []
         _counts: Dict[str, int] = {_k: 0 for _k in self._kind_names}
-        _probe_start = time.time()
+        _probe_start = time.perf_counter()
         _stop_reason = "samples_reached"
 
         async def _collect(task: asyncio.Task) -> None:
@@ -424,33 +424,70 @@ class ClientSimulator:
                 _counts[_rec.kind] = _counts.get(_rec.kind, 0) + 1
             detector.observe(_rec)
 
-        # send loop
+        # batched absolute-deadline send schedule. Each loop iteration fires
+        # `_batch_size` sends back-to-back, then sleeps to the next batch
+        # deadline. Per-iter overhead (executor wakeup + create_task + drain
+        # ~3 ms total on Windows) is amortised K-fold across K sends. Without
+        # batching, that 3 ms overhead per send caps effective throughput
+        # around 330 req/s regardless of sleep precision. K is auto-sized
+        # so each iteration carries at least `_TARGET_TICK_S` of total work
+        # (well above the sleep+executor floor); at low rates K collapses
+        # to 1 and the loop reverts to one-send-per-tick.
+        _TARGET_TICK_S = 0.020
+        _batch_size = max(1, int(round(_TARGET_TICK_S / _interarrival)))
+        _batch_period = _batch_size * _interarrival
+        _send_idx = 0
+        _drain_budget_s = max(_batch_period / 3.0, 1e-4)
+
         while True:
-            # stop conditions
+            # stop conditions checked once per loop tick
             if detector.tripped:
                 _stop_reason = f"cascade: {detector.trip_reason}"
                 break
-            if time.time() - _probe_start > _max_s:
+            if time.perf_counter() - _probe_start > _max_s:
                 _stop_reason = "probe_timeout"
                 break
             if all(_c >= _target for _c in _counts.values()):
                 break
 
-            # spawn one request; also drain any completed tasks to update counts
-            _kind = self._pick_kind()
-            _t = asyncio.create_task(self._send_one(_kind))
-            _in_flight.append(_t)
+            # wait until the next absolute batch deadline. `time.sleep` on
+            # Python 3.11+ uses CREATE_WAITABLE_TIMER_HIGH_RESOLUTION on
+            # Windows (CPython issue #45429); offloading to the default
+            # executor keeps the asyncio loop free for the in-flight send
+            # tasks. Recipe from https://textual.textualize.io/blog/2022/12/30/
+            _deadline = _probe_start + _send_idx * _interarrival
+            _wait = _deadline - time.perf_counter()
+            if _wait > 0:
+                _loop = asyncio.get_event_loop()
+                await _loop.run_in_executor(None, time.sleep, _wait)
+            else:
+                # already past the deadline; yield once so other tasks run
+                await asyncio.sleep(0)
 
-            # drain finished tasks opportunistically
+            # fire `_batch_size` sends in tight succession; do not await
+            # individual sends, so per-send latency does not gate the next
+            # batch deadline. Stop early inside the batch when the
+            # sample-count target has been reached for every kind.
+            for _ in range(_batch_size):
+                if all(_c >= _target for _c in _counts.values()):
+                    break
+                _kind = self._pick_kind()
+                _t = asyncio.create_task(self._send_one(_kind))
+                _in_flight.append(_t)
+                _send_idx += 1
+
+            # drain finished tasks opportunistically; bounded by 1/3 of
+            # the batch period so the drain cannot delay the next batch
+            _drain_deadline = time.perf_counter() + _drain_budget_s
             _still_pending: List[asyncio.Task] = []
             for _ift in _in_flight:
                 if _ift.done():
                     await _collect(_ift)
+                elif time.perf_counter() < _drain_deadline:
+                    _still_pending.append(_ift)
                 else:
                     _still_pending.append(_ift)
             _in_flight = _still_pending
-
-            await asyncio.sleep(_interarrival)
 
         # drain any remaining in-flight tasks (bounded by individual timeouts)
         for _t in _in_flight:
@@ -460,7 +497,7 @@ class ClientSimulator:
                 pass
 
         # compute probe stats per kind
-        _duration = time.time() - _probe_start
+        _duration = time.perf_counter() - _probe_start
         _samples_per_kind: Dict[str, int] = dict(_counts)
         _stats_per_kind: Dict[str, Dict[str, float]] = {}
         for _kind in self._kind_names:
@@ -488,8 +525,20 @@ class ClientSimulator:
             _infra_rate = 0.0
             _biz_rate = 0.0
 
+        # effective client send rate = total invocations issued / probe
+        # wall-clock. Diverges from `rate` because asyncio.sleep + loop
+        # bookkeeping per iteration take longer than 1/rate at high rates.
+        # This is the rate that should match TAS_{1}'s measured `lambda`
+        # in the per-node DF (every request the client launches eventually
+        # hits TAS_{1} unless lost in flight).
+        if _duration > 0:
+            _effective_rate = _total / _duration
+        else:
+            _effective_rate = 0.0
+
         return {
             "rate": rate,
+            "effective_rate": _effective_rate,
             "duration_s": _duration,
             "total": _total,
             "samples_per_kind": _samples_per_kind,
@@ -504,7 +553,7 @@ class ClientSimulator:
         """*run_ramp()* drive the full ramp schedule; stop on cascade.
 
         Returns:
-            Dict[str, Any]: `{"probes": [...], "saturation_rate": float|None, "stopped_reason": str}`.
+            Dict[str, Any]: `{"probes": [...], "saturation_rate": float|None, "stopped_reason": str, "client_effective_rate": float}`. The `client_effective_rate` is the duration-weighted average of per-probe `effective_rate`, i.e. the actual rate at which the client managed to issue requests across the whole ramp; consumers compare it with TAS_{1}'s measured `lambda` in the per-node DF to verify "what we sent" equals "what arrived".
         """
         _detector = _CascadeDetector(self._cfg.ramp.cascade)
         _probes: List[Dict[str, Any]] = []
@@ -519,8 +568,17 @@ class ClientSimulator:
                 _stop = f"cascade at rate={_rate}: {_detector.trip_reason}"
                 break
 
+        # duration-weighted client effective rate across the whole ramp
+        _total_sent = sum(int(_p.get("total", 0)) for _p in _probes)
+        _total_dur = sum(float(_p.get("duration_s", 0.0)) for _p in _probes)
+        if _total_dur > 0:
+            _client_effective_rate = _total_sent / _total_dur
+        else:
+            _client_effective_rate = 0.0
+
         return {
             "probes": _probes,
             "saturation_rate": _saturation,
             "stopped_reason": _stop,
+            "client_effective_rate": _client_effective_rate,
         }

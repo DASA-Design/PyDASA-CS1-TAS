@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -47,6 +49,42 @@ from src.io import NetCfg, load_method_cfg, load_profile
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
+
+
+@contextlib.contextmanager
+def _windows_timer_resolution(period_ms: int = 1):
+    """*_windows_timer_resolution()* boost Windows system-timer resolution for the duration of the block.
+
+    On Windows, `asyncio.sleep` is bounded by the global system timer
+    (default ~15 ms), so very short interarrivals oversleep and the client
+    can never reach high target rates. `winmm.timeBeginPeriod(1)` lowers
+    the global timer floor to 1 ms for the lifetime of the call (paired
+    with `timeEndPeriod` on exit), giving asyncio.sleep ~1 ms granularity.
+
+    Recipe from https://stackoverflow.com/q/77895160 (asyncio.sleep
+    precision on Windows). No-op on non-Windows platforms.
+
+    Args:
+        period_ms (int): requested timer floor in milliseconds. The OS
+            clamps this to the supported range (typically 1-15 ms).
+    """
+    if sys.platform != "win32":
+        yield
+        return
+
+    try:
+        import ctypes
+        _winmm = ctypes.WinDLL("winmm")
+    except (OSError, AttributeError):
+        # winmm unavailable -> silently fall back to default resolution
+        yield
+        return
+
+    _winmm.timeBeginPeriod(int(period_ms))
+    try:
+        yield
+    finally:
+        _winmm.timeEndPeriod(int(period_ms))
 
 
 def _build_svc_df_from_logs(cfg: NetCfg,
@@ -194,52 +232,57 @@ async def _run_async(cfg: NetCfg,
     Returns:
         Dict[str, Any]: ramp output plus `duration_s` and `service_log_counts`.
     """
-    async with ExperimentLauncher(cfg=cfg,
-                                  method_cfg=method_cfg,
-                                  adaptation=adp) as _lnc:
-        # client config derived from method_cfg + launcher's kind-weights (which the launcher computed from the profile's routing matrix)
-        _seed = int(method_cfg["seed"])
-        _sizes_by_kind = dict(method_cfg.get("request_size_bytes", {}))
-        # scalar fallback kept for back-compat with tests that don't define a full sizes-by-kind map; defaults to the analyse_request size
-        _req_size = int(_sizes_by_kind.get("analyse_request", 256))
+    # boost the Windows system-timer resolution to 1 ms for the lifetime
+    # of this run so asyncio.sleep can resolve sub-15-ms interarrivals
+    # (no-op on non-Windows). Anchored here so every per-replicate call
+    # to _run_async benefits without each caller having to remember it.
+    with _windows_timer_resolution(1):
+        async with ExperimentLauncher(cfg=cfg,
+                                      method_cfg=method_cfg,
+                                      adaptation=adp) as _lnc:
+            # client config derived from method_cfg + launcher's kind-weights (which the launcher computed from the profile's routing matrix)
+            _seed = int(method_cfg["seed"])
+            _sizes_by_kind = dict(method_cfg.get("request_size_bytes", {}))
+            # scalar fallback kept for back-compat with tests that don't define a full sizes-by-kind map; defaults to the analyse_request size
+            _req_size = int(_sizes_by_kind.get("analyse_request", 256))
 
-        # FR-3.5: if ramp.rho_grid is set, invert it to rates via the analytic Jackson solver and keep the per-point metadata for post-run probe annotation. Either rates or rho_grid is authoritative (validate_ramp rejects both).
-        _ramp_block = dict(method_cfg["ramp"])
-        _rho_grid_meta: List[Dict[str, Any]] = []
-        if _ramp_block.get("rho_grid"):
-            _grid = build_rho_grid(cfg, list(_ramp_block["rho_grid"]))
-            _ramp_block["rates"] = [float(_lz) for (_, _lz, _) in _grid]
-            _ramp_block.pop("rho_grid", None)
-            _rho_grid_meta = [
-                {"rho_target": float(_r),
-                 "lambda_z_inverted": float(_lz),
-                 "bottleneck_artifact_idx": int(_b)}
-                for (_r, _lz, _b) in _grid
-            ]
+            # FR-3.5: if ramp.rho_grid is set, invert it to rates via the analytic Jackson solver and keep the per-point metadata for post-run probe annotation. Either rates or rho_grid is authoritative (validate_ramp rejects both).
+            _ramp_block = dict(method_cfg["ramp"])
+            _rho_grid_meta: List[Dict[str, Any]] = []
+            if _ramp_block.get("rho_grid"):
+                _grid = build_rho_grid(cfg, list(_ramp_block["rho_grid"]))
+                _ramp_block["rates"] = [float(_lz) for (_, _lz, _) in _grid]
+                _ramp_block.pop("rho_grid", None)
+                _rho_grid_meta = [
+                    {"rho_target": float(_r),
+                     "lambda_z_inverted": float(_lz),
+                     "bottleneck_artifact_idx": int(_b)}
+                    for (_r, _lz, _b) in _grid
+                ]
 
-        _client_cfg = ClientCfg(
-            entry_service="TAS_{1}",
-            seed=_seed,
-            request_size_bytes=_req_size,
-            request_sizes_by_kind=_sizes_by_kind,
-            kind_weights=dict(_lnc.kind_weights),
-            ramp=build_ramp_cfg(_ramp_block),
-        )
-        _sim = ClientSimulator(_lnc.client, _lnc.registry, _client_cfg)
+            _client_cfg = ClientCfg(
+                entry_service="TAS_{1}",
+                seed=_seed,
+                request_size_bytes=_req_size,
+                request_sizes_by_kind=_sizes_by_kind,
+                kind_weights=dict(_lnc.kind_weights),
+                ramp=build_ramp_cfg(_ramp_block),
+            )
+            _sim = ClientSimulator(_lnc.client, _lnc.registry, _client_cfg)
 
-        # FR-3.3: emit config.json BEFORE the ramp starts so if the run crashes the snapshot still reflects what was about to run
-        _td = dict(method_cfg.get("request_size_bytes", {}))
-        _lnc.snapshot_config(log_dir,
-                             extras={
-                                 "seed": _seed,
-                                 "request_size_bytes": _req_size,
-                                 "request_size_bytes_by_kind": _td,
-                                 "ramp": method_cfg.get("ramp", {}),
-                                 "entry_service": "TAS_{1}",
-                             })
+            # FR-3.3: emit config.json BEFORE the ramp starts so if the run crashes the snapshot still reflects what was about to run
+            _td = dict(method_cfg.get("request_size_bytes", {}))
+            _lnc.snapshot_config(log_dir,
+                                 extras={
+                                     "seed": _seed,
+                                     "request_size_bytes": _req_size,
+                                     "request_size_bytes_by_kind": _td,
+                                     "ramp": method_cfg.get("ramp", {}),
+                                     "entry_service": "TAS_{1}",
+                                 })
 
-        _ramp_out = await _sim.run_ramp()
-        _counts = _lnc.flush_logs(log_dir)
+            _ramp_out = await _sim.run_ramp()
+            _counts = _lnc.flush_logs(log_dir)
 
     # FR-3.5: if the ramp was driven from a rho_grid, thread the per-point metadata back into each probe record so downstream analysis knows which rho-target each probe was anchored to
     if _rho_grid_meta:
@@ -253,6 +296,7 @@ async def _run_async(cfg: NetCfg,
         "probes": _ramp_out["probes"],
         "saturation_rate": _ramp_out["saturation_rate"],
         "stopped_reason": _ramp_out["stopped_reason"],
+        "client_effective_rate": _ramp_out.get("client_effective_rate", 0.0),
         "duration_s": _duration,
         "service_log_counts": _counts,
     }
@@ -331,6 +375,8 @@ def run(adp: Optional[str] = None,
             "probes": _run_out["probes"],
             "saturation_rate": _run_out["saturation_rate"],
             "stopped_reason": _run_out["stopped_reason"],
+            "client_effective_rate": _run_out.get(
+                "client_effective_rate", 0.0),
             "log_dir": _rep_log_dir,
         })
 
@@ -357,6 +403,7 @@ def run(adp: Optional[str] = None,
         "probes": _first["probes"],
         "saturation_rate": _first["saturation_rate"],
         "stopped_reason": _first["stopped_reason"],
+        "client_effective_rate": _first.get("client_effective_rate", 0.0),
         "replicates": _replicates,
         "paths": _paths,
     }

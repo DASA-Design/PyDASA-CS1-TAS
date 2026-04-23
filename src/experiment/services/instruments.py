@@ -48,7 +48,7 @@ def mark_admit_time(c_used: int) -> None:
     Args:
         c_used (int): in-flight count after this request acquired its permit.
     """
-    _admit_var.set(time.time())
+    _admit_var.set(time.perf_counter())
     _c_used_var.set(int(c_used))
 
 
@@ -74,14 +74,14 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
             # the downstream dispatch chain). Atomic handlers publish a
             # post-admit timestamp via `mark_admit_time()`; if absent
             # (composite path), Wq reads 0 -- correct for an un-gated node
-            _recv_ts = time.time()
+            _recv_ts = time.perf_counter()
             _admit_var.set(None)
             _c_used_var.set(None)
 
             try:
                 _resp = await handler(req)
             except Exception as _exc:
-                _end_ts = time.time()
+                _end_ts = time.perf_counter()
                 _start_ts = _admit_var.get() or _recv_ts
                 _c_used_at_start = _c_used_var.get()
                 if _c_used_at_start is None:
@@ -101,7 +101,7 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
                 })
                 raise
 
-            _end_ts = time.time()
+            _end_ts = time.perf_counter()
             _start_ts = _admit_var.get() or _recv_ts
             _c_used_at_start = _c_used_var.get()
             if _c_used_at_start is None:
