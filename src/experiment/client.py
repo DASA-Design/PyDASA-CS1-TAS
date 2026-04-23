@@ -3,10 +3,7 @@
 Module client.py
 ================
 
-Client simulator for the architectural experiment. Sends kind-tagged
-requests at a deterministic rate, ramps the rate through a configured
-schedule, and stops on the first cascade signal from the infrastructure
-layer (503 / timeout / real 500).
+Client simulator for the architectural experiment. Sends kind-tagged requests at a deterministic rate, ramps the rate through a configured schedule, and stops on the first cascade signal from the infrastructure layer (503 / timeout / real 500).
 
 Key design choices (see `notes/experiment.md` for rationale):
 
@@ -53,10 +50,7 @@ from src.experiment.services import ServiceRequest
 class InvocationRecord:
     """*InvocationRecord* one end-to-end client-side measurement.
 
-    Fields are architecturally observable only; domain concepts (cost)
-    live elsewhere. Three failure-mode flags are derived from
-    `(status_code, success)` via helper properties so downstream
-    analysis never has to guess.
+    Fields are architecturally observable only; domain concepts (cost) live elsewhere. Three failure-mode flags are derived from `(status_code, success)` via helper properties so downstream analysis never has to guess.
 
     Attributes:
         request_id (str): UUID4 identifying this invocation.
@@ -143,9 +137,7 @@ class RampConfig:
 class ClientConfig:
     """*ClientConfig* full client runtime config.
 
-    `kind_weights` maps kind labels (arbitrary strings chosen at the
-    launcher level when it inspects `TAS_{1}`'s routing row) to
-    probabilities summing to 1.
+    `kind_weights` maps kind labels (arbitrary strings chosen at the launcher level when it inspects `TAS_{1}`'s routing row) to probabilities summing to 1.
 
     Attributes:
         entry_service (str): name of the service that receives the client's traffic.
@@ -175,9 +167,7 @@ class ClientConfig:
 def validate_ramp(ramp: Dict[str, Any]) -> None:
     """*validate_ramp()* check the `ramp` sub-dict of `experiment.json`.
 
-    Accepts either `rates` (legacy, direct request-rate list) or
-    `rho_grid` (FR-3.5, target-utilisation list that the orchestrator
-    inverts to rates via the analytic Jackson solver); never both.
+    Accepts either `rates` (legacy, direct request-rate list) or `rho_grid` (FR-3.5, target-utilisation list that the orchestrator inverts to rates via the analytic Jackson solver); never both.
 
     Args:
         ramp (Dict[str, Any]): raw `ramp` block from the method config.
@@ -276,8 +266,7 @@ class _CascadeDetector:
     def observe(self, rec: InvocationRecord) -> None:
         """*observe()* feed one invocation record into the detector.
 
-        Updates `tripped` / `trip_reason` in place. Idempotent once
-        tripped: further observations are ignored.
+        Updates `tripped` / `trip_reason` in place. Idempotent once tripped: further observations are ignored.
 
         Args:
             rec (InvocationRecord): the completed invocation.
@@ -353,10 +342,7 @@ class ClientSimulator:
     async def _send_one(self, kind: str) -> InvocationRecord:
         """*_send_one()* send one kind-tagged request; return an InvocationRecord.
 
-        FR-2.3: generates a real mock payload of the declared per-kind
-        size, attaches it to `ServiceRequest.payload`, and mirrors the
-        byte count in the `X-Request-Size-Bytes` header so downstream
-        services see the same number without re-decoding the body.
+        FR-2.3: generates a real mock payload of the declared per-kind size, attaches it to `ServiceRequest.payload`, and mirrors the byte count in the `X-Request-Size-Bytes` header so downstream services see the same number without re-decoding the body.
 
         Args:
             kind (str): request kind label; must be a key of the client's weights map.
@@ -368,13 +354,10 @@ class ClientSimulator:
         _size = _resolve_size_for_kind(self._cfg.request_sizes_by_kind,
                                        kind,
                                        default=int(self._cfg.request_size_bytes))
-        # generate a real byte payload under the client's seeded RNG so
-        # two runs at the same seed produce identical payloads
+        # generate a real byte payload under the client's seeded RNG so two runs at the same seed produce identical payloads
         _payload = _generate_payload(kind, _size, rng=self._rng)
 
-        # FR-3.7: derive request_id from the client's seeded RNG rather
-        # than an unseeded uuid4(), so two runs at the same config seed
-        # produce byte-identical request streams (payload + id).
+        # FR-3.7: derive request_id from the client's seeded RNG rather than an unseeded uuid4(), so two runs at the same config seed produce byte-identical request streams (payload + id)
         _rid = str(uuid.UUID(int=self._rng.getrandbits(128), version=4))
         _req = ServiceRequest(request_id=_rid,
                               kind=kind,
@@ -410,8 +393,7 @@ class ClientSimulator:
                              ) -> Dict[str, Any]:
         """*_probe_at_rate()* drive one probe at `rate` req/s until every kind reaches `min_samples_per_kind`.
 
-        Exits on any of: sample target met, `max_probe_window_s`
-        elapsed, or the detector tripping.
+        Exits on any of: sample target met, `max_probe_window_s` elapsed, or the detector tripping.
 
         Args:
             rate (float): deterministic target rate in req/s.
@@ -422,7 +404,10 @@ class ClientSimulator:
         """
         _target = int(self._cfg.ramp.min_samples_per_kind)
         _max_s = float(self._cfg.ramp.max_probe_window_s)
-        _interarrival = 1.0 / rate if rate > 0 else _max_s
+        if rate > 0:
+            _interarrival = 1.0 / rate
+        else:
+            _interarrival = _max_s
 
         _records: List[InvocationRecord] = []
         _in_flight: List[asyncio.Task] = []
@@ -495,8 +480,12 @@ class ClientSimulator:
         _total = len(_records)
         _infra = sum(1 for _r in _records if _r.infra_failure)
         _biz = sum(1 for _r in _records if _r.business_failure)
-        _infra_rate = _infra / _total if _total > 0 else 0.0
-        _biz_rate = _biz / _total if _total > 0 else 0.0
+        if _total > 0:
+            _infra_rate = _infra / _total
+            _biz_rate = _biz / _total
+        else:
+            _infra_rate = 0.0
+            _biz_rate = 0.0
 
         return {
             "rate": rate,
