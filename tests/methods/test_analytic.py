@@ -14,9 +14,6 @@ Each class groups tests by the contract under verification:
 
 # TODO: add a guardrail test that re-asserts the written JSON matches `run(wrt=False)` byte-for-byte after round-tripping through disk (catches accidental ordering or ensure_ascii regressions).
 """
-# native python modules
-# (none)
-
 # testing framework
 import pytest
 

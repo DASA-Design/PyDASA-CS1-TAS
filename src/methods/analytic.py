@@ -5,18 +5,13 @@ Module analytic.py
 
 Analytic method orchestrator for the CS-01 TAS case study.
 
-Loads a resolved `NetworkConfig`, solves the Jackson network in
-closed form via M/M/c/K at each node, emits node + network metrics
-as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict
-alongside.
+Loads a resolved `NetworkConfig`, solves the Jackson network in closed form via M/M/c/K at each node, emits node + network metrics as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict alongside.
 
 Public API:
     - `run(adp, prf, scn, wrt)` standard orchestrator contract.
     - `main()` CLI entry point.
 
-*IMPORTANT:* the written result blob carries the full `routing`
-matrix and `lambda_z` vector so downstream consumers can reconstruct
-node paths without re-opening the config files.
+*IMPORTANT:* the written result blob carries the full `routing` matrix and `lambda_z` vector so downstream consumers can reconstruct node paths without re-opening the config files.
 
 CLI::
 
@@ -27,14 +22,11 @@ CLI::
 # TODO: wire a real cost model (from the service catalogue) through the verdict writer so R3 carries a numeric value.
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-
-# data types
 from typing import Any, Dict, Optional
 
 # scientific stack
@@ -50,13 +42,10 @@ _RESULTS_DIR = _ROOT / "data" / "results" / "analytic"
 
 
 def _build_vars_from_nodes(nds: pd.DataFrame,
-                                cfg: NetworkConfig) -> Dict[str, dict]:
+                           cfg: NetworkConfig) -> Dict[str, dict]:
     """*_build_vars_from_nodes()* turn the solved node DataFrame into a PACS-style `variables` dict.
 
-    One entry per artifact; each carries the original config
-    variables plus updated `_setpoint` / `_data` on the output
-    variables (lambda, chi, L, Lq, W, Wq) from the solver. `chi` is
-    the effective throughput `lambda * (1 - epsilon)`.
+    One entry per artifact; each carries the original config variables plus updated `_setpoint` / `_data` on the output variables (lambda, chi, L, Lq, W, Wq) from the solver. `chi` is the effective throughput `lambda * (1 - epsilon)`.
 
     Args:
         nds (pd.DataFrame): per-node metrics frame produced by `solve_network()`.
@@ -74,13 +63,10 @@ def _build_vars_from_nodes(nds: pd.DataFrame,
         # copy the config variables so we do not mutate the input dict
         _vars = {_sym: dict(_var) for _sym, _var in _a.vars.items()}
 
-        # LaTeX subscript form of the artifact key (after the key
-        # migration this is just `_a.key` verbatim, e.g. `TAS_{1}`)
+        # LaTeX subscript form of the artifact key (after the key migration this is just `_a.key` verbatim, e.g. `TAS_{1}`)
         _sub = _a._sub()
 
-        # Calculate output-variable refresh values from the solver row.
-        # Variable names follow the post-migration convention:
-        # `L_{q, ...}` / `W_{q, ...}` (split q-subscript, valid LaTeX).
+        # calculate output-variable refresh values from the solver row. Variable names follow the post-migration convention: `L_{q, ...}` / `W_{q, ...}` (split q-subscript, valid LaTeX)
         _updates = {
             f"\\lambda_{{{_sub}}}": float(_row["lambda"]),
             f"L_{{{_sub}}}": float(_row["L"]),
@@ -174,9 +160,7 @@ def _write_results(cfg: NetworkConfig,
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
 
-    # assemble the result envelope. topology (routing + lambda_z) is
-    # carried alongside metrics so the blob is self-contained for
-    # later path reconstruction without re-reading the config file.
+    # assemble the result envelope. topology (routing + lambda_z) is carried alongside metrics so the blob is self-contained for later path reconstruction without re-reading the config file.
     _doc = {
         "profile": cfg.profile,
         "scenario": cfg.scenario,
@@ -263,9 +247,15 @@ def main() -> None:
     # per-requirement PASS / FAIL with the numeric value
     print("requirements:")
     for _k, _v in _req.items():
-        _status = "PASS" if _v["pass"] else "FAIL"
+        if _v["pass"]:
+            _status = "PASS"
+        else:
+            _status = "FAIL"
         _val = _v["value"]
-        _val_str = f"{_val:.6g}" if isinstance(_val, (int, float)) else "n/a"
+        if isinstance(_val, (int, float)):
+            _val_str = f"{_val:.6g}"
+        else:
+            _val_str = "n/a"
         print(f"  {_k}: {_status}  ({_v['metric']}={_val_str})")
 
     # written-file paths (only when wrt=True)
