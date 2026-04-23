@@ -22,6 +22,12 @@
         "drug_request": 192,
         "response_default": 128
     },
+    "sweep_grid": {
+        "mu_factor": [0.5, 1.0, 2.0],
+        "c": [1, 2],
+        "K": [10, 32],
+        "util_threshold": 0.95
+    },
     "service_registry": {
         "TAS_{1}": {"port_offset": 0, "role": "composite_client"},
         "TAS_{2}": {"port_offset": 0, "role": "composite_medical"},

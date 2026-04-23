@@ -613,7 +613,17 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.tick_params(**_TICK_STYLE)
         for _spine in _ax.spines.values():
             _spine.set_edgecolor(_TEXT_BLACK)
-        _apply_sci_format(_ax)
+        # sigma clusters tightly around 1.0 (Little's-law identity); bump
+        # precision on whichever axis carries it so adjacent ticks do not
+        # all collapse to the same "1.0e+00" string
+        _x_axes = ["x"] if _x_key != "sigma" else []
+        _y_axes = ["y"] if _y_key != "sigma" else []
+        if _x_axes or _y_axes:
+            _apply_sci_format(_ax, axes_list=_x_axes + _y_axes)
+        _sigma_axes = [_n for _n, _k in (("x", _x_key), ("y", _y_key))
+                       if _k == "sigma"]
+        if _sigma_axes:
+            _apply_sci_format(_ax, axes_list=_sigma_axes, sig=4)
         _apply_logscale(_ax, logscale)
 
         # axis + panel titles from the resolved label map
@@ -621,17 +631,17 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.set_ylabel(_lbl_map[_y_key], **_LBL_STY_2D_SINGLE)
         _ax.set_title(_panel_title, fontsize=17, pad=-10, **_LBL_STYLE)
 
-    # ONE figure-level legend parked to the RIGHT of the panel grid.
-    # `loc="center left"` anchors the legend's LEFT edge at bbox_to_anchor,
-    # so the legend extends rightward off the data area. Pairs with
-    # `subplots_adjust(right=0.82)` which shrinks the panel grid to leave
-    # the [0.82, 1.0] horizontal strip free for the legend.
+    # ONE figure-level legend parked BELOW the panel grid so the panels can
+    # use the full figure width. The wider sigma ticks (sig=4) need that
+    # extra horizontal room. Pairs with `subplots_adjust(bottom=0.10)` which
+    # reserves the [0, 0.10] vertical strip for the legend.
     if _legend_axes is not None:
         _handles, _labels = _legend_axes.get_legend_handles_labels()
-        _fig.subplots_adjust(right=0.82)
+        _fig.subplots_adjust(bottom=0.10, right=0.97)
         _fig.legend(_handles, _labels,
-                    loc="center left",
-                    bbox_to_anchor=(0.84, 0.5),
+                    loc="lower center",
+                    bbox_to_anchor=(0.5, 0.01),
+                    ncol=min(len(_labels), 8),
                     fontsize=12,
                     framealpha=0.9,
                     title=_legend_title,
@@ -1228,7 +1238,10 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
         _ax.view_init(elev=25, azim=105)
         _style_3d_panes(_ax)
         _ax.grid(True, **_GRID_STY_3D)
-        _apply_sci_format(_ax, axes_list=["x", "y", "z"])
+        _apply_sci_format(_ax, axes_list=["x", "z"])
+        # sigma clusters tightly around 1.0 (Little's-law identity); bump
+        # precision so adjacent ticks do not all collapse to "1.0e+00"
+        _apply_sci_format(_ax, axes_list=["y"], sig=4)
         for _axis_name in ("x", "y", "z"):
             _ax.tick_params(axis=_axis_name, **_TICK_STY_3D_GRID)
 
@@ -1325,8 +1338,8 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
                                           _last_row_idx, _n_last_row)
 
         _gs_node = _gs_main[_nd_row, _nd_col].subgridspec(2, 2,
-                                                          hspace=0.45,
-                                                          wspace=0.45)
+                                                          hspace=0.55,
+                                                          wspace=0.60)
         _node_block = coeff_data[_node]
 
         # populate the 4 yoly panels for this node
@@ -1355,7 +1368,17 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
             _ax.tick_params(**_TICK_STYLE)
             for _spine in _ax.spines.values():
                 _spine.set_edgecolor(_TEXT_BLACK)
-            _apply_sci_format(_ax)
+            # sigma clusters tightly around 1.0 (Little's-law identity); bump
+            # precision on whichever axis carries it so adjacent ticks do not
+            # all collapse to the same "1.0e+00" string
+            _x_axes = ["x"] if _x_key != "sigma" else []
+            _y_axes = ["y"] if _y_key != "sigma" else []
+            if _x_axes or _y_axes:
+                _apply_sci_format(_ax, axes_list=_x_axes + _y_axes)
+            _sigma_axes = [_n for _n, _k in (("x", _x_key), ("y", _y_key))
+                           if _k == "sigma"]
+            if _sigma_axes:
+                _apply_sci_format(_ax, axes_list=_sigma_axes, sig=4)
             _apply_logscale(_ax, logscale)
 
             # smaller axis-label font for the grid context
