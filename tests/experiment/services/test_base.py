@@ -19,6 +19,7 @@ import pytest
 import httpx
 
 # modules under test
+from src.experiment.registry import ServiceRegistry
 from src.experiment.services import (LOG_COLUMNS,
                                      HttpForward,
                                      ServiceContext,
@@ -173,7 +174,6 @@ class TestHttpForward:
 
     def _registry(self):
         """Minimal registry with one third-party + one TAS member."""
-        from src.experiment.registry import ServiceRegistry
         return ServiceRegistry.from_config({
             "host": "127.0.0.1",
             "base_port": 9000,

@@ -11,18 +11,14 @@ Two sweeps, answering different questions:
     - `sweep_architecture(cfg, sweep_grid, tag="TAS")` is a JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from  `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lambdas(P, f * lambda_z)` redistributes external  arrivals to per-node rates before the M/M/c/K solve; the first node to saturate stops that combo's ramp, since the whole network's instability is dominated by its busiest node.
     - `sweep_artifact(key, vars_block, sweep_grid, ...)` is the underlying single-artifact helper used by `sweep_artifacts`.
 
-All three return dicts shape-compatible with the dc_charts plotters.
-Coefficients are derived via closed-form directly from the M/M/c/K
-solver (no PyDASA round-trip):
+All three return dicts shape-compatible with the dc_charts plotters. Coefficients are derived via closed-form directly from the M/M/c/K solver (no PyDASA round-trip):
 
     - theta = L / K              (Occupancy)
     - sigma = lambda * W / L     (Stall, ~1 in steady state)
     - eta   = chi * K / (mu * c) (Effective-yield)
     - phi   = M_act / M_buf      (Memory-use, collapses to theta under L * delta / K * delta)
 
-*IMPORTANT:* the sweep is deterministic (not Monte Carlo). For
-stochastic sampling go through `src.methods.dimensional` plus the
-dimensional notebook.
+*IMPORTANT:* the sweep is deterministic (not Monte Carlo). For stochastic sampling go through `src.methods.dimensional` plus the dimensional notebook.
 """
 # native python modules
 from __future__ import annotations
@@ -81,8 +77,7 @@ def sweep_artifact(artifact_key: str,
     4. Solve M/M/c/K at every step; derive `theta`, `sigma`, `eta`, `phi` directly.
     5. Drop steps where the solver's reported `rho` exceeds the cap (numerical safety).
 
-    The result is one TRACE per `(mu, c, K)` combo (not a single dot), so the
-    yoly cloud is a set of curves through coefficient space.
+    The result is one TRACE per `(mu, c, K)` combo (not a single dot), so the yoly cloud is a set of curves through coefficient space.
 
     Args:
         artifact_key (str): artifact identifier in LaTeX subscript form (e.g. `"TAS_{1}"`).
@@ -189,9 +184,7 @@ def sweep_artifacts(cfg: NetworkConfig,
                     ) -> Dict[str, Dict[str, np.ndarray]]:
     """*sweep_artifacts()* runs `sweep_artifact` INDEPENDENTLY for every node of a resolved `NetworkConfig` and returns the nested cloud dict consumed by `src.view.dc_charts.plot_yoly_arts_*`.
 
-    Each artifact is swept as if it were an isolated M/M/c/K queue; routing
-    is NOT propagated. For the architecture-level view (where changing one
-    node's design affects everyone else through routing) use `sweep_architecture`.
+    Each artifact is swept as if it were an isolated M/M/c/K queue; routing is NOT propagated. For the architecture-level view (where changing one node's design affects everyone else through routing) use `sweep_architecture`.
 
     Args:
         cfg (NetworkConfig): resolved network configuration for one (profile, scenario) pair.
@@ -281,9 +274,10 @@ def sweep_architecture(cfg: NetworkConfig,
         Dict[str, Dict[str, np.ndarray]]: nested `{artifact_key: per_artifact_sweep}` with the same symbol keys as `sweep_artifact`. Arrays across artifacts are aligned (row i is the same whole-network sweep point) so `aggregate_sweep_to_arch` can collapse them into architecture-level arrays.
     """
     # resolve thresholds + grid knobs
-    _util = (util_threshold
-             if util_threshold is not None
-             else float(sweep_grid.get("util_threshold", _UTIL_THLD_DEFAULT)))
+    if util_threshold is not None:
+        _util = util_threshold
+    else:
+        _util = float(sweep_grid.get("util_threshold", _UTIL_THLD_DEFAULT))
     _mu_factors = sweep_grid.get("mu_factor", [1.0])
     _c_vals = sweep_grid.get("c", [1])
     _K_vals = sweep_grid.get("K", [10])

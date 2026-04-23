@@ -3,13 +3,9 @@
 Module services/base.py
 =======================
 
-Shared building blocks every service reads. No queueing logic lives
-here on purpose. Queue behaviour emerges from FastAPI and asyncio
-running requests concurrently, so we do not encode it with classes or
-admission counters.
+Shared building blocks every service reads. No queueing logic lives here on purpose. Queue behaviour emerges from FastAPI and asyncio running requests concurrently, so we do not encode it with classes or admission counters.
 
 Exports:
-
     - `ServiceSpec`: frozen per-service knobs (mu, eps, c, K, seed, mem_per_buffer).
     - `derive_seed(root, name)`: deterministic per-component seed derivation.
     - `ServiceRequest`, `ServiceResponse`: pydantic wire schema.
@@ -21,15 +17,20 @@ Exports:
 # native python modules
 from __future__ import annotations
 
+import csv
 import random
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 
 # web stack
 import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from src.experiment.registry import ServiceRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -40,11 +41,7 @@ from pydantic import BaseModel, Field
 class ServiceSpec:
     """**ServiceSpec** immutable per-service knobs.
 
-    Declares the inputs that shape emergent queue behaviour: service
-    rate, failure rate, concurrency ceiling, capacity, seed, memory
-    budget. Downstream models (analytic, stochastic, dimensional) read
-    these values together with measured timestamps to quantify what
-    actually emerged at runtime.
+    Declares the inputs that shape emergent queue behaviour: service rate, failure rate, concurrency ceiling, capacity, seed, memory budget. Downstream models (analytic, stochastic, dimensional) read these values together with measured timestamps to quantify what actually emerged at runtime.
     """
 
     # LaTeX-subscript key (e.g. `TAS_{1}`)
@@ -86,11 +83,7 @@ class ServiceSpec:
 def derive_seed(root_seed: int, service_name: str) -> int:
     """*derive_seed()* stable 64-bit per-service seed from `(root, name)`.
 
-    Folds the UTF-8 bytes of the service name through FNV-1a and XORs
-    in the root seed. Stable across Python processes, distinct per
-    service, distinct per root. One JSON knob
-    (`experiment.json::seed`) then controls every stochastic draw in
-    the apparatus.
+    Folds the UTF-8 bytes of the service name through FNV-1a and XORs in the root seed. Stable across Python processes, distinct per service, distinct per root. One JSON knob (`experiment.json::seed`) then controls every stochastic draw in the apparatus.
 
     Args:
         root_seed (int): single seed from `experiment.json::seed`.
@@ -161,7 +154,7 @@ LOG_COLUMNS = (
 
 
 # ---------------------------------------------------------------------------
-# Minimal per-service state — just what the annotation needs to write
+# Minimal per-service state; just what the annotation needs to write
 # one CSV row per invocation. No counters, no semaphores, no in_system.
 
 
@@ -169,16 +162,9 @@ LOG_COLUMNS = (
 class ServiceContext:
     """**ServiceContext** mutable per-service state.
 
-    Carries the four things that downstream code needs: the spec (so
-    rows carry `service_name`), a log list (where `@logger` appends
-    rows), a seeded RNG (so service-time and Bernoulli draws stay
-    reproducible under the single config seed), and the bound request
-    handler (set by `mount_atomic_service` after the handler is built,
-    so composite callers can dispatch siblings in-process).
+    Carries the four things that downstream code needs: the spec (so rows carry `service_name`), a log list (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), and the bound request handler (set by `mount_atomic_service` after the handler is built, so composite callers can dispatch siblings in-process).
 
-    Holds no admission counter, no semaphore, and no `in_system`.
-    Concurrency is whatever uvicorn and asyncio produce naturally
-    under the declared ceiling `spec.c`.
+    Holds no admission counter, no semaphore, and no `in_system`. Concurrency is whatever uvicorn and asyncio produce naturally under the declared ceiling `spec.c`.
     """
 
     # immutable per-service knobs
@@ -194,17 +180,24 @@ class ServiceContext:
     handler: Optional[Callable[..., Any]] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.rng = random.Random(self.spec.seed) if self.spec.seed else random.Random()
+        if self.spec.seed:
+            self.rng = random.Random(self.spec.seed)
+        else:
+            self.rng = random.Random()
 
     def draw_svc_time(self) -> float:
         """*draw_svc_time()* one exponential draw at rate `mu` from the seeded RNG; returns 0 when `mu == 0`."""
-        return self.rng.expovariate(self.spec.mu) if self.spec.mu > 0 else 0.0
+        if self.spec.mu <= 0:
+            return 0.0
+        return self.rng.expovariate(self.spec.mu)
 
     def draw_eps(self) -> bool:
         """*draw_eps()* one Bernoulli draw at rate `eps` from the seeded RNG; True means business failure fired."""
         return self.rng.random() < self.spec.epsilon
 
-    def flush_log(self, csv_path, columns=LOG_COLUMNS) -> int:
+    def flush_log(self,
+                  csv_path: Path,
+                  columns: tuple[str, ...] = LOG_COLUMNS) -> int:
         """*flush_log()* append every buffered row to `csv_path` and clear the buffer.
 
         Args:
@@ -214,13 +207,11 @@ class ServiceContext:
         Returns:
             int: number of rows written.
         """
-        import csv as _csv
-        from pathlib import Path as _Path
-        _p = _Path(csv_path)
+        _p = Path(csv_path)
         _p.parent.mkdir(parents=True, exist_ok=True)
         _new = not _p.exists()
         with _p.open("a", newline="", encoding="utf-8") as _fh:
-            _w = _csv.DictWriter(_fh, fieldnames=columns)
+            _w = csv.DictWriter(_fh, fieldnames=columns)
             if _new:
                 _w.writeheader()
             for _row in self.log:
@@ -240,8 +231,7 @@ def make_base_app(title: str,
                   ) -> FastAPI:
     """*make_base_app()* bare FastAPI app exposing `/healthz` and no other route.
 
-    Practitioners attach invoke routes via `mount_atomic_service` or
-    `mount_composite_service`, and attach service state via `app.state`.
+    Practitioners attach invoke routes via `mount_atomic_service` or `mount_composite_service`, and attach service state via `app.state`.
 
     Args:
         title (str): FastAPI app title.
@@ -254,7 +244,9 @@ def make_base_app(title: str,
 
     @_app.get("/healthz")
     async def _healthz() -> Dict[str, Any]:
-        return healthz_fn() if healthz_fn is not None else {"ok": True}
+        if healthz_fn is None:
+            return {"ok": True}
+        return healthz_fn()
 
     return _app
 
@@ -268,12 +260,12 @@ ExternalForwardFn = Callable[[str, ServiceRequest], Awaitable[ServiceResponse]]
 class HttpForward:
     """**HttpForward** async callback `(target, req) -> ServiceResponse` over HTTP.
 
-    Closes over a shared `httpx.AsyncClient` and a `ServiceRegistry`.
-    The client is routed by port to the in-process ASGI mesh by
-    default; the launcher can swap the transport for real TCP.
+    Closes over a shared `httpx.AsyncClient` and a `ServiceRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
     """
 
-    def __init__(self, client: httpx.AsyncClient, registry) -> None:
+    def __init__(self,
+                 client: httpx.AsyncClient,
+                 registry: "ServiceRegistry") -> None:
         self._client = client
         self._registry = registry
 
