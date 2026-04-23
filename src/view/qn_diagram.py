@@ -339,23 +339,16 @@ def _draw_topology_axis(ax: plt.Axes,
                                  connectionstyle="arc3,rad=0.2",
                                  ax=ax)
 
-    # node labels on top. Format matches the reference diagram:
-    #   "Name (c)\n<rho>"
-    # where Name has any underscore swapped for a space (MAS_3 -> MAS 3)
-    # and the trailing (c) shows the server count when the frame has a
-    # `c` column. So the diagram stands on its own without the per-node
-    # table.
+    # Two-line node label, both lines rendered bold via `\mathbf{...}` inside `$...$` so subscripts render as proper math:
+    #   line 1: the artifact key (e.g. $\mathbf{TAS_{1}}$)
+    #   line 2: $\mathbf{L = 3.82}$ — avg number in system (L from Little's law).
+    # Colouring still tracks `rho` (via `_node_colors` above); the label reports L so the reader sees queue occupancy in absolute units.
     _labels = {}
     for _i in range(_n):
-        # Two-line node label, everything rendered bold via
-        # `\mathbf{...}` inside `$...$` so the subscript shows as a
-        # proper math subscript instead of literal `{1}`:
-        #   line 1: the artifact key (e.g. $\mathbf{TAS_{1}}$)
-        #   line 2: $\mathbf{\rho = 0.38}$
         _name = nd_names[_i]
         _parts = [rf"$\mathbf{{{_name}}}$"]
-        if "rho" in nds.columns:
-            _parts.append(rf"$\mathbf{{\rho = {nds['rho'].iloc[_i]:.2f}}}$")
+        if "L" in nds.columns:
+            _parts.append(rf"$\mathbf{{L = {nds['L'].iloc[_i]:.2f}}}$")
         _labels[_i] = "\n".join(_parts)
     nx.draw_networkx_labels(graph, pos,
                             labels=_labels,
@@ -620,14 +613,24 @@ _DIM_COEF_SYMS = {
 }
 
 # Default glossary for the dimensional topology plot. Callers can pass their
-# own list via `plot_dim_topology(..., glossary=...)`.
+# own list via `plot_dim_topology(..., glossary=...)`. Fractions use
+# `\frac{}{}` so the legend stays tight horizontally.
 DIM_GLOSSARY_DEFAULT = [
     "LEGEND",
-    r"$\theta = L/K$: Occupancy (queue fill ratio)",
-    r"$\sigma = W\lambda/L$: Stall (Little's-law residual; blocking)",
-    r"$\eta = \chi K/(\mu c)$: Effective-yield (utilisation headroom)",
-    r"$\phi = M_{act}/M_{buf}$: Memory-usage (buffer fill)",
+    r"$\theta = \frac{L}{K}$: Occupancy (queue fill ratio)",
+    r"$\sigma = \frac{W\lambda}{L}$: Stall (Little's-law residual; blocking)",
+    r"$\eta = \frac{\chi \cdot K}{\mu \cdot c}$: Effective-yield (utilisation headroom)",
+    r"$\phi = \frac{M_{act}}{M_{buf}}$: Memory-usage (buffer fill)",
 ]
+
+# Short human-readable name for each coefficient; used in the NETWORK
+# summary overlay line format `$\bar{sym}$ (Name): value`.
+_DIM_COEF_NAMES = {
+    "theta": "Occupancy",
+    "sigma": "Stall",
+    "eta": "Effective-yield",
+    "phi": "Memory-usage",
+}
 
 
 def _draw_dim_topology_axis(ax: plt.Axes,
@@ -708,14 +711,14 @@ def _draw_dim_topology_axis(ax: plt.Axes,
                                  connectionstyle="arc3,rad=0.2",
                                  ax=ax)
 
-    # node labels: artifact key on line 1, theta on line 2. Full per-coefficient breakdown lives in the table below; the graph stays readable.
+    # node labels: artifact key on line 1, theta on line 2 in scientific notation (2 digits after the decimal point). Full per-coefficient breakdown lives in the table below; the graph stays readable.
     _labels: dict = {}
     for _i in range(_n):
         _name = nd_names[_i]
         _parts = [rf"$\mathbf{{{_name}}}$"]
         if "theta" in nds.columns:
             _val = float(nds["theta"].iloc[_i])
-            _parts.append(rf"$\mathbf{{\theta = {_val:.2f}}}$")
+            _parts.append(rf"$\mathbf{{\theta = {_val:.2e}}}$")
         _labels[_i] = "\n".join(_parts)
     nx.draw_networkx_labels(graph, pos,
                             labels=_labels,
@@ -751,11 +754,12 @@ def _add_dim_node_table(ax: plt.Axes,
         _row = nds.iloc[_i]
         _cells = [f"${nd_names[_i]}$"]
         for _c in _present_cols:
-            _cells.append(f"{float(_row[_c]):.4f}")
+            # Scientific notation with 2 digits after the decimal point. Dimensional coefficients span multiple orders of magnitude across scenarios (`phi` ~ 1e-3 baseline vs ~ 1e-1 under heavy load); `.2e` keeps every cell at uniform width and preserves 3 significant figures.
+            _cells.append(f"{float(_row[_c]):.2e}")
         _rows.append(_cells)
 
-    # Component column narrower than a coefficient column; artifact keys are short (`TAS_{1}`, `MAS_{2}`, etc.) so 0.14 covers them while leaving more room for coefficient values.
-    _col_widths = [0.14] + [0.18] * len(_present_cols)
+    # Table is compact: Component column narrower than coefficient columns (keys are short), and coefficient columns themselves trimmed so the whole table doesn't overflow the figure. Unused width becomes left/right margin.
+    _col_widths = [0.12] + [0.12] * len(_present_cols)
     _table = ax.table(cellText=_rows, loc="center", cellLoc="center",
                       colWidths=_col_widths)
     _table.auto_set_font_size(False)
@@ -779,13 +783,15 @@ def _add_dim_network_summary(ax: plt.Axes,
         nds (pd.DataFrame): per-node coefficients frame. Every present coefficient gets an averaged line; absent columns are skipped.
         corner (str): anchor corner; see `_add_param_glossary()`.
     """
-    # Header line matches the queueing summary's "NETWORK" banner for visual parity with the QN view.
+    # Header line matches the queueing summary's "NETWORK" banner for visual parity with the QN view. Each coefficient line reads `$\bar{sym}$ (Name): value` so the reader immediately sees what the averaged symbol means.
     _lines = [r"$\mathbf{NETWORK}$"]
     for _c in _DIM_COEF_COLS:
         if _c in nds.columns:
             _sym = _DIM_COEF_SYMS[_c]
+            _name = _DIM_COEF_NAMES.get(_c, _c)
             _mean = float(nds[_c].mean())
-            _lines.append(rf"$\mathbf{{\overline{{{_sym}}}}}$: {_mean:.4f}")
+            _lines.append(
+                rf"$\mathbf{{\overline{{{_sym}}}}}$ ({_name}): {_mean:.2e}")
     _text = "\n".join(_lines)
     _y = 0.98 if "upper" in corner else 0.02
     _x = 0.98 if "right" in corner else 0.02
@@ -885,7 +891,8 @@ def plot_dim_topology(rout: np.ndarray,
                         fontsize=24, fontweight="bold", color=_TEXT_BLACK,
                         va="center", ha="center", pad=20)
 
-    plt.figtext(0.50, 0.27, "Node Coefficient Table",
+    # "Node Coefficient Table" heading sits below the graph axis (at 0.24 figure-y rather than 0.27) so it does not overlap the legend overlay anchored to the graph axis's lower-right corner. The legend lives in axes coords (0 to 1 inside the graph axis); the figtext lives in figure coords.
+    plt.figtext(0.50, 0.24, "Node Coefficient Table",
                 fontsize=18, fontweight="bold",
                 va="center", ha="center", color=_TEXT_BLACK)
 
