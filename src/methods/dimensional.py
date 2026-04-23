@@ -32,20 +32,23 @@ from pathlib import Path
 # data types
 from typing import Any, Dict, Optional
 
+# pydasa library
+from pydasa.dimensional.vaschy import Schema
+
 # local modules
 from src.dimensional import (analyse_symbolic,
                              build_engine,
                              build_schema,
                              derive_coefs)
-from src.io import NetworkConfig, load_method_config, load_profile
+from src.io import ArtifactSpec, NetworkConfig, load_method_config, load_profile
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "dimensional"
 
 
-def _analyse_artifact(artifact: Any,
-                      schema: Any,
+def _analyse_artifact(artifact: ArtifactSpec,
+                      schema: Schema,
                       coef_specs: list[dict[str, Any]],
                       sens_cfg: dict[str, Any]) -> Dict[str, Any]:
     """*_analyse_artifact()* run the full DA workflow on one artifact.

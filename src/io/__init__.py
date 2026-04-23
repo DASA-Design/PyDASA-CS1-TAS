@@ -2,6 +2,7 @@
 """Profile / scenario / method / reference config loaders."""
 
 from src.io.config import (
+    ArtifactSpec,
     NetworkConfig,
     load_profile,
     load_method_config,
@@ -9,6 +10,7 @@ from src.io.config import (
 )
 
 __all__ = [
+    "ArtifactSpec",
     "NetworkConfig",
     "load_method_config",
     "load_profile",
