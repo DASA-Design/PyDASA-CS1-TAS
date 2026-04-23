@@ -5,12 +5,7 @@ Module dimensional.py
 
 Dimensional method orchestrator for the CS-01 TAS case study.
 
-Walks the 13 (or 16) artifacts in a resolved `NetworkConfig`, builds
-a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via
-Buckingham's theorem, applies the operationally meaningful
-coefficient specs (theta, sigma, eta, phi) from
-`data/config/method/dimensional.json`, runs a symbolic sensitivity
-pass at the variable means, and emits a PyDASA-style JSON.
+Walks the 13 (or 16) artifacts in a resolved `NetworkConfig`, builds a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via Buckingham's theorem, applies the operationally meaningful coefficient specs (theta, sigma, eta, phi) from `data/config/method/dimensional.json`, runs a symbolic sensitivity pass at the variable means, and emits a PyDASA-style JSON.
 
 Public API:
     - `run(adp, prf, scn, wrt)` resolves the profile + method config, loops artifacts, and returns per-artifact `pi_groups`, `coefficients`, `sensitivity` blocks.
@@ -19,10 +14,7 @@ Private helpers:
     - `_analyse_artifact(artifact, schema, ...)` full DA workflow on one artifact.
     - `_write_results(cfg, method_cfg, results)` serialises the envelope to `data/results/dimensional/<scenario>/<profile>.json`.
 
-*IMPORTANT:* the dimensional method is static (no
-`requirements.json`). It characterises the design space; R1 / R2 /
-R3 verdicts come from the analytic / stochastic methods and are
-aggregated by `comparison`.
+*IMPORTANT:* the dimensional method is static (no `requirements.json`). It characterises the design space; R1 / R2 / R3 verdicts come from the analytic / stochastic methods and are aggregated by `comparison`.
 
 CLI::
 
@@ -54,18 +46,16 @@ _RESULTS_DIR = _ROOT / "data" / "results" / "dimensional"
 
 def _analyse_artifact(artifact: Any,
                       schema: Any,
-                      coeff_specs: list[dict[str, Any]],
+                      coef_specs: list[dict[str, Any]],
                       sens_cfg: dict[str, Any]) -> Dict[str, Any]:
     """*_analyse_artifact()* run the full DA workflow on one artifact.
 
-    Builds an engine from the artifact's Variable dict, derives
-    Pi-groups, applies the named coefficient specs, evaluates
-    setpoints, and runs one symbolic sensitivity pass.
+    Builds an engine from the artifact's Variable dict, derives Pi-groups, applies the named coefficient specs, evaluates setpoints, and runs one symbolic sensitivity pass.
 
     Args:
         artifact (ArtifactSpec): one resolved artifact from the `NetworkConfig`.
         schema (Schema): framework schema built once for the full run.
-        coeff_specs (list[dict[str, Any]]): coefficient specs from the method config.
+        coef_specs (list[dict[str, Any]]): coefficient specs from the method config.
         sens_cfg (dict[str, Any]): sensitivity sub-config keyed by `val_type` and `cat`.
 
     Returns:
@@ -81,7 +71,7 @@ def _analyse_artifact(artifact: Any,
         _eng.coefficients[_k].calculate_setpoint()
 
     # derive the named coefficients from the spec list
-    _der = derive_coefs(_eng, coeff_specs, artifact_key=artifact.key)
+    _der = derive_coefs(_eng, coef_specs, artifact_key=artifact.key)
     for _c in _der.values():
         _c.calculate_setpoint()
 
@@ -140,8 +130,10 @@ def run(adp: Optional[str] = None,
     """
     # resolve profile + method config (disk or injected override)
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
-    _mcfg = (method_cfg if method_cfg is not None
-             else load_method_config("dimensional"))
+    if method_cfg is not None:
+        _mcfg = method_cfg
+    else:
+        _mcfg = load_method_config("dimensional")
 
     # build the framework schema once; reused across all artifacts
     _sch = build_schema(_mcfg["fdus"])
@@ -183,8 +175,7 @@ def _write_results(cfg: NetworkConfig,
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
 
-    # envelope carries topology so the blob is self-contained for
-    # later cross-artifact reconstruction without re-reading configs
+    # envelope carries topology so the blob is self-contained for later cross-artifact reconstruction without re-reading configs
     _doc = {
         "profile": cfg.profile,
         "scenario": cfg.scenario,
