@@ -3,8 +3,7 @@
 Module simulation.py
 ====================
 
-SimPy DES engine for the open Jackson queueing network used by the
-CS-01 TAS case study. Two collaborating layers:
+SimPy DES engine for the open Jackson queueing network used by the CS-01 TAS case study. Two collaborating layers:
 
     - **QueueNode** per-node SimPy `Resource` with finite capacity K and c parallel servers, plus per-job timing collection (service time, queue wait, total system time) and event-driven L / Lq tracking for time-weighted averages.
     - **simulate_network()** top-level driver. Spawns a `QueueNode` per slot, fires Poisson arrivals at the externally-driven nodes, runs each replication for `horizon` seconds with a `warmup` cut-off, repeats `reps` times, and returns one summary DataFrame with mean and std per node across replications.
@@ -16,20 +15,14 @@ Public API:
     - `simulate_network(mu, lambda_zero, c, K, P, ...)` multi-rep driver.
     - `solve_network(cfg, method_cfg)` NetworkConfig adapter mirroring `src.analytic.jackson.solve_network`.
 
-*IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation
-counts. The method-config JSON declares the latter; the orchestrator
-in `src.methods.stochastic` converts via
-`seconds = invocations / sum(lambda_z)` before calling here.
+*IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation counts. The method-config JSON declares the latter; the orchestrator in `src.methods.stochastic` converts via `seconds = invocations / sum(lambda_z)` before calling here.
 
 # TODO: replace the per-job blocked-after-warmup approximation with a state-conditioned counter (event-driven) once a regression test exists for the M/M/1/K Erlang-B formula.
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
 
 import random
-
-# data types
 from typing import Any, Dict, List, Optional, Tuple
 
 # scientific stack
@@ -73,7 +66,7 @@ class QueueNode:
                  K: Optional[int],
                  P: np.ndarray,
                  results: List[List[float]],
-                 horizon: float):
+                 horizon: float) -> None:
         """*__init__()* bind env plus capacity knobs and initialise the bookkeeping buffers.
 
         Args:
@@ -101,8 +94,7 @@ class QueueNode:
         # blocking counter for the M/M/c/K boundary
         self.blocked_jobs = 0
 
-        # per-job timing samples WITH collection timestamps so the
-        # warm-up cut-off can be applied after the run
+        # per-job timing samples WITH collection timestamps so the warm-up cut-off can be applied after the run
         self.coll_service_times: List[Tuple[float, float]] = []
         self.coll_queue_times: List[Tuple[float, float]] = []
         self.coll_system_times: List[Tuple[float, float]] = []
@@ -112,8 +104,7 @@ class QueueNode:
         self.queue_times: List[float] = []
         self.system_times: List[float] = []
 
-        # event-driven (length, time-delta) pairs for time-weighted
-        # L / Lq computation; updated on every arrival / departure
+        # event-driven (length, time-delta) pairs for time-weighted L / Lq computation; updated on every arrival / departure
         self.queue_len_data: List[Tuple[int, float]] = []
         self.system_len_data: List[Tuple[int, float]] = []
         self.last_event_time = 0.0
@@ -213,9 +204,7 @@ def job(env: simpy.Environment,
         results: List[List[float]]):
     """*job()* walk one job through the network.
 
-    Arrive at `node_id`, queue, get served, then make a routing
-    decision based on `P[current]` (or exit when no row weight pulls
-    the job onward).
+    Arrive at `node_id`, queue, get served, then make a routing decision based on `P[current]` (or exit when no row weight pulls the job onward).
 
     Args:
         env (simpy.Environment): simulation environment.
@@ -268,8 +257,7 @@ def job(env: simpy.Environment,
             _node.in_service -= 1
             _node.record_state_change(env)
 
-        # routing decision: exit with prob (1 - sum(P[current])),
-        # otherwise pick a successor weighted by the row probabilities
+        # routing decision: exit with prob (1 - sum(P[current])), otherwise pick a successor weighted by the row probabilities
         _exit_prob = 1.0 - float(np.sum(P[_current]))
         if random.random() < _exit_prob:
             break
@@ -416,7 +404,10 @@ def _summarise_replication(nodes: List[QueueNode],
         List[dict]: one row per node with raw metrics.
     """
     _coll_duration = horizon - warmup
-    _block_ratio = _coll_duration / horizon if horizon > 0 else 0.0
+    if horizon > 0:
+        _block_ratio = _coll_duration / horizon
+    else:
+        _block_ratio = 0.0
 
     _rows: List[dict] = []
     for _i, _node in enumerate(nodes):
@@ -430,8 +421,7 @@ def _summarise_replication(nodes: List[QueueNode],
         _system_times = [_t for _t, _ts in _node.coll_system_times if _ts >= warmup]
         _jobs_served = len(_system_times)
 
-        # blocking: assume rate is roughly constant across the run,
-        # so post-warm-up blocked count ~ total * (post / total) ratio
+        # blocking: assume rate is roughly constant across the run, so post-warm-up blocked count ~ total * (post / total) ratio
         _blocked = int(_node.blocked_jobs * _block_ratio)
         _arrivals = _jobs_served + _blocked
 
@@ -440,18 +430,39 @@ def _summarise_replication(nodes: List[QueueNode],
         _Lq = _time_weighted_mean(_q_data, _coll_duration)
 
         # per-job W and Wq
-        _W = float(np.mean(_system_times)) if _system_times else 0.0
-        _Wq = float(np.mean(_queue_times)) if _queue_times else 0.0
+        if _system_times:
+            _W = float(np.mean(_system_times))
+        else:
+            _W = 0.0
+        if _queue_times:
+            _Wq = float(np.mean(_queue_times))
+        else:
+            _Wq = 0.0
 
         # arrival rate and effective service rate (per-server)
-        _lambda = _jobs_served / _coll_duration if _coll_duration > 0 else 0.0
-        _avg_service = (float(np.mean(_service_times))
-                        if _service_times else (1.0 / mu[_i]))
-        _mu_eff = (1.0 / _avg_service) if _avg_service > 0 else mu[_i]
-        _rho = (min(1.0, _lambda / (_node.c * _mu_eff))
-                if _mu_eff > 0 else 0.0)
+        if _coll_duration > 0:
+            _lambda = _jobs_served / _coll_duration
+        else:
+            _lambda = 0.0
+        if _service_times:
+            _avg_service = float(np.mean(_service_times))
+        else:
+            _avg_service = 1.0 / mu[_i]
+        if _avg_service > 0:
+            _mu_eff = 1.0 / _avg_service
+        else:
+            _mu_eff = mu[_i]
+        if _mu_eff > 0:
+            _rho = min(1.0, _lambda / (_node.c * _mu_eff))
+        else:
+            _rho = 0.0
 
         _model = _model_string(_node.c, _node.K)
+
+        if _arrivals > 0:
+            _blocking_prob = _blocked / _arrivals
+        else:
+            _blocking_prob = 0.0
 
         _rows.append({
             "replication": rep_idx,
@@ -468,7 +479,7 @@ def _summarise_replication(nodes: List[QueueNode],
             "Lq_littles": _lambda * _Wq,
             "Jobs_Served": _jobs_served,
             "Jobs_Blocked": _blocked,
-            "Blocking_Prob": (_blocked / _arrivals) if _arrivals > 0 else 0.0,
+            "Blocking_Prob": _blocking_prob,
         })
 
     return _rows
@@ -503,8 +514,12 @@ def _time_weighted_mean(data: List[Tuple[int, float]],
 def _model_string(c: int, K: Optional[int]) -> str:
     """*_model_string()* build the queue model label, e.g. `M/M/1`, `M/M/2/10`, matching the analytic notation."""
     if c == 1:
-        return "M/M/1" if K is None else f"M/M/1/{K}"
-    return f"M/M/{c}" if K is None else f"M/M/{c}/{K}"
+        if K is None:
+            return "M/M/1"
+        return f"M/M/1/{K}"
+    if K is None:
+        return f"M/M/{c}"
+    return f"M/M/{c}/{K}"
 
 
 # ---------------------------------------------------------------------------
@@ -512,8 +527,7 @@ def _model_string(c: int, K: Optional[int]) -> str:
 # ---------------------------------------------------------------------------
 
 
-# stochastic metric columns that get a `_mean` + `_std` pair out of
-# `simulate_network`'s groupby-agg summary
+# stochastic metric columns that get a `_mean` + `_std` pair out of `simulate_network`'s groupby-agg summary
 _STAT_COLS = ("lambda", "mu", "rho", "L", "Lq", "W", "Wq")
 
 
@@ -537,14 +551,16 @@ def solve_network(cfg: NetworkConfig,
     # unpack the NetworkConfig into per-node arrays the engine expects
     _mu = [float(_a.mu) for _a in cfg.artifacts]
     _c = [int(_a.c) for _a in cfg.artifacts]
-    _K = [int(_a.K) if _a.K is not None else None for _a in cfg.artifacts]
+    _K: List[Optional[int]] = []
+    for _a in cfg.artifacts:
+        if _a.K is not None:
+            _K.append(int(_a.K))
+        else:
+            _K.append(None)
     _lambda_z = cfg.build_lam_z_vec().tolist()
     _P = cfg.routing
 
-    # convert invocation counts into SimPy seconds. With Poisson
-    # sources totalling sum(lambda_z) jobs/s, reaching N invocations
-    # takes roughly N / sum(lambda_z) seconds in expectation. Fall
-    # back to 1.0 for an all-zero lambda_z vector.
+    # convert invocation counts into SimPy seconds. With Poisson sources totalling sum(lambda_z) jobs/s, reaching N invocations takes roughly N / sum(lambda_z) seconds in expectation. Fall back to 1.0 for an all-zero lambda_z vector.
     _total_rate = float(sum(_lambda_z))
     if _total_rate <= 0:
         _total_rate = 1.0
@@ -582,13 +598,17 @@ def _reshape_summary(summary: pd.DataFrame,
     _rows = []
     for _i, _a in enumerate(cfg.artifacts):
         _s = summary.loc[summary["node"] == _i].iloc[0]
+        if _a.K is not None:
+            _k_val = int(_a.K)
+        else:
+            _k_val = None
         _row: Dict[str, Any] = {
             "node": _i,
             "key": _a.key,
             "name": _a.name,
             "type": _a.type_,
             "c": int(_a.c),
-            "K": int(_a.K) if _a.K is not None else None,
+            "K": _k_val,
         }
         # `<metric>` (mean across reps) + `<metric>_std` for CIs
         for _m in _STAT_COLS:
@@ -596,8 +616,7 @@ def _reshape_summary(summary: pd.DataFrame,
             _row[f"{_m}_std"] = float(_s[f"{_m}_std"])
         _rows.append(_row)
 
-    # canonical column order so downstream plotters see the same
-    # shape as the analytic method's output
+    # canonical column order so downstream plotters see the same shape as the analytic method's output
     _cols = [
         "node", "key", "name", "type",
         "lambda", "mu", "c", "K",

@@ -14,9 +14,6 @@ Each class groups tests by the contract under verification:
 
 # TODO: add a 2-node feed-forward regression once the orchestrator's end-to-end test (`tests/methods/test_stochastic.py`) is wired up; the engine-level test should stay focused on single-node invariants to keep the runtime tight.
 """
-# native python modules
-# (none)
-
 # testing framework
 import numpy as np
 import pytest
