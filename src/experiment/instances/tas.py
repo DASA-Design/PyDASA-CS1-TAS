@@ -3,24 +3,13 @@
 Module instances/tas.py
 =======================
 
-CS-01 TAS target-system instance. One parameterised function,
-`build_tas`, composes six atomic handlers inside a single FastAPI
-app via `services.composite.mount_composite_service`.
+CS-01 TAS target-system instance. One parameterised function, `build_tas`, composes six atomic handlers inside a single FastAPI app via `services.composite.mount_composite_service`.
 
-The entry member (`TAS_{1}` by default) runs kind-based dispatch
-against the client-supplied `kind`; every other member runs
-Jackson-weighted dispatch on its routing row, or falls through to a
-terminal `success=True` response when the row is empty.
+The entry member (`TAS_{1}` by default) runs kind-based dispatch against the client-supplied `kind`; every other member runs Jackson-weighted dispatch on its routing row, or falls through to a terminal `success=True` response when the row is empty.
 
-In-process hops run directly through a shared handler dict (no HTTP
-for TAS-to-TAS); TAS-to-third-party hops go through the
-launcher-supplied `external_forward` (typically `HttpForward`). The
-launcher reaches each member's log through `app.state.tas_components`,
-a `{name: ServiceContext}` dict attached by `mount_composite_service`.
+In-process hops run directly through a shared handler dict (no HTTP for TAS-to-TAS); TAS-to-third-party hops go through the launcher-supplied `external_forward` (typically `HttpForward`). The launcher reaches each member's log through `app.state.tas_components`, a `{name: ServiceContext}` dict attached by `mount_composite_service`.
 
-Not a class; parameterised function only. Swap case studies by
-calling this with different `(specs, routing_rows, kind_to_target,
-external_forward)` tuples.
+Not a class; parameterised function only. Swap case studies by calling this with different `(specs, routing_rows, kind_to_target, external_forward)` tuples.
 
 Typical usage::
 
@@ -35,7 +24,7 @@ Typical usage::
 # native python modules
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 # web stack
 from fastapi import FastAPI
@@ -55,10 +44,7 @@ def build_tas(specs: Dict[str, ServiceSpec],
               entry_name: str = "TAS_{1}") -> FastAPI:
     """*build_tas()* assemble ONE FastAPI app hosting the six TAS members.
 
-    Publishes a `/healthz` endpoint that enumerates every member and
-    mounts one `/TAS_<i>/invoke` route per member through
-    `mount_composite_service`. The entry member runs kind-based
-    dispatch; the others run Jackson-weighted routing or terminate.
+    Publishes a `/healthz` endpoint that enumerates every member and mounts one `/TAS_<i>/invoke` route per member through `mount_composite_service`. The entry member runs kind-based dispatch; the others run Jackson-weighted routing or terminate.
 
     Args:
         specs (Dict[str, ServiceSpec]): spec per TAS member; each drives its own `ServiceContext` (c, K, mu, epsilon, seed, mem_per_buffer).
@@ -70,7 +56,7 @@ def build_tas(specs: Dict[str, ServiceSpec],
     Returns:
         FastAPI: assembled app. `app.state.tas_components` exposes the `{name: ServiceContext}` dict so the launcher can flush each member's log independently.
     """
-    def _healthz():
+    def _healthz() -> Dict[str, Any]:
         _ctxs = _app.state.tas_components
         return {
             "role": "tas",
