@@ -13,9 +13,6 @@ Each class groups tests by the contract under verification:
 
 # TODO: add a regression case against the full 13-node baseline frame  once a fixture/snapshot is available.
 """
-# native python modules
-# (none)
-
 # scientific stack
 import pandas as pd
 
@@ -113,8 +110,7 @@ class TestAggregateNetwork:
 
 
 class TestCheckRequirements:
-    """**TestCheckRequirements** verifies the R1 / R2 / R3 verdicts under the Camara 2023 thresholds (R1 < 0.03 percent failure rate,
-    R2 < 26 ms response time)."""
+    """**TestCheckRequirements** verifies the R1 / R2 / R3 verdicts under the Camara 2023 thresholds (R1 < 0.03 percent failure rate, R2 < 26 ms response time)."""
 
     def test_all_pass_under_threshold(self):
         """*test_all_pass_under_threshold()* well-behaved network: zero failures, fast responses => R1, R2, R3 all pass."""

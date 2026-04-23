@@ -3,11 +3,9 @@
 Module metrics.py
 =================
 
-Network-wide aggregates and R1 / R2 / R3 validation for the analytic
-method of the TAS case study.
+Network-wide aggregates and R1 / R2 / R3 validation for the analytic method of the TAS case study.
 
-Two layers, kept separate so the aggregation math can be unit-tested
-independently of the validation thresholds:
+Two layers, kept separate so the aggregation math can be unit-tested independently of the validation thresholds:
 
     - `aggregate_network(nodes)` reduces the per-node DataFrame into a single network-wide row (same semantics as the old `calculate_net_metrics` in `__OLD__/src/model/analytical.py`).
     - `check_requirements(nodes, ...)` evaluates the R1 / R2 / R3 targets against the thresholds declared in a reference file (default: `data/reference/baseline.json`, which carries the Camara 2023 values):
@@ -21,10 +19,8 @@ independently of the validation thresholds:
 # TODO: wire a real cost model (from the service catalogue) and use it to rank runs under the R1 and R2 feasibility set.
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
 
-# data types
 from typing import Any, Dict, Optional
 
 # scientific stack
@@ -36,8 +32,7 @@ from src.io import load_reference
 
 
 def aggregate_network(nodes: pd.DataFrame) -> pd.DataFrame:
-    """*aggregate_network()* reduces the per-node metrics frame into a
-    single network-wide row.
+    """*aggregate_network()* reduces the per-node metrics frame into a single network-wide row.
 
     Args:
         nodes (pd.DataFrame): per-node metrics as produced by `solve_network()`. Required columns: `lambda`, `mu`, `rho`, `L`, `Lq`, `W`, `Wq`.
@@ -59,8 +54,7 @@ def aggregate_network(nodes: pd.DataFrame) -> pd.DataFrame:
     _lambdas = nodes["lambda"].to_numpy(dtype=float)
     _total_lambda = float(_lambdas.sum())
 
-    # Calculate throughput-weighted means of W and Wq
-    # (guard against a fully idle network to avoid 0 / 0)
+    # throughput-weighted means of W and Wq; guard against a fully idle network to avoid 0 / 0
     if _total_lambda > 0:
         _numer_w = np.sum(nodes["W"].to_numpy() * _lambdas)
         _numer_wq = np.sum(nodes["Wq"].to_numpy() * _lambdas)
@@ -95,8 +89,7 @@ def check_requirements(
 ) -> Dict[str, Dict[str, Any]]:
     """*check_requirements()* evaluates the R1 / R2 / R3 targets against the thresholds declared in a reference file, using either caller-supplied values or values derived from the per-node frame.
 
-    Thresholds come from `data/reference/<reference>.json` (default `baseline.json`, which carries the Camara 2023 values). When the `failure_rate` / `response_time` kwargs are omitted, the defaults
-    are derived as follows:
+    Thresholds come from `data/reference/<reference>.json` (default `baseline.json`, which carries the Camara 2023 values). When the `failure_rate` / `response_time` kwargs are omitted, the defaults are derived as follows:
 
         - `failure_rate` from per-node `epsilon` (mean) if that column is present on `nodes`; otherwise assumed 0.0 (analytic model without faults).
         - `response_time` from the throughput-weighted network `W` returned by `aggregate_network()`.
@@ -129,7 +122,7 @@ def check_requirements(
         _agg = aggregate_network(nodes)
         _resp = float(_agg["W_net"].iloc[0])
 
-    # Evaluate each hard-threshold requirement
+    # evaluate each hard-threshold requirement
     _r1_pass = bool(_fail_rate <= _reqs["R1"]["threshold"])
     _r2_pass = bool(_resp <= _reqs["R2"]["threshold"])
     # R3 has no hard threshold; it passes iff R1 and R2 both hold
@@ -142,8 +135,7 @@ def check_requirements(
         "R3": (cost, _r3_pass),
     }
 
-    # assemble the verdict dict; metadata (operator, units, notes)
-    # flows through from the reference file so it stays single-sourced
+    # assemble the verdict dict; metadata (operator, units, notes) flows through from the reference file so it stays single-sourced
     _verdicts: Dict[str, Dict[str, Any]] = {}
     for _k, (_val, _ok) in _measured.items():
         _spec = _reqs[_k]
