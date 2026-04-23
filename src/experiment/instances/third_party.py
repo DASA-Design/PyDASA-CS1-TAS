@@ -3,20 +3,11 @@
 Module instances/third_party.py
 ===============================
 
-CS-01 third-party-service instance (MAS / AS / DS). One parameterised
-function, `build_third_party`, wraps a single atomic handler in a
-FastAPI app via `services.atomic.mount_atomic_service`. Every MAS /
-AS / DS gets its own port and its own `/invoke` route; the launcher
-reaches the per-service log through `app.state.ctx`.
+CS-01 third-party-service instance (MAS / AS / DS). One parameterised function, `build_third_party`, wraps a single atomic handler in a FastAPI app via `services.atomic.mount_atomic_service`. Every MAS / AS / DS gets its own port and its own `/invoke` route; the launcher reaches the per-service log through `app.state.ctx`.
 
-Terminal services (empty `targets`) return `success` immediately
-after the simulated service time and the epsilon Bernoulli; non-empty
-`targets` pick one hop via the seeded RNG and forward through
-`external_forward` (typically `HttpForward`).
+Terminal services (empty `targets`) return `success` immediately after the simulated service time and the epsilon Bernoulli; non-empty `targets` pick one hop via the seeded RNG and forward through `external_forward` (typically `HttpForward`).
 
-Not a class; parameterised function only. Swap case studies by
-calling this with different `(spec, targets, external_forward)`
-tuples.
+Not a class; parameterised function only. Swap case studies by calling this with different `(spec, targets, external_forward)` tuples.
 
 Typical usage::
 
@@ -30,7 +21,7 @@ Typical usage::
 # native python modules
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 # web stack
 from fastapi import FastAPI
@@ -47,9 +38,7 @@ def build_third_party(spec: ServiceSpec,
                       external_forward: ExternalForwardFn) -> FastAPI:
     """*build_third_party()* assemble one FastAPI app around a MAS / AS / DS handler.
 
-    Attaches the atomic handler at `/invoke` through
-    `mount_atomic_service` and publishes a `/healthz` endpoint that
-    echoes the per-service knobs the launcher needs.
+    Attaches the atomic handler at `/invoke` through `mount_atomic_service` and publishes a `/healthz` endpoint that echoes the per-service knobs the launcher needs.
 
     Args:
         spec (ServiceSpec): per-service knobs (name, port, mu, epsilon, c, K, seed, mem_per_buffer).
@@ -59,7 +48,7 @@ def build_third_party(spec: ServiceSpec,
     Returns:
         FastAPI: app ready to bind to `spec.port`. `app.state.ctx` exposes the `ServiceContext` so the launcher can flush its log.
     """
-    def _healthz():
+    def _healthz() -> Dict[str, Any]:
         return {"name": spec.name,
                 "role": "third_party",
                 "c": spec.c,
