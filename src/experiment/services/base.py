@@ -17,6 +17,7 @@ Exports:
 # native python modules
 from __future__ import annotations
 
+import asyncio
 import csv
 import random
 import uuid
@@ -148,6 +149,7 @@ class SvcResp(BaseModel):
 LOG_COLUMNS = (
     "request_id", "service_name", "kind",
     "recv_ts", "start_ts", "end_ts",
+    "c_used_at_start",
     "success", "status_code",
     "size_bytes",
 )
@@ -162,9 +164,7 @@ LOG_COLUMNS = (
 class SvcCtx:
     """**SvcCtx** mutable per-service state.
 
-    Carries the four things that downstream code needs: the spec (so rows carry `service_name`), a log list (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), and the bound request handler (set by `mount_atomic_svc` after the handler is built, so composite callers can dispatch siblings in-process).
-
-    Holds no admission counter, no semaphore, and no `in_system`. Concurrency is whatever uvicorn and asyncio produce naturally under the declared ceiling `spec.c`.
+    Carries the spec (so rows carry `service_name`), a log list (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), the bound request handler (set by `mount_atomic_svc` after the handler is built, so composite callers can dispatch siblings in-process), and an asyncio.Semaphore initialised with `spec.c` permits so the `@logger` decorator can gate concurrent admission and measure real Wq / rho instead of asyncio's natural concurrency.
     """
 
     # immutable per-service knobs
@@ -176,6 +176,11 @@ class SvcCtx:
     # per-service RNG seeded from spec.seed
     rng: random.Random = field(init=False)
 
+    # admission semaphore: spec.c permits gate concurrent handler execution
+    # so wait-for-permit time is measurable as Wq and the simultaneous
+    # in-service count is measurable as c_used_at_start
+    sem: asyncio.Semaphore = field(init=False)
+
     # bound request handler; set by mount_atomic_svc after build
     handler: Optional[Callable[..., Any]] = field(default=None, init=False, repr=False)
 
@@ -184,6 +189,22 @@ class SvcCtx:
             self.rng = random.Random(self.spec.seed)
         else:
             self.rng = random.Random()
+        # Semaphore must be created in an asyncio context, but since dataclass
+        # init runs synchronously, allocate it here -- safe because the
+        # launcher mounts services inside the running event loop
+        self.sem = asyncio.Semaphore(max(int(self.spec.c), 1))
+
+    @property
+    def c_in_use(self) -> int:
+        """*c_in_use* number of permits currently held (server slots busy).
+
+        `Semaphore._value` is the public-but-implementation-detail count of
+        free permits; capacity minus free = in-use. Used by `@logger` to
+        sample the PASTA observation `c_used_at_start`.
+        """
+        _free = int(getattr(self.sem, "_value", 0))
+        _cap = max(int(self.spec.c), 1)
+        return max(_cap - _free, 0)
 
     def draw_svc_time(self) -> float:
         """*draw_svc_time()* one exponential draw at rate `mu` from the seeded RNG; returns 0 when `mu == 0`."""
@@ -198,7 +219,13 @@ class SvcCtx:
     def flush_log(self,
                   csv_path: Path,
                   columns: tuple[str, ...] = LOG_COLUMNS) -> int:
-        """*flush_log()* append every buffered row to `csv_path` and clear the buffer.
+        """*flush_log()* write every buffered row to `csv_path` and clear the buffer.
+
+        Always overwrites the target file so the on-disk header matches the
+        current `LOG_COLUMNS` schema. Append-mode would silently misalign
+        rows when an older CSV with a different column set lives at the
+        same path (the user's CSVs from a stale schema would shift every
+        new field one column to the right under pandas).
 
         Args:
             csv_path (Path): target CSV; parent directory is created if missing.
@@ -209,11 +236,9 @@ class SvcCtx:
         """
         _p = Path(csv_path)
         _p.parent.mkdir(parents=True, exist_ok=True)
-        _new = not _p.exists()
-        with _p.open("a", newline="", encoding="utf-8") as _fh:
+        with _p.open("w", newline="", encoding="utf-8") as _fh:
             _w = csv.DictWriter(_fh, fieldnames=columns)
-            if _new:
-                _w.writeheader()
+            _w.writeheader()
             for _row in self.log:
                 _w.writerow({_k: _row.get(_k) for _k in columns})
         _n = len(self.log)

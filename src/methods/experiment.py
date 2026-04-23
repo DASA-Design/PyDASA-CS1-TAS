@@ -52,19 +52,31 @@ _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
 def _build_svc_df_from_logs(cfg: NetCfg,
                             log_dir: Path,
                             duration_s: float) -> pd.DataFrame:
-    """*_build_svc_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs.
+    """*_build_svc_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs via operational analysis (Denning & Buzen 1978).
 
-    Cleanly separates two failure modes:
+    Every quantity is a direct measurement over the observation window `T`;
+    no Markovian assumption (Poisson arrivals, exponential service, steady
+    state, ergodicity) is required. The operational identities used (cf.
+    `notes/operational_analysis.md` Table I):
+
+        - **lambda** = `A / T` (arrival rate from logged invocations)
+        - **X** (throughput) = `C / T` (completion rate)
+        - **U** (utilisation) = `B / (T * c)` where `B = sum(end_ts - start_ts)` is busy time across `c` server slots; identity `U = X * S` holds.
+        - **S** (service time) = `B / C`
+        - **R** (response time, alias `W`) = mean(`end_ts - recv_ts`)
+        - **Wq** (queue wait) = mean(`start_ts - recv_ts`); positive only when admission gating (`SvcCtx.sem`) makes requests wait.
+        - **n_bar** (alias `L`) = `X * R`            (Little's law)
+        - **n_bar_q** (alias `Lq`) = `X * Wq`        (Little's law on queue)
+
+    Two failure modes stay separated:
 
         - `epsilon`: Bernoulli business failure `count(200 AND success=False) / count(200)`. Directly comparable to the profile's `_setpoint` for epsilon (what R1 validates).
         - `buffer_reject_rate`: `count(503) / count(all)`. Capacity overflow, not a reliability signal.
 
-    Both are stored on the DataFrame; downstream R1 checks use `epsilon` only.
-
     Args:
         cfg (NetCfg): resolved profile + scenario.
         log_dir (Path): directory carrying `<service>.csv` files.
-        duration_s (float): wall-clock duration the measurement covers; used to compute lambda.
+        duration_s (float): observation window length `T`. Used as the denominator for X / U / lambda; should be the wall-clock duration the measurement covers.
 
     Returns:
         pd.DataFrame: one row per artifact with the analytic-schema columns plus `buffer_reject_rate`.
@@ -88,12 +100,23 @@ def _build_svc_df_from_logs(cfg: NetCfg,
             _df = pd.read_csv(_csv)
             _n = len(_df)
 
+            # CSVs serialise the success column as the strings "True" /
+            # "False"; pandas reads them back as object-dtype, and
+            # `.astype(bool)` of a non-empty string is unconditionally
+            # True. Coerce explicitly so business-failure splits work.
+            _succ_col = _df["success"]
+            if _succ_col.dtype != bool:
+                _succ_bool = _succ_col.astype(str).str.lower().eq("true")
+            else:
+                _succ_bool = _succ_col
+            _df = _df.assign(success=_succ_bool)
+
             # split by failure mode
             _completed = _df[_df["status_code"] == 200]
-            _business_fails = _completed[~_completed["success"].astype(bool)]
+            _business_fails = _completed[~_completed["success"]]
             _infra_fails = _df[_df["status_code"] != 200]
 
-            # lambda = total invocations received per second
+            # operational arrival rate: A / T (every logged row is an arrival)
             if duration_s > 0:
                 _lam = _n / duration_s
             else:
@@ -111,23 +134,29 @@ def _build_svc_df_from_logs(cfg: NetCfg,
             else:
                 _bfr = 0.0
 
-            # timing from successful completions only (failed ones have no meaningful W)
+            # timing from successful completions only (failed ones have no meaningful response time)
             _succ = _completed[_completed["success"]]
-            if len(_succ) > 0:
+            if len(_succ) > 0 and duration_s > 0:
                 _start = pd.to_numeric(_succ["start_ts"], errors="coerce")
                 _end = pd.to_numeric(_succ["end_ts"], errors="coerce")
                 _recv = pd.to_numeric(_succ["recv_ts"], errors="coerce")
+
+                # response time R = mean(end - recv), queue wait Wq = mean(start - recv)
                 _W = float(np.nanmean(_end - _recv))
                 _Wq = float(np.nanmean(_start - _recv))
 
-            _L = _lam * _W
-            _Lq = _lam * _Wq
+                # operational utilisation U = B / (T * c), where B is the
+                # total busy time across the c server slots. Identity U=X*S
+                # holds by construction (no PASTA assumption needed)
+                _B = float(np.nansum(_end - _start))
+                _c = max(int(_a.c), 1)
+                _rho = _B / (duration_s * _c)
 
-            # utilisation via c_used_at_start (PASTA: Poisson arrivals see time averages, so arrival-time samples approximate time average)
-            if len(_succ) > 0 and "c_used_at_start" in _succ.columns:
-                _used = pd.to_numeric(
-                    _succ["c_used_at_start"], errors="coerce")
-                _rho = float(np.nanmean(_used) / max(int(_a.c), 1))
+                # operational throughput X = C / T; use this in Little's law
+                # rather than lambda so failed completions don't inflate L
+                _X = len(_succ) / duration_s
+                _L = _X * _W
+                _Lq = _X * _Wq
 
         _rows.append({
             "node": _idx,

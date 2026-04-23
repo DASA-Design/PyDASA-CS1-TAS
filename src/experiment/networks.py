@@ -32,7 +32,7 @@ from dataclasses import replace
 from pathlib import Path
 
 # data types
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List
 
 # scientific stack
 import numpy as np

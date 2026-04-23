@@ -42,28 +42,36 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
         async def _wrapped(req: SvcReq) -> SvcResp:
             _recv_ts = time.time()
 
-            # no separate queue-wait phase; start == recv
-            _start_ts = _recv_ts
+            # gate admission through the per-service semaphore so the wait
+            # time is real Wq and the in-flight count is real c_used. Without
+            # this, asyncio runs every coroutine concurrently and Wq = 0,
+            # c_used = N/A regardless of `spec.c`.
+            async with ctx.sem:
+                _start_ts = time.time()
+                # PASTA sample: capture in-flight count AFTER acquiring this
+                # permit, so the value includes the current request itself
+                _c_used = ctx.c_in_use
 
-            try:
-                _resp = await handler(req)
-            except Exception as _exc:
+                try:
+                    _resp = await handler(req)
+                except Exception as _exc:
+                    _end_ts = time.time()
+                    _status = getattr(_exc, "status_code", 500)
+                    ctx.log.append({
+                        "request_id": req.request_id,
+                        "service_name": ctx.spec.name,
+                        "kind": req.kind,
+                        "recv_ts": _recv_ts,
+                        "start_ts": _start_ts,
+                        "end_ts": _end_ts,
+                        "c_used_at_start": int(_c_used),
+                        "success": False,
+                        "status_code": int(_status),
+                        "size_bytes": req.size_bytes,
+                    })
+                    raise
+
                 _end_ts = time.time()
-                _status = getattr(_exc, "status_code", 500)
-                ctx.log.append({
-                    "request_id": req.request_id,
-                    "service_name": ctx.spec.name,
-                    "kind": req.kind,
-                    "recv_ts": _recv_ts,
-                    "start_ts": _start_ts,
-                    "end_ts": _end_ts,
-                    "success": False,
-                    "status_code": int(_status),
-                    "size_bytes": req.size_bytes,
-                })
-                raise
-
-            _end_ts = time.time()
 
             # local outcome only; downstream success does not apply here
             if _resp.service_name == ctx.spec.name:
@@ -78,6 +86,7 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
                 "recv_ts": _recv_ts,
                 "start_ts": _start_ts,
                 "end_ts": _end_ts,
+                "c_used_at_start": int(_c_used),
                 "success": _local_success,
                 "status_code": 200,
                 "size_bytes": req.size_bytes,
