@@ -64,7 +64,7 @@ def _build_vars_from_nodes(nds: pd.DataFrame,
         _vars = {_sym: dict(_var) for _sym, _var in _a.vars.items()}
 
         # LaTeX subscript form of the artifact key (after the key migration this is just `_a.key` verbatim, e.g. `TAS_{1}`)
-        _sub = _a._sub()
+        _sub = _a.format_sub()
 
         # calculate output-variable refresh values from the solver row. Variable names follow the post-migration convention: `L_{q, ...}` / `W_{q, ...}` (split q-subscript, valid LaTeX)
         _updates = {

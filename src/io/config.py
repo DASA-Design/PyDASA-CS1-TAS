@@ -80,8 +80,8 @@ class ArtifactSpec:
     L_z: float
     vars: Dict[str, dict]
 
-    def _setpoint(self, prefix: str) -> float:
-        """*_setpoint()* read the `_setpoint` of the first variable whose LaTeX symbol starts with `prefix`.
+    def read_setpoint(self, prefix: str) -> float:
+        """*read_setpoint()* read the `_setpoint` of the first variable whose LaTeX symbol starts with `prefix`.
 
         Args:
             prefix (str): LaTeX-symbol prefix including the artifact's own subscript (e.g. `\\mu_{TAS_{1}}`).
@@ -98,8 +98,8 @@ class ArtifactSpec:
                 return float(_var["_setpoint"])
         raise KeyError(f"no variable with prefix {prefix!r} on {self.key}")
 
-    def _sub(self) -> str:
-        """*_sub()* return the LaTeX subscript form of the artifact key.
+    def format_sub(self) -> str:
+        """*format_sub()* return the LaTeX subscript form of the artifact key.
 
         Since `data/config/profile/*.json` was migrated to store keys already in LaTeX form (e.g. `TAS_{1}`), this is an identity pass-through kept for API compatibility with callers written against the old `TAS_1` flat-key convention.
 
@@ -111,27 +111,27 @@ class ArtifactSpec:
     @property
     def mu(self) -> float:
         """*mu* service rate setpoint for this artifact."""
-        return self._setpoint(f"\\mu_{{{self._sub()}}}")
+        return self.read_setpoint(f"\\mu_{{{self.format_sub()}}}")
 
     @property
     def c(self) -> int:
         """*c* server count setpoint for this artifact."""
-        return int(self._setpoint(f"c_{{{self._sub()}}}"))
+        return int(self.read_setpoint(f"c_{{{self.format_sub()}}}"))
 
     @property
     def K(self) -> int:
         """*K* system capacity setpoint for this artifact."""
-        return int(self._setpoint(f"K_{{{self._sub()}}}"))
+        return int(self.read_setpoint(f"K_{{{self.format_sub()}}}"))
 
     @property
     def epsilon(self) -> float:
         """*epsilon* per-node failure rate setpoint for this artifact."""
-        return self._setpoint(f"\\epsilon_{{{self._sub()}}}")
+        return self.read_setpoint(f"\\epsilon_{{{self.format_sub()}}}")
 
     @property
     def d_kb(self) -> float:
         """*d_kb* request data density in kB per request; reads the profile key `d_{<artifact>}` (setpoint in kB/req)."""
-        return self._setpoint(f"d_{{{self._sub()}}}")
+        return self.read_setpoint(f"d_{{{self.format_sub()}}}")
 
     @property
     def d_bytes(self) -> int:

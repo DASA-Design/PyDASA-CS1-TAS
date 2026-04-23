@@ -10,7 +10,7 @@ independently.
 Public API:
     - `solve_jackson_lambdas(P, lambda_z)` pure linear solve of `(I - P^T) lamb = lamb_z`, returning the per-node effective arrival rates.
     - `solve_network(cfg)` takes a resolved `NetworkConfig`, builds a `Queue` per artifact with the Jackson-solved `lamb`, calls `calculate_metrics()`, and returns a pandas DataFrame with one row per node.
-    - rho-indexed helpers (`per_artifact_lambdas`, `per_artifact_rhos`, `lambda_z_for_rho`, `build_rho_grid`) drive the inverse direction used by the experiment orchestrator to build the rho-indexed operating-point grid. Since Jackson is linear in lambda_z, the inversion is one division.
+    - rho-indexed helpers (`compute_lams_per_artifact`, `compute_rhos_per_artifact`, `invert_rho_to_lam_z`, `build_rho_grid`) drive the inverse direction used by the experiment orchestrator to build the rho-indexed operating-point grid. Since Jackson is linear in lambda_z, the inversion is one division.
 
 *IMPORTANT:* the routing matrix in `cfg.routing` is stored with `row = source, col = dest`, so it is transposed before solving the linear system.
 
@@ -122,9 +122,9 @@ def solve_network(cfg: NetworkConfig) -> pd.DataFrame:
 # --- bottleneck plus scaling). -------------------------------------
 
 
-def per_artifact_lambdas(cfg: NetworkConfig,
-                         lambda_z: float) -> np.ndarray:
-    """*per_artifact_lambdas()* effective arrival rate per artifact at the given scalar entry rate.
+def compute_lams_per_artifact(cfg: NetworkConfig,
+                              lambda_z: float) -> np.ndarray:
+    """*compute_lams_per_artifact()* effective arrival rate per artifact at the given scalar entry rate.
 
     Scales the profile's `lambda_z_vector()` (the entry-distribution of λ_z across artifacts) by the scalar `lambda_z` so callers can sweep the entry rate without editing the profile, then delegates to `solve_jackson_lambdas` for the forward solve.
 
@@ -147,9 +147,9 @@ def per_artifact_lambdas(cfg: NetworkConfig,
                                  _entry_vec)
 
 
-def per_artifact_rhos(cfg: NetworkConfig,
-                      lambda_z: float) -> np.ndarray:
-    """*per_artifact_rhos()* per-artifact utilisation at the given entry rate.
+def compute_rhos_per_artifact(cfg: NetworkConfig,
+                              lambda_z: float) -> np.ndarray:
+    """*compute_rhos_per_artifact()* per-artifact utilisation at the given entry rate.
 
     `ρ_i = λ_i / (c_i · μ_i)`. Returns `+inf` for any artifact with zero capacity (not present in well-formed profiles).
 
@@ -160,19 +160,19 @@ def per_artifact_rhos(cfg: NetworkConfig,
     Returns:
         np.ndarray: per-artifact ρ in artifact-declaration order.
     """
-    _lams = per_artifact_lambdas(cfg, lambda_z)
+    _lams = compute_lams_per_artifact(cfg, lambda_z)
     _capacity = np.array([float(_a.c) * float(_a.mu) for _a in cfg.artifacts])
     with np.errstate(divide="ignore", invalid="ignore"):
         _rhos = np.where(_capacity > 0, _lams / _capacity, np.inf)
     return _rhos
 
 
-def lambda_z_for_rho(cfg: NetworkConfig,
-                     rho_target: float,
-                     *,
-                     probe_lambda_z: float = 1.0
-                     ) -> Tuple[float, int, float]:
-    """*lambda_z_for_rho()* solve for the entry λ_z that makes the bottleneck artifact hit `rho_target`.
+def invert_rho_to_lam_z(cfg: NetworkConfig,
+                        rho_target: float,
+                        *,
+                        probe_lambda_z: float = 1.0
+                        ) -> Tuple[float, int, float]:
+    """*invert_rho_to_lam_z()* solve for the entry λ_z that makes the bottleneck artifact hit `rho_target`.
 
     Since Jackson is linear in λ_z, one probe at any positive rate is enough to identify the bottleneck (artifact with the highest ρ per unit λ_z) and the linear scaling factor.
 
@@ -189,7 +189,7 @@ def lambda_z_for_rho(cfg: NetworkConfig,
     """
     if not 0.0 < rho_target < 1.0:
         raise ValueError(f"rho_target must be in (0, 1), got {rho_target}")
-    _rhos = per_artifact_rhos(cfg, probe_lambda_z)
+    _rhos = compute_rhos_per_artifact(cfg, probe_lambda_z)
 
     if not np.all(np.isfinite(_rhos)):
         raise ValueError("at least one artifact has non-finite ρ; check μ and c")
@@ -217,6 +217,6 @@ def build_rho_grid(cfg: NetworkConfig,
     """
     _out: List[Tuple[float, float, int]] = []
     for _rho in rho_grid:
-        _lam_z, _bottle, _ = lambda_z_for_rho(cfg, float(_rho))
+        _lam_z, _bottle, _ = invert_rho_to_lam_z(cfg, float(_rho))
         _out.append((float(_rho), float(_lam_z), int(_bottle)))
     return _out

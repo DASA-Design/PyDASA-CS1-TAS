@@ -71,21 +71,21 @@ class _MultiASGITransport(httpx.AsyncBaseTransport):
 # --- derivation helpers: specs + routing ---------------------------------
 
 
-def _avg_request_size(sizes_by_kind: Dict[str, int]) -> int:
-    """*_avg_request_size()* arithmetic mean of per-kind payload sizes; 0 when no sizes declared."""
+def _compute_avg_req_size(sizes_by_kind: Dict[str, int]) -> int:
+    """*_compute_avg_req_size()* arithmetic mean of per-kind payload sizes; 0 when no sizes declared."""
     _vals = [int(_v) for _v in sizes_by_kind.values() if int(_v) > 0]
     if not _vals:
         return 0
     return int(sum(_vals) / len(_vals))
 
 
-def _specs_from_config(cfg: NetworkConfig,
+def _build_specs_from_cfg(cfg: NetworkConfig,
                        registry: ServiceRegistry,
                        *,
                        root_seed: int = 0,
                        avg_request_size_bytes: int = 0
                        ) -> Dict[str, ServiceSpec]:
-    """*_specs_from_config()* build one `ServiceSpec` per artifact by pulling `(mu, epsilon, c, K)` from the profile JSON and `(role, port)` from the registry.
+    """*_build_specs_from_cfg()* build one `ServiceSpec` per artifact by pulling `(mu, epsilon, c, K)` from the profile JSON and `(role, port)` from the registry.
 
     `root_seed` is the single seed from `experiment.json::seed`. It is folded with each service's name via `derive_seed` so every service has a stable, independent RNG stream; one knob in JSON controls every stochastic draw in the apparatus.
 
@@ -113,8 +113,8 @@ def _specs_from_config(cfg: NetworkConfig,
     return _specs
 
 
-def _routing_row(cfg: NetworkConfig, name: str) -> List[Tuple[str, float]]:
-    """*_routing_row()* return `(target_name, probability)` pairs for non-zero entries in `name`'s row, in declaration (column-index) order."""
+def _read_routing_row(cfg: NetworkConfig, name: str) -> List[Tuple[str, float]]:
+    """*_read_routing_row()* return `(target_name, probability)` pairs for non-zero entries in `name`'s row, in declaration (column-index) order."""
     _names = [_a.key for _a in cfg.artifacts]
     _idx = _names.index(name)
     _row = np.asarray(cfg.routing[_idx], dtype=float)
@@ -126,14 +126,14 @@ def _routing_row(cfg: NetworkConfig, name: str) -> List[Tuple[str, float]]:
     return _out
 
 
-def _router_kind_map(cfg: NetworkConfig,
+def _build_router_kind_map(cfg: NetworkConfig,
                      name: str
                      ) -> Tuple[Dict[str, str], Dict[str, float]]:
-    """*_router_kind_map()* build `(kind_to_target, kind_weights)` for a router composite.
+    """*_build_router_kind_map()* build `(kind_to_target, kind_weights)` for a router composite.
 
     Kind label == target artifact name (simplest, self-documenting). Weights normalise probabilities to sum to 1 across the row's non-zero entries.
     """
-    _row = _routing_row(cfg, name)
+    _row = _read_routing_row(cfg, name)
     _total = sum(_p for _, _p in _row)
     _kind_to_target = {_t: _t for _t, _ in _row}
     _kind_weights: Dict[str, float] = {}
@@ -183,8 +183,8 @@ class ExperimentLauncher:
         self.registry = ServiceRegistry.from_config(
             self.method_cfg, base_port_override=self.base_port_override)
         _root_seed = int(self.method_cfg.get("seed", 0))
-        _avg_size = _avg_request_size(self.method_cfg.get("request_size_bytes", {}))
-        self.specs = _specs_from_config(self.cfg, self.registry,
+        _avg_size = _compute_avg_req_size(self.method_cfg.get("request_size_bytes", {}))
+        self.specs = _build_specs_from_cfg(self.cfg, self.registry,
                                         root_seed=_root_seed,
                                         avg_request_size_bytes=_avg_size)
 
@@ -195,11 +195,11 @@ class ExperimentLauncher:
                 return False
             if _name not in self.specs:
                 return False
-            return bool(_routing_row(self.cfg, _name))
+            return bool(_read_routing_row(self.cfg, _name))
 
         _routers = [_n for _n in self.registry.table if _is_entry_router(_n)]
         if _routers:
-            self.kind_to_target, self.kind_weights = _router_kind_map(
+            self.kind_to_target, self.kind_weights = _build_router_kind_map(
                 self.cfg, _routers[0])
 
         # 3. transport + shared client built against an initially empty port map. Every service registers its port -> app mapping into the transport synchronously before any HTTP traffic flows.
@@ -217,7 +217,7 @@ class ExperimentLauncher:
         for _name, _spec in self.specs.items():
             if _name.startswith("TAS_"):
                 _tas_specs[_name] = _spec
-                _tas_rows[_name] = _routing_row(self.cfg, _name)
+                _tas_rows[_name] = _read_routing_row(self.cfg, _name)
 
         # 4b. one TAS app; every TAS component gets its own `ServiceContext` attached via `mount_composite_service`, exposed as `{name: ServiceContext}` on `app.state.tas_components`.
         if _tas_specs:
@@ -238,7 +238,7 @@ class ExperimentLauncher:
         for _name, _spec in self.specs.items():
             if _name.startswith("TAS_"):
                 continue
-            _targets = _routing_row(self.cfg, _name)
+            _targets = _read_routing_row(self.cfg, _name)
             _app = build_third_party(_spec, _targets, _forward)
             self.apps[_name] = _app
             _port_to_app[_spec.port] = _app
@@ -297,8 +297,8 @@ class ExperimentLauncher:
             _counts[_name] = _ctx.flush_log(_path, LOG_COLUMNS)
         return _counts
 
-    def lambda_z_entry(self, entry: str = "TAS_{1}") -> float:
-        """*lambda_z_entry()* seeded external arrival rate at `entry`."""
+    def get_lam_z_entry(self, entry: str = "TAS_{1}") -> float:
+        """*get_lam_z_entry()* seeded external arrival rate at `entry`."""
         for _a in self.cfg.artifacts:
             if _a.key == entry:
                 return float(_a.lambda_z)

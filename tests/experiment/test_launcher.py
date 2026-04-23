@@ -108,7 +108,7 @@ class TestLauncherE2E:
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
             # low load well below saturation: lam_entry / 10, min samples 32
-            _rate = _lnc.lambda_z_entry() / 10.0
+            _rate = _lnc.get_lam_z_entry() / 10.0
             _client_cfg = ClientConfig(entry_service="TAS_{1}",
                                        seed=42,
                                        kind_weights=_lnc.kind_weights,
@@ -145,7 +145,7 @@ class TestLauncherE2E:
         async with ExperimentLauncher(
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
-            _rate = _lnc.lambda_z_entry() / 20.0
+            _rate = _lnc.get_lam_z_entry() / 20.0
             _client_cfg = ClientConfig(entry_service="TAS_{1}",
                                        seed=7,
                                        kind_weights=_lnc.kind_weights,
