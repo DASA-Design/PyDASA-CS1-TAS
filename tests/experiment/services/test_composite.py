@@ -42,14 +42,24 @@ class TestMountCompositeService:
     """**TestMountCompositeService** composite module: per-member state + internal routing + external forward boundary."""
 
     def _build_tas_like(self, *, forward) -> FastAPI:
-        """A mini TAS-shaped composite: TAS_{1} kind-routes to TAS_{2}, TAS_{2} to external MAS."""
+        """*_build_tas_like()* build a mini TAS-shaped composite: TAS_{1} kind-routes to TAS_{2}, TAS_{2} to external MAS."""
         _specs = {
-            "TAS_{1}": ServiceSpec(name="TAS_{1}", role="composite_client",
-                                   port=8001, mu=10_000.0, epsilon=0.0,
-                                   c=1, K=10, seed=1),
-            "TAS_{2}": ServiceSpec(name="TAS_{2}", role="composite_medical",
-                                   port=8001, mu=10_000.0, epsilon=0.0,
-                                   c=1, K=10, seed=2),
+            "TAS_{1}": ServiceSpec(name="TAS_{1}",
+                                   role="composite_client",
+                                   port=8001,
+                                   mu=10_000.0,
+                                   epsilon=0.0,
+                                   c=1,
+                                   K=10,
+                                   seed=1),
+            "TAS_{2}": ServiceSpec(name="TAS_{2}",
+                                   role="composite_medical",
+                                   port=8001,
+                                   mu=10_000.0,
+                                   epsilon=0.0,
+                                   c=1,
+                                   K=10,
+                                   seed=2),
         }
         _rows = {
             "TAS_{1}": [],
@@ -64,6 +74,7 @@ class TestMountCompositeService:
 
     @pytest.mark.asyncio
     async def test_each_member_has_its_own_context(self):
+        """*test_each_member_has_its_own_context()* every composite member gets a distinct `ServiceContext` exposed on `app.state.tas_components`."""
         _calls: List[Tuple[str, str]] = []
         _app = self._build_tas_like(forward=_recorded_forward(_calls))
         _ctxs = _app.state.tas_components
@@ -73,7 +84,7 @@ class TestMountCompositeService:
 
     @pytest.mark.asyncio
     async def test_in_process_hop_records_one_row_per_member(self):
-        """TAS_{1} kind-routes to TAS_{2} in-process; TAS_{2} hits external MAS. Expect 1 row in TAS_{1}'s log and 1 row in TAS_{2}'s log; the external forward is called exactly once."""
+        """*test_in_process_hop_records_one_row_per_member()* TAS_{1} kind-routes to TAS_{2} in-process; TAS_{2} hits external MAS. Expect 1 row in each member's log and `external_forward` called exactly once."""
         _calls: List[Tuple[str, str]] = []
         _app = self._build_tas_like(forward=_recorded_forward(_calls))
         _transport = httpx.ASGITransport(app=_app)
@@ -89,6 +100,7 @@ class TestMountCompositeService:
 
     @pytest.mark.asyncio
     async def test_unknown_kind_raises_400_at_entry(self):
+        """*test_unknown_kind_raises_400_at_entry()* a request with a `kind` not in the `kind_to_target` table gets HTTP 400 from the entry kind-router; no downstream forward fires."""
         _calls: List[Tuple[str, str]] = []
         _app = self._build_tas_like(forward=_recorded_forward(_calls))
         _transport = httpx.ASGITransport(app=_app)
@@ -111,10 +123,12 @@ class TestParseTasIdx:
         ("TAS_{42}", 42),
     ])
     def test_valid_names(self, _name, _expected):
+        """*test_valid_names()* `TAS_{i}` keys with a numeric index parse to the integer index."""
         assert parse_tas_idx(_name) == _expected
 
     @pytest.mark.parametrize("_bad", [
         "MAS_{1}", "tas_{1}", "TAS{1}", "TAS_1", "TAS_{a}", "", "foo"])
     def test_non_tas_name_raises(self, _bad):
+        """*test_non_tas_name_raises()* any string not matching the canonical `TAS_{i}` shape raises `ValueError` with a diagnostic message."""
         with pytest.raises(ValueError, match="not a TAS component name"):
             parse_tas_idx(_bad)

@@ -3,26 +3,14 @@
 Module services/composite.py
 ============================
 
-Composite-service module (no class). One function,
-`mount_composite_service`, attaches N atomic handlers to one FastAPI
-app and wires their in-process routing. We use it for the TAS target
-system: six atomic handlers (TAS_{1..6}) behind a single port with
-six per-member routes.
+Composite-service module (no class). One function, `mount_composite_service`, attaches N atomic handlers to one FastAPI app and wires their in-process routing. We use it for the TAS target system: six atomic handlers (TAS_{1..6}) behind a single port with six per-member routes.
 
-Each member is mounted through `services.atomic.mount_atomic_service`
-with two extension kwargs:
+Each member is mounted through `services.atomic.mount_atomic_service` with two extension kwargs:
 
-    - `pick_target`: at the entry member, resolves the target via the
-      `kind_to_target` table (raising HTTP 400 on unknown kind); every
-      other member falls back to atomic's default Jackson pick.
-    - `dispatch`: checks the shared `_handlers` dict first so sibling
-      members dispatch to each other in-process via a direct `await`;
-      non-member targets fall through to `external_forward` (typically
-      `HttpForward`).
+    - `pick_target`: at the entry member, resolves the target via the `kind_to_target` table (raising HTTP 400 on unknown kind); every other member falls back to atomic's default Jackson pick.
+    - `dispatch`: checks the shared `_handlers` dict first so sibling members dispatch to each other in-process via a direct `await`; non-member targets fall through to `external_forward` (typically `HttpForward`).
 
-The shared `_handlers` dict closes over `dispatch` and is populated
-as each member mounts; by the time a request actually runs, every
-member's handler is registered, so the late-bound lookup resolves.
+The shared `_handlers` dict closes over `dispatch` and is populated as each member mounts; by the time a request actually runs, every member's handler is registered, so the late-bound lookup resolves.
 
 Queueing stays emergent, same as in `services.atomic`.
 """
@@ -64,11 +52,7 @@ def mount_composite_service(
 ) -> Dict[str, ServiceContext]:
     """*mount_composite_service()* attach N atomic members inside one FastAPI app.
 
-    Every member is mounted via `mount_atomic_service` with a shared
-    `dispatch` that prefers in-process sibling handlers over the HTTP
-    `external_forward`, plus a kind-dispatch `pick_target` at the
-    entry member. External hops continue to go through
-    `external_forward`.
+    Every member is mounted via `mount_atomic_service` with a shared `dispatch` that prefers in-process sibling handlers over the HTTP `external_forward`, plus a kind-dispatch `pick_target` at the entry member. External hops continue to go through `external_forward`.
 
     Args:
         app (FastAPI): app to attach the routes to.
@@ -89,9 +73,7 @@ def mount_composite_service(
         def route_for(_n: str) -> str:
             return f"/TAS_{parse_tas_idx(_n)}/invoke"
 
-    # shared in-process handler table; populated as each member mounts.
-    # `_dispatch` captures by reference, so late-bound lookups resolve
-    # once every member is registered (order is mount-first, invoke-later).
+    # shared in-process handler table; populated as each member mounts. `_dispatch` captures by reference, so late-bound lookups resolve once every member is registered (order is mount-first, invoke-later).
     _handlers: Dict[str, Any] = {}
 
     async def _dispatch(_target: str,
@@ -100,8 +82,8 @@ def mount_composite_service(
             return await _handlers[_target](_req)
         return await external_forward(_target, _req)
 
-    def _pick_for(member_name: str):
-        """Return a kind-dispatch picker for the entry member; None elsewhere (falls back to atomic's default Jackson pick)."""
+    def _pick_for(member_name: str) -> Optional[Callable[[ServiceContext, ServiceRequest], str]]:
+        """*_pick_for()* return a kind-dispatch picker for the entry member; None elsewhere (falls back to atomic's default Jackson pick)."""
         if member_name != entry_name or not kind_to_target:
             return None
 
