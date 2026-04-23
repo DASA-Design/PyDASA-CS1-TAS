@@ -67,6 +67,7 @@ class TestMountAtomicService:
 
     @pytest.mark.asyncio
     async def test_terminal_returns_success_and_logs_one_row(self):
+        """*test_terminal_returns_success_and_logs_one_row()* an atomic with no outbound targets returns `success=True / message="terminal"` and appends exactly one log row."""
         _s = _spec()
         _app = self._make_app(_s)
         _transport = httpx.ASGITransport(app=_app)
@@ -83,6 +84,7 @@ class TestMountAtomicService:
 
     @pytest.mark.asyncio
     async def test_epsilon_one_always_business_fails(self):
+        """*test_epsilon_one_always_business_fails()* `epsilon=1.0` forces every call to return HTTP 200 with `body.success=False / message="bernoulli failure"`."""
         _s = _spec(epsilon=1.0)
         _app = self._make_app(_s)
         _transport = httpx.ASGITransport(app=_app)
@@ -100,6 +102,7 @@ class TestMountAtomicService:
 
     @pytest.mark.asyncio
     async def test_epsilon_zero_never_fails(self):
+        """*test_epsilon_zero_never_fails()* `epsilon=0.0` makes every response succeed; run 20 calls to confirm the Bernoulli never fires at the floor."""
         _s = _spec(epsilon=0.0)
         _app = self._make_app(_s)
         _transport = httpx.ASGITransport(app=_app)
@@ -113,6 +116,7 @@ class TestMountAtomicService:
 
     @pytest.mark.asyncio
     async def test_non_terminal_forwards_to_single_target(self):
+        """*test_non_terminal_forwards_to_single_target()* a non-empty routing row of one `(target, weight=1.0)` pair forwards exactly one call to that target via `external_forward`."""
         _s = _spec()
         _calls: List[Tuple[str, str]] = []
         _app = self._make_app(_s,

@@ -3,27 +3,14 @@
 Module services/atomic.py
 =========================
 
-Atomic-service module (no class). One function,
-`mount_atomic_service`, attaches a handler to a FastAPI app. The
-handler sleeps for the simulated service time, draws a Bernoulli at
-rate `epsilon`, picks a routing target, and forwards. The whole
-thing is wrapped with `@logger(ctx)` so one CSV row lands in
-`ctx.log` per call, and the built handler is stashed on
-`ctx.handler` so composite callers can dispatch siblings in-process
-without going through FastAPI.
+Atomic-service module (no class). One function, `mount_atomic_service`, attaches a handler to a FastAPI app. The handler sleeps for the simulated service time, draws a Bernoulli at rate `epsilon`, picks a routing target, and forwards. The whole thing is wrapped with `@logger(ctx)` so one CSV row lands in `ctx.log` per call, and the built handler is stashed on `ctx.handler` so composite callers can dispatch siblings in-process without going through FastAPI.
 
-Two optional extension points let composite callers (TAS target
-system) reuse this machinery without re-implementing the step order:
+Two optional extension points let composite callers (TAS target system) reuse this machinery without re-implementing the step order:
 
-    - `pick_target`: replace the Jackson-weighted pick with a custom
-      target-picker (e.g. kind-based dispatch). Return `None` to force
-      the terminal branch.
-    - `dispatch`: replace the forward step (e.g. "check an in-process
-      handler dict first; fall back to `external_forward`").
+    - `pick_target`: replace the Jackson-weighted pick with a custom target-picker (e.g. kind-based dispatch). Return `None` to force the terminal branch.
+    - `dispatch`: replace the forward step (e.g. "check an in-process handler dict first; fall back to `external_forward`").
 
-Both default to the plain atomic behaviour used by third-party
-services (MAS / AS / DS). Queueing stays emergent; no admission
-counters or semaphores are simulated.
+Both default to the plain atomic behaviour used by third-party services (MAS / AS / DS). Queueing stays emergent; no admission counters or semaphores are simulated.
 """
 # native python modules
 from __future__ import annotations
@@ -124,6 +111,8 @@ def mount_atomic_service(app: FastAPI,
     async def _route(req: ServiceRequest) -> ServiceResponse:
         return await _handler(req)
 
-    app.add_api_route(route, _route, methods=["POST"],
+    app.add_api_route(route,
+                      _route,
+                      methods=["POST"],
                       response_model=ServiceResponse)
     return _ctx
