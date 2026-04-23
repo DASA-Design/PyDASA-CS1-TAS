@@ -5,7 +5,7 @@ Module analytic.py
 
 Analytic method orchestrator for the CS-01 TAS case study.
 
-Loads a resolved `NetworkConfig`, solves the Jackson network in closed form via M/M/c/K at each node, emits node + network metrics as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict alongside.
+Loads a resolved `NetCfg`, solves the Jackson network in closed form via M/M/c/K at each node, emits node + network metrics as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict alongside.
 
 Public API:
     - `run(adp, prf, scn, wrt)` standard orchestrator contract.
@@ -33,8 +33,8 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 # local modules
-from src.analytic import aggregate_network, check_requirements, solve_network
-from src.io import NetworkConfig, load_profile
+from src.analytic import aggregate_net, check_reqs, solve_network
+from src.io import NetCfg, load_profile
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -42,14 +42,14 @@ _RESULTS_DIR = _ROOT / "data" / "results" / "analytic"
 
 
 def _build_vars_from_nodes(nds: pd.DataFrame,
-                           cfg: NetworkConfig) -> Dict[str, dict]:
+                           cfg: NetCfg) -> Dict[str, dict]:
     """*_build_vars_from_nodes()* turn the solved node DataFrame into a PACS-style `variables` dict.
 
     One entry per artifact; each carries the original config variables plus updated `_setpoint` / `_data` on the output variables (lambda, chi, L, Lq, W, Wq) from the solver. `chi` is the effective throughput `lambda * (1 - epsilon)`.
 
     Args:
         nds (pd.DataFrame): per-node metrics frame produced by `solve_network()`.
-        cfg (NetworkConfig): resolved network configuration; provides the PACS Variable dict for each artifact.
+        cfg (NetCfg): resolved network configuration; provides the PACS Variable dict for each artifact.
 
     Returns:
         Dict[str, dict]: PACS-style `variables` block keyed by artifact key. Each entry carries `name`, `type`, `lambda_z`, `L_z`, `rho`, and a `vars` sub-dict with refreshed setpoints.
@@ -115,7 +115,7 @@ def run(adp: Optional[str] = None,
     Returns:
         Dict[str, Any]: result dict with keys:
 
-            - `config` (NetworkConfig): resolved config (for display).
+            - `config` (NetCfg): resolved config (for display).
             - `nodes` (pd.DataFrame): per-node DataFrame.
             - `network` (pd.DataFrame): network aggregate (one row).
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
@@ -124,8 +124,8 @@ def run(adp: Optional[str] = None,
     # resolve the config then solve the network end-to-end
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
     _nds = solve_network(_cfg)
-    _net = aggregate_network(_nds)
-    _req = check_requirements(_nds)
+    _net = aggregate_net(_nds)
+    _req = check_reqs(_nds)
 
     # write results only when the caller asked for it
     _paths: Dict[str, str] = {}
@@ -141,14 +141,14 @@ def run(adp: Optional[str] = None,
     }
 
 
-def _write_results(cfg: NetworkConfig,
+def _write_results(cfg: NetCfg,
                    nds: pd.DataFrame,
                    net: pd.DataFrame,
                    req: dict) -> Dict[str, str]:
     """*_write_results()* serialises the solver outputs to disk in the PACS-style result envelope.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration.
+        cfg (NetCfg): resolved network configuration.
         nds (pd.DataFrame): per-node metrics frame.
         net (pd.DataFrame): network aggregate frame (one row).
         req (dict): R1 / R2 / R3 verdict dict.

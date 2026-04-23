@@ -15,7 +15,7 @@ Key design choices (see `notes/experiment.md` for rationale):
 
 Public API:
     - `InvocationRecord` one client-side measurement with derived failure flags.
-    - `CascadeConfig` / `RampConfig` / `ClientConfig` dataclasses.
+    - `CascadeCfg` / `RampCfg` / `ClientCfg` dataclasses.
     - `validate_ramp(ramp)` / `build_ramp_cfg(ramp)` config helpers.
     - `ClientSimulator(client, registry, cfg)` wraps an httpx client.
     - `ClientSimulator.run_ramp()` drives the full schedule and returns per-rate probe stats.
@@ -39,8 +39,8 @@ import httpx
 # local modules
 from src.experiment.payload import generate_payload as _generate_payload
 from src.experiment.payload import resolve_size_for_kind as _resolve_size_for_kind
-from src.experiment.registry import ServiceRegistry
-from src.experiment.services import ServiceRequest
+from src.experiment.registry import SvcRegistry
+from src.experiment.services import SvcReq
 
 
 # --- data records ---------------------------------------------------------
@@ -95,8 +95,8 @@ class InvocationRecord:
 
 
 @dataclass
-class CascadeConfig:
-    """*CascadeConfig* when to stop the ramp.
+class CascadeCfg:
+    """*CascadeCfg* when to stop the ramp.
 
     Attributes:
         mode (str): `"rolling"` (threshold over a rolling window) or `"fail_fast"` (stop on any single infra failure).
@@ -112,14 +112,14 @@ class CascadeConfig:
 
 
 @dataclass
-class RampConfig:
-    """*RampConfig* the rate schedule + per-rate probe knobs + cascade rule.
+class RampCfg:
+    """*RampCfg* the rate schedule + per-rate probe knobs + cascade rule.
 
     Attributes:
         min_samples_per_kind (int): CLT floor; each probe runs until every kind has at least this many successful responses.
         max_probe_window_s (float): safety timeout per probe, in seconds.
         rates (List[float]): monotonically increasing list of target rates (req/s).
-        cascade (CascadeConfig): cascade-detection rule applied across probes.
+        cascade (CascadeCfg): cascade-detection rule applied across probes.
     """
 
     min_samples_per_kind: int = 32
@@ -130,12 +130,12 @@ class RampConfig:
         1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0
     ])
 
-    cascade: CascadeConfig = field(default_factory=CascadeConfig)
+    cascade: CascadeCfg = field(default_factory=CascadeCfg)
 
 
 @dataclass
-class ClientConfig:
-    """*ClientConfig* full client runtime config.
+class ClientCfg:
+    """*ClientCfg* full client runtime config.
 
     `kind_weights` maps kind labels (arbitrary strings chosen at the launcher level when it inspects `TAS_{1}`'s routing row) to probabilities summing to 1.
 
@@ -145,7 +145,7 @@ class ClientConfig:
         request_size_bytes (int): fallback size used when `request_sizes_by_kind` has no entry for a kind.
         request_sizes_by_kind (Dict[str, int]): FR-2.3 per-kind payload-size map, read from the method config's `request_size_bytes` block. Keys either match kind labels exactly (e.g. `TAS_{2}`) or use the `<kind>_request` alias form (e.g. `analyse_request`); `resolve_size_for_kind()` resolves both.
         kind_weights (Dict[str, float]): probability mass per request kind for client-side sampling.
-        ramp (RampConfig): rate schedule + cascade rule.
+        ramp (RampCfg): rate schedule + cascade rule.
     """
 
     entry_service: str = "TAS_{1}"
@@ -158,7 +158,7 @@ class ClientConfig:
 
     kind_weights: Dict[str, float] = field(default_factory=dict)
 
-    ramp: RampConfig = field(default_factory=RampConfig)
+    ramp: RampCfg = field(default_factory=RampCfg)
 
 
 # --- validation helpers ---------------------------------------------------
@@ -204,7 +204,8 @@ def validate_ramp(ramp: Dict[str, Any]) -> None:
     _cas = ramp.get("cascade", {})
     _mode = _cas.get("mode", "rolling")
     if _mode not in ("rolling", "fail_fast"):
-        raise ValueError(f"cascade.mode must be 'rolling' or 'fail_fast', got {_mode!r}")
+        raise ValueError(
+            f"cascade.mode must be 'rolling' or 'fail_fast', got {_mode!r}")
     if _mode == "rolling":
         _w = int(_cas.get("window", 50))
         _t = float(_cas.get("threshold", 0.10))
@@ -214,8 +215,8 @@ def validate_ramp(ramp: Dict[str, Any]) -> None:
             raise ValueError(f"cascade.threshold must be in (0, 1), got {_t}")
 
 
-def build_ramp_cfg(ramp: Dict[str, Any]) -> RampConfig:
-    """*build_ramp_cfg()* convert the raw `ramp` dict into a `RampConfig`.
+def build_ramp_cfg(ramp: Dict[str, Any]) -> RampCfg:
+    """*build_ramp_cfg()* convert the raw `ramp` dict into a `RampCfg`.
 
     Validates first via `validate_ramp`.
 
@@ -226,15 +227,15 @@ def build_ramp_cfg(ramp: Dict[str, Any]) -> RampConfig:
         ValueError: propagated from `validate_ramp`.
 
     Returns:
-        RampConfig: populated ramp config.
+        RampCfg: populated ramp config.
     """
     validate_ramp(ramp)
     _cas = ramp.get("cascade", {})
-    return RampConfig(
+    return RampCfg(
         min_samples_per_kind=int(ramp.get("min_samples_per_kind", 32)),
         max_probe_window_s=float(ramp.get("max_probe_window_s", 60.0)),
         rates=[float(_r) for _r in ramp.get("rates", [])],
-        cascade=CascadeConfig(
+        cascade=CascadeCfg(
             mode=_cas.get("mode", "rolling"),
             threshold=float(_cas.get("threshold", 0.10)),
             window=int(_cas.get("window", 50)),
@@ -256,7 +257,7 @@ class _CascadeDetector:
         trip_reason (Optional[str]): human-readable trip cause, or `None`.
     """
 
-    def __init__(self, cfg: CascadeConfig):
+    def __init__(self, cfg: CascadeCfg):
         """*__init__()* bind the cascade rule and set up the rolling window."""
         self._cfg = cfg
         self._window: Deque[bool] = deque(maxlen=cfg.window)
@@ -301,19 +302,19 @@ class ClientSimulator:
 
     Attributes:
         _client (httpx.AsyncClient): shared client (routed to the in-process mesh or a real TCP target).
-        _registry (ServiceRegistry): service-name to URL resolver.
-        _cfg (ClientConfig): static runtime config.
+        _registry (SvcRegistry): service-name to URL resolver.
+        _cfg (ClientCfg): static runtime config.
     """
 
     def __init__(self, client: httpx.AsyncClient,
-                 registry: ServiceRegistry,
-                 cfg: ClientConfig):
+                 registry: SvcRegistry,
+                 cfg: ClientCfg):
         """*__init__()* bind httpx client + registry + config; normalise kind weights.
 
         Args:
             client (httpx.AsyncClient): already-configured async client.
-            registry (ServiceRegistry): resolver for `cfg.entry_service`.
-            cfg (ClientConfig): runtime config.
+            registry (SvcRegistry): resolver for `cfg.entry_service`.
+            cfg (ClientCfg): runtime config.
 
         Raises:
             ValueError: if `cfg.kind_weights` sums to <= 0.
@@ -327,7 +328,7 @@ class ClientSimulator:
         _kinds = sorted(cfg.kind_weights.keys())
         _total = sum(cfg.kind_weights[_k] for _k in _kinds)
         if _total <= 0:
-            raise ValueError("ClientConfig.kind_weights must sum to > 0")
+            raise ValueError("ClientCfg.kind_weights must sum to > 0")
         self._kind_names: List[str] = _kinds
         self._kind_weights_norm: List[float] = [
             cfg.kind_weights[_k] / _total for _k in _kinds
@@ -342,7 +343,7 @@ class ClientSimulator:
     async def _send_one(self, kind: str) -> InvocationRecord:
         """*_send_one()* send one kind-tagged request; return an InvocationRecord.
 
-        FR-2.3: generates a real mock payload of the declared per-kind size, attaches it to `ServiceRequest.payload`, and mirrors the byte count in the `X-Request-Size-Bytes` header so downstream services see the same number without re-decoding the body.
+        FR-2.3: generates a real mock payload of the declared per-kind size, attaches it to `SvcReq.payload`, and mirrors the byte count in the `X-Request-Size-Bytes` header so downstream services see the same number without re-decoding the body.
 
         Args:
             kind (str): request kind label; must be a key of the client's weights map.
@@ -359,10 +360,10 @@ class ClientSimulator:
 
         # FR-3.7: derive request_id from the client's seeded RNG rather than an unseeded uuid4(), so two runs at the same config seed produce byte-identical request streams (payload + id)
         _rid = str(uuid.UUID(int=self._rng.getrandbits(128), version=4))
-        _req = ServiceRequest(request_id=_rid,
-                              kind=kind,
-                              size_bytes=_size,
-                              payload=_payload.to_dict())
+        _req = SvcReq(request_id=_rid,
+                      kind=kind,
+                      size_bytes=_size,
+                      payload=_payload.to_dict())
         _url = self._registry.build_invoke_url(self._cfg.entry_service)
         _headers = {"X-Request-Id": _req.request_id,
                     "X-Request-Size-Bytes": str(_size),

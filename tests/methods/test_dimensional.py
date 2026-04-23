@@ -66,7 +66,7 @@ class TestDimensionalEndToEnd:
         assert len(_arts) == len(_cfg.artifacts)
 
     def test_artifact_keys_match_config(self, _result):
-        """*test_artifact_keys_match_config()* per-artifact block keys line up with the resolved NetworkConfig order."""
+        """*test_artifact_keys_match_config()* per-artifact block keys line up with the resolved NetCfg order."""
         _expected = [_a.key for _a in _result["config"].artifacts]
         assert list(_result["artifacts"].keys()) == _expected
 

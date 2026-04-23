@@ -10,7 +10,7 @@ Unit tests for `src/experiment/services/base.py`:
     - **TestServiceContextRng** per-service seeded RNG draws + log buffer wiring.
     - **TestLogColumns** the frozen CSV schema.
     - **TestMakeBaseApp** bare app + `/healthz` + custom callback.
-    - **TestHttpForward** async `(target, req) -> ServiceResponse` callback over HTTP.
+    - **TestHttpForward** async `(target, req) -> SvcResp` callback over HTTP.
 """
 # testing framework
 import pytest
@@ -19,12 +19,12 @@ import pytest
 import httpx
 
 # modules under test
-from src.experiment.registry import ServiceRegistry
+from src.experiment.registry import SvcRegistry
 from src.experiment.services import (LOG_COLUMNS,
                                      HttpForward,
-                                     ServiceContext,
-                                     ServiceRequest,
-                                     ServiceSpec,
+                                     SvcCtx,
+                                     SvcReq,
+                                     SvcSpec,
                                      derive_seed,
                                      make_base_app)
 
@@ -32,15 +32,15 @@ from src.experiment.services import (LOG_COLUMNS,
 # ---- helpers ------------------------------------------------------------
 
 
-def _spec(**kwargs) -> ServiceSpec:
-    """*_spec()* build a ServiceSpec with sensible defaults; override via kwargs."""
+def _spec(**kwargs) -> SvcSpec:
+    """*_spec()* build a SvcSpec with sensible defaults; override via kwargs."""
     _defaults = dict(name="MAS_{1}", role="atomic", port=8006,
                      mu=1000.0, epsilon=0.0, c=1, K=10, seed=42)
     _defaults.update(kwargs)
-    return ServiceSpec(**_defaults)
+    return SvcSpec(**_defaults)
 
 
-# ---- ServiceSpec --------------------------------------------------------
+# ---- SvcSpec --------------------------------------------------------
 
 
 class TestServiceSpec:
@@ -55,7 +55,7 @@ class TestServiceSpec:
         assert _s.epsilon == 0.05
 
     def test_defaults(self):
-        _s = ServiceSpec(name="X", role="atomic", port=9000,
+        _s = SvcSpec(name="X", role="atomic", port=9000,
                          mu=100.0, epsilon=0.0, c=1, K=10)
         assert _s.seed == 0
         assert _s.mem_per_buffer == 0
@@ -66,7 +66,7 @@ class TestServiceSpec:
         assert _s.buffer_budget_bytes == 4096
 
     def test_headroom_factor_is_1_5(self):
-        assert ServiceSpec.MEM_HEADROOM_FACTOR == 1.5
+        assert SvcSpec.MEM_HEADROOM_FACTOR == 1.5
 
     def test_frozen_dataclass(self):
         _s = _spec()
@@ -94,7 +94,7 @@ class TestDeriveSeed:
         assert 0 <= _s < (1 << 64)
 
 
-# ---- ServiceContext -----------------------------------------------------
+# ---- SvcCtx -----------------------------------------------------
 
 
 class TestServiceContextRng:
@@ -102,25 +102,25 @@ class TestServiceContextRng:
 
     def test_same_seed_same_draw_sequence(self):
         _s = _spec(seed=12345)
-        _a = ServiceContext(spec=_s)
-        _b = ServiceContext(spec=_s)
+        _a = SvcCtx(spec=_s)
+        _b = SvcCtx(spec=_s)
         assert [_a.draw_svc_time() for _ in range(10)] \
             == [_b.draw_svc_time() for _ in range(10)]
 
     def test_different_seed_diverges(self):
-        _a = ServiceContext(spec=_spec(seed=1))
-        _b = ServiceContext(spec=_spec(seed=2))
+        _a = SvcCtx(spec=_spec(seed=1))
+        _b = SvcCtx(spec=_spec(seed=2))
         assert [_a.draw_svc_time() for _ in range(10)] \
             != [_b.draw_svc_time() for _ in range(10)]
 
     def test_fail_draw_reflects_epsilon(self):
-        _a = ServiceContext(spec=_spec(epsilon=0.0, seed=1))
-        _z = ServiceContext(spec=_spec(epsilon=1.0, seed=1))
+        _a = SvcCtx(spec=_spec(epsilon=0.0, seed=1))
+        _z = SvcCtx(spec=_spec(epsilon=1.0, seed=1))
         assert all(_a.draw_eps() is False for _ in range(50))
         assert all(_z.draw_eps() is True for _ in range(50))
 
     def test_log_buffer_starts_empty(self):
-        _ctx = ServiceContext(spec=_spec())
+        _ctx = SvcCtx(spec=_spec())
         assert _ctx.log == []
 
 
@@ -170,11 +170,11 @@ class TestMakeBaseApp:
 
 
 class TestHttpForward:
-    """**TestHttpForward** async `(target, req) -> ServiceResponse` callback over HTTP."""
+    """**TestHttpForward** async `(target, req) -> SvcResp` callback over HTTP."""
 
     def _registry(self):
         """Minimal registry with one third-party + one TAS member."""
-        return ServiceRegistry.from_config({
+        return SvcRegistry.from_config({
             "host": "127.0.0.1",
             "base_port": 9000,
             "service_registry": {
@@ -199,7 +199,7 @@ class TestHttpForward:
 
         _client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
         _fwd = HttpForward(_client, self._registry())
-        _req = ServiceRequest(kind="analyse", size_bytes=256)
+        _req = SvcReq(kind="analyse", size_bytes=256)
         async with _client:
             _resp = await _fwd("MAS_{1}", _req)
         assert _resp.success is True
@@ -222,7 +222,7 @@ class TestHttpForward:
         _client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
         _fwd = HttpForward(_client, self._registry())
         async with _client:
-            await _fwd("TAS_{4}", ServiceRequest())
+            await _fwd("TAS_{4}", SvcReq())
         assert _captured["url"].endswith("/TAS_4/invoke")
 
     @pytest.mark.asyncio
@@ -239,7 +239,7 @@ class TestHttpForward:
         _client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
         _fwd = HttpForward(_client, self._registry())
         async with _client:
-            _resp = await _fwd("MAS_{1}", ServiceRequest())
+            _resp = await _fwd("MAS_{1}", SvcReq())
         assert _resp.success is False
         assert _resp.message == "bernoulli failure"
 
@@ -253,4 +253,4 @@ class TestHttpForward:
         _fwd = HttpForward(_client, self._registry())
         async with _client:
             with pytest.raises(httpx.HTTPStatusError):
-                await _fwd("MAS_{1}", ServiceRequest())
+                await _fwd("MAS_{1}", SvcReq())

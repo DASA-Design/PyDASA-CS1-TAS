@@ -7,17 +7,17 @@ Shape + semantic checks for the orchestrator-output reshapers:
 
     - **TestNodeShape**: `coefs_to_nodes` produces one row per artifact with the expected column set.
     - **TestNetworkShape**: `coefs_to_net` produces a single-row frame with the aggregate coefficients.
-    - **TestDeltaSemantics**: `coefs_delta` gives zero delta on identical inputs and handles mismatched node sets (e.g. 13-node baseline vs 16-node aggregate).
+    - **TestDeltaSemantics**: `compute_coefs_delta` gives zero delta on identical inputs and handles mismatched node sets (e.g. 13-node baseline vs 16-node aggregate).
 """
 # testing framework
 import pytest
 
 # modules under test
 from src.dimensional import (aggregate_arch_coefs,
-                             coefs_delta,
+                             compute_coefs_delta,
                              coefs_to_net,
                              coefs_to_nodes,
-                             network_delta)
+                             compute_net_delta)
 
 
 @pytest.fixture(scope="module")
@@ -85,12 +85,12 @@ class TestNetworkShape:
 
 
 class TestDeltaSemantics:
-    """**TestDeltaSemantics** `coefs_delta` gives zero delta on identical inputs and handles mismatched node sets (13-node baseline vs 16-node aggregate)."""
+    """**TestDeltaSemantics** `compute_coefs_delta` gives zero delta on identical inputs and handles mismatched node sets (13-node baseline vs 16-node aggregate)."""
 
     def test_zero_delta_on_identical_inputs(self, _dim_baseline):
-        """*test_zero_delta_on_identical_inputs()* `coefs_delta(x, x)` returns all-zero columns for every derived coefficient."""
+        """*test_zero_delta_on_identical_inputs()* `compute_coefs_delta(x, x)` returns all-zero columns for every derived coefficient."""
         _nds = coefs_to_nodes(_dim_baseline)
-        _d = coefs_delta(_nds, _nds)
+        _d = compute_coefs_delta(_nds, _nds)
         for _m in ("theta", "sigma", "eta", "phi"):
             assert all(abs(_d[_m]) < 1e-12)
 
@@ -98,14 +98,14 @@ class TestDeltaSemantics:
         """*test_aggregate_delta_uses_intersection()* baseline and aggregate each have 13 artifacts; 3 are swapped (MAS_{3}/AS_{3}/DS_{3} -> MAS_{4}/AS_{4}/DS_{1}). The delta frame keeps only the 10 non-swap nodes."""
         _b = coefs_to_nodes(_dim_baseline)
         _a = coefs_to_nodes(_dim_aggregate)
-        _d = coefs_delta(_b, _a)
+        _d = compute_coefs_delta(_b, _a)
         assert len(_d) == 10
 
     def test_network_delta_single_row(self, _dim_baseline, _dim_aggregate):
-        """*test_network_delta_single_row()* `network_delta` collapses two single-row network frames into one row with the shared coefficient columns."""
+        """*test_network_delta_single_row()* `compute_net_delta` collapses two single-row network frames into one row with the shared coefficient columns."""
         _nb = coefs_to_net(_dim_baseline)
         _na = coefs_to_net(_dim_aggregate)
-        _d = network_delta(_nb, _na)
+        _d = compute_net_delta(_nb, _na)
         assert len(_d) == 1
         assert {"theta", "sigma", "eta", "phi"} <= set(_d.columns)
 

@@ -3,18 +3,18 @@
 Module instances/tas.py
 =======================
 
-CS-01 TAS target-system instance. One parameterised function, `build_tas`, composes six atomic handlers inside a single FastAPI app via `services.composite.mount_composite_service`.
+CS-01 TAS target-system instance. One parameterised function, `build_tas`, composes six atomic handlers inside a single FastAPI app via `services.composite.mount_composite_svc`.
 
 The entry member (`TAS_{1}` by default) runs kind-based dispatch against the client-supplied `kind`; every other member runs Jackson-weighted dispatch on its routing row, or falls through to a terminal `success=True` response when the row is empty.
 
-In-process hops run directly through a shared handler dict (no HTTP for TAS-to-TAS); TAS-to-third-party hops go through the launcher-supplied `external_forward` (typically `HttpForward`). The launcher reaches each member's log through `app.state.tas_components`, a `{name: ServiceContext}` dict attached by `mount_composite_service`.
+In-process hops run directly through a shared handler dict (no HTTP for TAS-to-TAS); TAS-to-third-party hops go through the launcher-supplied `external_forward` (typically `HttpForward`). The launcher reaches each member's log through `app.state.tas_components`, a `{name: SvcCtx}` dict attached by `mount_composite_svc`.
 
 Not a class; parameterised function only. Swap case studies by calling this with different `(specs, routing_rows, kind_to_target, external_forward)` tuples.
 
 Typical usage::
 
     from src.experiment.instances import build_tas
-    from src.experiment.services import HttpForward, ServiceSpec
+    from src.experiment.services import HttpForward, SvcSpec
 
     app = build_tas(specs={"TAS_{1}": s1, "TAS_{2}": s2, ...},
                     routing_rows={"TAS_{1}": [], "TAS_{2}": [("MAS_{1}", 1.0)], ...},
@@ -30,31 +30,31 @@ from typing import Any, Dict, List, Tuple
 from fastapi import FastAPI
 
 # local modules
-from src.experiment.services import (ExternalForwardFn,
-                                     ServiceSpec,
+from src.experiment.services import (ExtFwdFn,
+                                     SvcSpec,
                                      make_base_app,
-                                     mount_composite_service)
+                                     mount_composite_svc)
 
 
-def build_tas(specs: Dict[str, ServiceSpec],
+def build_tas(specs: Dict[str, SvcSpec],
               routing_rows: Dict[str, List[Tuple[str, float]]],
               kind_to_target: Dict[str, str],
-              external_forward: ExternalForwardFn,
+              external_forward: ExtFwdFn,
               *,
               entry_name: str = "TAS_{1}") -> FastAPI:
     """*build_tas()* assemble ONE FastAPI app hosting the six TAS members.
 
-    Publishes a `/healthz` endpoint that enumerates every member and mounts one `/TAS_<i>/invoke` route per member through `mount_composite_service`. The entry member runs kind-based dispatch; the others run Jackson-weighted routing or terminate.
+    Publishes a `/healthz` endpoint that enumerates every member and mounts one `/TAS_<i>/invoke` route per member through `mount_composite_svc`. The entry member runs kind-based dispatch; the others run Jackson-weighted routing or terminate.
 
     Args:
-        specs (Dict[str, ServiceSpec]): spec per TAS member; each drives its own `ServiceContext` (c, K, mu, epsilon, seed, mem_per_buffer).
+        specs (Dict[str, SvcSpec]): spec per TAS member; each drives its own `SvcCtx` (c, K, mu, epsilon, seed, mem_per_buffer).
         routing_rows (Dict[str, List[Tuple[str, float]]]): routing-matrix row per member. Targets may be other TAS members (in-process) or third-party services (HTTP forward).
         kind_to_target (Dict[str, str]): `entry_name`'s kind-to-target map; a missing `kind` raises HTTP 400 inside the composite handler.
-        external_forward (ExternalForwardFn): async `(target, req) -> ServiceResponse` for non-TAS targets. Never invoked for TAS-to-TAS hops.
+        external_forward (ExtFwdFn): async `(target, req) -> SvcResp` for non-TAS targets. Never invoked for TAS-to-TAS hops.
         entry_name (str): which TAS member runs the kind-router. Keyword-only; defaults to `TAS_{1}`.
 
     Returns:
-        FastAPI: assembled app. `app.state.tas_components` exposes the `{name: ServiceContext}` dict so the launcher can flush each member's log independently.
+        FastAPI: assembled app. `app.state.tas_components` exposes the `{name: SvcCtx}` dict so the launcher can flush each member's log independently.
     """
     def _healthz() -> Dict[str, Any]:
         _ctxs = _app.state.tas_components
@@ -70,10 +70,10 @@ def build_tas(specs: Dict[str, ServiceSpec],
 
     _app = make_base_app(title="experiment-service::TAS",
                          healthz_fn=_healthz)
-    mount_composite_service(_app,
-                            specs=specs,
-                            routing_rows=routing_rows,
-                            kind_to_target=kind_to_target,
-                            external_forward=external_forward,
-                            entry_name=entry_name)
+    mount_composite_svc(_app,
+                        specs=specs,
+                        routing_rows=routing_rows,
+                        kind_to_target=kind_to_target,
+                        external_forward=external_forward,
+                        entry_name=entry_name)
     return _app

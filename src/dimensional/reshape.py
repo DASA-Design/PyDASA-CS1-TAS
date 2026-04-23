@@ -8,10 +8,10 @@ Result-envelope reshapers for the dimensional method. Turn the per-artifact dict
 Public API:
     - `coefs_to_nodes(result)` per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
     - `coefs_to_net(result, agg="mean")` single-row DataFrame of network-wide aggregates across artifacts.
-    - `coefs_delta(nds_dflt, nds_other, *, pct=True)` the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
+    - `compute_coefs_delta(nds_dflt, nds_other, *, pct=True)` the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
     - `aggregate_arch_coefs(result, tag="TAS")` PACS- iter2-style architecture-level aggregate (sum first, divide after).
     - `aggregate_sweep_to_arch(sweep_data, tag="TAS")` collapse per-artifact sweep arrays into flat architecture-level arrays.
-    - `network_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
+    - `compute_net_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
 
 *IMPORTANT:* coefficient names drop the artifact subscript here (the symbol `\\theta_{TAS_{1}}` becomes column `theta`) so the plotters see uniform column names across artifacts.
 """
@@ -105,12 +105,12 @@ def coefs_to_net(result: Dict[str, Any],
     return pd.DataFrame([_row])
 
 
-def coefs_delta(nds_dflt: pd.DataFrame,
-                nds_other: pd.DataFrame,
-                *,
-                pct: bool = True,
-                cname: str = "key") -> pd.DataFrame:
-    """*coefs_delta()* computes the per-node coefficient delta between two scenarios.
+def compute_coefs_delta(nds_dflt: pd.DataFrame,
+                        nds_other: pd.DataFrame,
+                        *,
+                        pct: bool = True,
+                        cname: str = "key") -> pd.DataFrame:
+    """*compute_coefs_delta()* computes the per-node coefficient delta between two scenarios.
 
     Args:
         nds_dflt (pd.DataFrame): baseline per-node frame (reference).
@@ -168,7 +168,7 @@ def aggregate_arch_coefs(result: Dict[str, Any],
         - epsilon_arch = 1 - prod(1 - epsilon_i)
 
     Args:
-        result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`. Must carry `config` (a `NetworkConfig`) so raw per-artifact variable setpoints can be read.
+        result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`. Must carry `config` (a `NetCfg`) so raw per-artifact variable setpoints can be read.
         tag (str): architecture subscript to use in the output column keys. Defaults to `"TAS"` so columns become `\\theta_{TAS}`, `\\sigma_{TAS}`, ..., matching the PACS iter2 `\\theta_{PACS}` convention one-for-one.
 
     Returns:
@@ -177,7 +177,7 @@ def aggregate_arch_coefs(result: Dict[str, Any],
     _cfg = result["config"]
     _arts = _cfg.artifacts
 
-    # accumulators across every artifact in the resolved NetworkConfig
+    # accumulators across every artifact in the resolved NetCfg
     _sum_L = 0.0
     _sum_K = 0.0
     _sum_lamW = 0.0
@@ -251,9 +251,9 @@ def aggregate_arch_coefs(result: Dict[str, Any],
 def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
                             *,
                             tag: str = "TAS") -> Dict[str, np.ndarray]:
-    """*aggregate_sweep_to_arch()* collapses per-artifact sweep arrays (from `sweep_architecture`) into flat architecture-level arrays via PACS-iter2 aggregation applied point-by-point.
+    """*aggregate_sweep_to_arch()* collapses per-artifact sweep arrays (from `sweep_arch`) into flat architecture-level arrays via PACS-iter2 aggregation applied point-by-point.
 
-    Expects the per-node arrays to be aligned across artifacts (same row = same whole-network sweep point), as produced by `sweep_architecture`.
+    Expects the per-node arrays to be aligned across artifacts (same row = same whole-network sweep point), as produced by `sweep_arch`.
 
     Aggregation at each sweep index `k`:
 
@@ -264,7 +264,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         - lambda_arch[k] = sum_i lambda_i[k]             # total traffic through the network
 
     Args:
-        sweep_data (Dict[str, Dict[str, np.ndarray]]): nested output from `sweep_architecture`. Every per-artifact block must carry `\\theta_{X}`, `\\sigma_{X}`, `\\eta_{X}`, `c_{X}`, `\\mu_{X}`, `K_{X}`, `\\lambda_{X}` arrays of the same length.
+        sweep_data (Dict[str, Dict[str, np.ndarray]]): nested output from `sweep_arch`. Every per-artifact block must carry `\\theta_{X}`, `\\sigma_{X}`, `\\eta_{X}`, `c_{X}`, `\\mu_{X}`, `K_{X}`, `\\lambda_{X}` arrays of the same length.
         tag (str): architecture subscript applied to the flat output keys. Defaults to `"TAS"` so outputs are `\\theta_{TAS}`, `\\sigma_{TAS}`, ....
 
     Returns:
@@ -304,7 +304,8 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         # reconstruct raw node variables from the stored ratios so we can sum
         _L = _theta * _K                     # theta = L / K  ->  L = theta * K
         _lam_W = _sigma * _L                 # sigma = lam*W / L  ->  lam*W = sigma * L
-        _chi_K = _eta * _mu * _c             # eta = chi*K / (mu*c)  ->  chi*K = eta*mu*c
+        # eta = chi*K / (mu*c)  ->  chi*K = eta*mu*c
+        _chi_K = _eta * _mu * _c
 
         _sum_L += _L
         _sum_K += _K
@@ -314,9 +315,12 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         _sum_lam += _lam
 
     # guard against zero denominators on unstable / empty slices
-    _theta_arch = np.where(_sum_K > 0, _sum_L / np.where(_sum_K > 0, _sum_K, 1.0), 0.0)
-    _sigma_arch = np.where(_sum_L > 0, _sum_lamW / np.where(_sum_L > 0, _sum_L, 1.0), 0.0)
-    _eta_arch = np.where(_sum_mu_c > 0, _sum_chi_K / np.where(_sum_mu_c > 0, _sum_mu_c, 1.0), 0.0)
+    _theta_arch = np.where(_sum_K > 0, _sum_L /
+                           np.where(_sum_K > 0, _sum_K, 1.0), 0.0)
+    _sigma_arch = np.where(_sum_L > 0, _sum_lamW /
+                           np.where(_sum_L > 0, _sum_L, 1.0), 0.0)
+    _eta_arch = np.where(_sum_mu_c > 0, _sum_chi_K /
+                         np.where(_sum_mu_c > 0, _sum_mu_c, 1.0), 0.0)
     # phi = M_act/M_buf = (L*delta)/(K*delta) = L/K = theta under the CS-01 TAS schema
     _phi_arch = _theta_arch
 
@@ -340,11 +344,11 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
     return ans
 
 
-def network_delta(net_dflt: pd.DataFrame,
-                  net_other: pd.DataFrame,
-                  *,
-                  pct: bool = True) -> pd.DataFrame:
-    """*network_delta()* computes the network-wide coefficient delta between two scenarios.
+def compute_net_delta(net_dflt: pd.DataFrame,
+                      net_other: pd.DataFrame,
+                      *,
+                      pct: bool = True) -> pd.DataFrame:
+    """*compute_net_delta()* computes the network-wide coefficient delta between two scenarios.
 
     Args:
         net_dflt (pd.DataFrame): baseline single-row network frame.

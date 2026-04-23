@@ -8,7 +8,7 @@ Configuration-sweep helpers for the dimensional method's yoly notebook.
 Two sweeps, answering different questions:
 
     - `sweep_artifacts(cfg, sweep_grid)` is an INDEPENDENT per-artifact sweep. Each node's lambda is the seeded analytic value; no routing propagation. Answers *"what is the design space of THIS node in isolation?"*. Useful for per-node introspection but not architecture-level analysis.
-    - `sweep_architecture(cfg, sweep_grid, tag="TAS")` is a JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from  `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lambdas(P, f * lambda_z)` redistributes external  arrivals to per-node rates before the M/M/c/K solve; the first node to saturate stops that combo's ramp, since the whole network's instability is dominated by its busiest node.
+    - `sweep_arch(cfg, sweep_grid, tag="TAS")` is a JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from  `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lams(P, f * lambda_z)` redistributes external  arrivals to per-node rates before the M/M/c/K solve; the first node to saturate stops that combo's ramp, since the whole network's instability is dominated by its busiest node.
     - `sweep_artifact(key, vars_block, sweep_grid, ...)` is the underlying single-artifact helper used by `sweep_artifacts`.
 
 All three return dicts shape-compatible with the dc_charts plotters. Coefficients are derived via closed-form directly from the M/M/c/K solver (no PyDASA round-trip):
@@ -30,19 +30,19 @@ from typing import Any, Dict, Iterable, List, Optional
 import numpy as np
 
 # local modules
-from src.analytic.jackson import solve_jackson_lambdas
+from src.analytic.jackson import solve_jackson_lams
 from src.analytic.queues import Queue
-from src.io import NetworkConfig
+from src.io import NetCfg
 
 
 # default utilisation cap; points with rho at or above this are dropped
 _UTIL_THLD_DEFAULT = 0.95
 
 
-def _setpoint(vars_block: Dict[str, Dict[str, Any]],
-              prefix: str,
-              artifact_key: str) -> float:
-    """*_setpoint()* read the `_setpoint` of a variable identified by `<prefix>_{<artifact_key>}`.
+def read_setpoint(vars_block: Dict[str, Dict[str, Any]],
+                  prefix: str,
+                  artifact_key: str) -> float:
+    """*read_setpoint()* read the `_setpoint` of a variable identified by `<prefix>_{<artifact_key>}`.
 
     Args:
         vars_block (Dict[str, Dict[str, Any]]): per-artifact `vars` dict.
@@ -93,8 +93,8 @@ def sweep_artifact(artifact_key: str,
         Dict[str, np.ndarray]: arrays keyed by full LaTeX symbol. Same length across keys; one entry per stable trace point.
     """
     # baselines
-    _mu_base = _setpoint(vars_block, "\\mu", artifact_key)
-    _eps = _setpoint(vars_block, "\\epsilon", artifact_key)
+    _mu_base = read_setpoint(vars_block, "\\mu", artifact_key)
+    _eps = read_setpoint(vars_block, "\\epsilon", artifact_key)
 
     # lambda iteration parameters from the sweep grid (with safe defaults)
     _n_steps = int(sweep_grid.get("lambda_steps", 30))
@@ -175,19 +175,19 @@ def sweep_artifact(artifact_key: str,
     }
 
 
-def sweep_artifacts(cfg: NetworkConfig,
+def sweep_artifacts(cfg: NetCfg,
                     sweep_grid: Dict[str, List[float]],
                     *,
                     util_threshold: float = _UTIL_THLD_DEFAULT,
                     model: str = "M/M/c/K",
                     artifact_filter: Iterable[str] = ()
                     ) -> Dict[str, Dict[str, np.ndarray]]:
-    """*sweep_artifacts()* runs `sweep_artifact` INDEPENDENTLY for every node of a resolved `NetworkConfig` and returns the nested cloud dict consumed by `src.view.dc_charts.plot_yoly_arts_*`.
+    """*sweep_artifacts()* runs `sweep_artifact` INDEPENDENTLY for every node of a resolved `NetCfg` and returns the nested cloud dict consumed by `src.view.dc_charts.plot_yoly_arts_*`.
 
-    Each artifact is swept as if it were an isolated M/M/c/K queue; routing is NOT propagated. For the architecture-level view (where changing one node's design affects everyone else through routing) use `sweep_architecture`.
+    Each artifact is swept as if it were an isolated M/M/c/K queue; routing is NOT propagated. For the architecture-level view (where changing one node's design affects everyone else through routing) use `sweep_arch`.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration for one (profile, scenario) pair.
+        cfg (NetCfg): resolved network configuration for one (profile, scenario) pair.
         sweep_grid (Dict[str, List[float]]): grid declared in `data/config/method/dimensional.json::sweep_grid`.
         util_threshold (float): per-artifact stability cap. Defaults to `0.95`.
         model (str): queue model passed to the `Queue` factory. Defaults to `"M/M/c/K"`.
@@ -212,15 +212,15 @@ def sweep_artifacts(cfg: NetworkConfig,
     return _out
 
 
-def _find_max_stable_lambda_factor(cfg: NetworkConfig,
-                                   mu_vec: np.ndarray,
-                                   c_int: int,
-                                   util_threshold: float,
-                                   iters: int = 40) -> float:
-    """*_find_max_stable_lambda_factor()* binary-searches the max scalar on `cfg.build_lam_z_vec()` that keeps every Jackson-propagated rho below `util_threshold`.
+def _find_max_stable_lam_factor(cfg: NetCfg,
+                                mu_vec: np.ndarray,
+                                c_int: int,
+                                util_threshold: float,
+                                iters: int = 40) -> float:
+    """*_find_max_stable_lam_factor()* binary-searches the max scalar on `cfg.build_lam_z_vec()` that keeps every Jackson-propagated rho below `util_threshold`.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration.
+        cfg (NetCfg): resolved network configuration.
         mu_vec (np.ndarray): per-node service rates AFTER applying `mu_factor`.
         c_int (int): uniform override for the server count across every node.
         util_threshold (float): stability cap.
@@ -238,7 +238,7 @@ def _find_max_stable_lambda_factor(cfg: NetworkConfig,
 
     for _ in range(iters):
         _mid = (_lo + _hi) / 2.0
-        _lams = solve_jackson_lambdas(_P, _mid * _lz)
+        _lams = solve_jackson_lams(_P, _mid * _lz)
         _rhos = _lams / (mu_vec * float(c_int))
         if np.any(_rhos >= util_threshold):
             _hi = _mid
@@ -248,24 +248,24 @@ def _find_max_stable_lambda_factor(cfg: NetworkConfig,
     return float(_lo)
 
 
-def sweep_architecture(cfg: NetworkConfig,
-                       sweep_grid: Dict[str, Any],
-                       *,
-                       util_threshold: Optional[float] = None,
-                       model: str = "M/M/c/K"
-                       ) -> Dict[str, Dict[str, np.ndarray]]:
-    """*sweep_architecture()* Jackson-propagated whole-network sweep; every node's design knobs are overridden uniformly per the grid, routing propagates arrivals, and the external lambda ramps from near zero up to the first-node saturation point.
+def sweep_arch(cfg: NetCfg,
+               sweep_grid: Dict[str, Any],
+               *,
+               util_threshold: Optional[float] = None,
+               model: str = "M/M/c/K"
+               ) -> Dict[str, Dict[str, np.ndarray]]:
+    """*sweep_arch()* Jackson-propagated whole-network sweep; every node's design knobs are overridden uniformly per the grid, routing propagates arrivals, and the external lambda ramps from near zero up to the first-node saturation point.
 
     For each `(mu_factor, c, K)` combo in `sweep_grid`:
 
     1. Scale every node's mu by `mu_factor`.
     2. Binary-search for the maximum external-arrival scale `f_max` that keeps every node below `util_threshold` after Jackson propagation.
     3. Linspace `lambda_steps` factors from `lambda_factor_min * f_max` to `0.999 * f_max`.
-    4. At each factor: `solve_jackson_lambdas(P, f * lambda_z)` redistributes arrivals; solve every node's M/M/c/K with `(lambda_i, mu_factor * mu_i, c, K)`; derive theta/sigma/eta/phi per node.
+    4. At each factor: `solve_jackson_lams(P, f * lambda_z)` redistributes arrivals; solve every node's M/M/c/K with `(lambda_i, mu_factor * mu_i, c, K)`; derive theta/sigma/eta/phi per node.
     5. Return per-artifact arrays (one entry per stable sweep point). Arrays are aligned across artifacts because every point is a whole-network solve.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration.
+        cfg (NetCfg): resolved network configuration.
         sweep_grid (Dict[str, Any]): grid from `data/config/method/dimensional.json::sweep_grid`. Required keys: `mu_factor`, `c`, `K`, `lambda_steps`, `lambda_factor_min`. `util_threshold` read from the grid when not supplied as kwarg.
         util_threshold (Optional[float]): stability cap; overrides the grid value when supplied.
         model (str): queue model. Defaults to `"M/M/c/K"`.
@@ -315,10 +315,10 @@ def sweep_architecture(cfg: NetworkConfig,
                     continue
 
                 # binary-search the max stable external-arrival factor
-                _f_max = _find_max_stable_lambda_factor(cfg,
-                                                        _mu_vec,
-                                                        _c_int,
-                                                        _util)
+                _f_max = _find_max_stable_lam_factor(cfg,
+                                                     _mu_vec,
+                                                     _c_int,
+                                                     _util)
                 if _f_max <= 0.0:
                     continue
 
@@ -328,8 +328,8 @@ def sweep_architecture(cfg: NetworkConfig,
                                        _n_steps)
 
                 for _f in _factors:
-                    _lams = solve_jackson_lambdas(cfg.routing,
-                                                  float(_f) * _lz_base)
+                    _lams = solve_jackson_lams(cfg.routing,
+                                               float(_f) * _lz_base)
 
                     # solve every node; first saturation stops the ramp for this combo
                     _solved: List[Any] = []

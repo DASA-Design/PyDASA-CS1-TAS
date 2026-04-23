@@ -5,7 +5,7 @@ Module config.py
 
 Profile + scenario loader for the CS-01 TAS case study.
 
-Resolves a `(profile, scenario)` selection into a flat `NetworkConfig` by reading the PACS-style JSONs under `data/config/profile/`.
+Resolves a `(profile, scenario)` selection into a flat `NetCfg` by reading the PACS-style JSONs under `data/config/profile/`.
 
 Expected envelope shape::
 
@@ -17,9 +17,9 @@ Expected envelope shape::
 
 Public API:
     - `ArtifactSpec` frozen per-node dataclass with setpoint accessors (`mu`, `c`, `K`, `epsilon`, `d_kb`, `d_bytes`).
-    - `NetworkConfig` normalised view of a resolved (profile, scenario) pair.
+    - `NetCfg` normalised view of a resolved (profile, scenario) pair.
     - `load_profile(adaptation, profile, scenario)` main loader.
-    - `load_method_config(name)` method-config JSON reader.
+    - `load_method_cfg(name)` method-config JSON reader.
     - `load_reference(name)` reference-file JSON reader.
 
 *IMPORTANT:* for the `opti` profile, `_nodes[scenario]` at the three swap slots picks different artifacts per scenario:
@@ -143,8 +143,8 @@ class ArtifactSpec:
 
 
 @dataclass(frozen=True)
-class NetworkConfig:
-    """**NetworkConfig** normalised view of a resolved (profile, scenario) pair.
+class NetCfg:
+    """**NetCfg** normalised view of a resolved (profile, scenario) pair.
 
     `artifacts` is a list of 13 (or 16 for the opti profile) entries in the positional order given by `environments._nodes[scenario]`. `routing` is the matching NxN matrix aligned with that order.
 
@@ -250,8 +250,8 @@ def _read_profile(profile_stem: str) -> Dict[str, Any]:
 
 def load_profile(adaptation: Optional[str] = None,
                  profile: Optional[str] = None,
-                 scenario: Optional[str] = None,) -> NetworkConfig:
-    """*load_profile()* load a resolved `NetworkConfig` for one `(profile, scenario)` pair.
+                 scenario: Optional[str] = None,) -> NetCfg:
+    """*load_profile()* load a resolved `NetCfg` for one `(profile, scenario)` pair.
 
     Args:
         adaptation (Optional[str]): one of `baseline`, `s1`, `s2`, `aggregate`. Maps to `(profile, scenario)` via `_ADAPTATION_TO_SOURCE`.
@@ -262,7 +262,7 @@ def load_profile(adaptation: Optional[str] = None,
         ValueError: when the scenario is not declared in the profile, or when the routing matrix shape does not match the node count.
 
     Returns:
-        NetworkConfig: resolved artifacts plus the aligned routing matrix for the requested scenario.
+        NetCfg: resolved artifacts plus the aligned routing matrix for the requested scenario.
     """
     # resolve user args into a concrete (profile, scenario) pair
     _profile, _scenario = _resolve_source(adaptation, profile, scenario)
@@ -299,16 +299,16 @@ def load_profile(adaptation: Optional[str] = None,
         _msg += f"node count {len(_artifacts)} for scenario {_scenario!r}"
         raise ValueError(_msg)
 
-    _cfg = NetworkConfig(_profile,
-                         _scenario,
-                         _label,
-                         _artifacts,
-                         _routing,)
+    _cfg = NetCfg(_profile,
+                  _scenario,
+                  _label,
+                  _artifacts,
+                  _routing,)
     return _cfg
 
 
-def load_method_config(name: str) -> Dict[str, Any]:
-    """*load_method_config()* load `data/config/method/<name>.json` (e.g. `stochastic`, `experiment`).
+def load_method_cfg(name: str) -> Dict[str, Any]:
+    """*load_method_cfg()* load `data/config/method/<name>.json` (e.g. `stochastic`, `experiment`).
 
     Args:
         name (str): method config file stem.

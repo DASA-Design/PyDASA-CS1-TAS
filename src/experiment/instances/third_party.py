@@ -3,7 +3,7 @@
 Module instances/third_party.py
 ===============================
 
-CS-01 third-party-service instance (MAS / AS / DS). One parameterised function, `build_third_party`, wraps a single atomic handler in a FastAPI app via `services.atomic.mount_atomic_service`. Every MAS / AS / DS gets its own port and its own `/invoke` route; the launcher reaches the per-service log through `app.state.ctx`.
+CS-01 third-party-service instance (MAS / AS / DS). One parameterised function, `build_third_party`, wraps a single atomic handler in a FastAPI app via `services.atomic.mount_atomic_svc`. Every MAS / AS / DS gets its own port and its own `/invoke` route; the launcher reaches the per-service log through `app.state.ctx`.
 
 Terminal services (empty `targets`) return `success` immediately after the simulated service time and the epsilon Bernoulli; non-empty `targets` pick one hop via the seeded RNG and forward through `external_forward` (typically `HttpForward`).
 
@@ -12,10 +12,16 @@ Not a class; parameterised function only. Swap case studies by calling this with
 Typical usage::
 
     from src.experiment.instances import build_third_party
-    from src.experiment.services import HttpForward, ServiceSpec
+    from src.experiment.services import HttpForward, SvcSpec
 
-    spec = ServiceSpec(name="MAS_{1}", role="atomic", port=8006,
-                       mu=500.0, epsilon=0.1, c=2, K=20, seed=42)
+    spec = SvcSpec(name="MAS_{1}",
+                   role="atomic",
+                   port=8006,
+                   mu=500.0,
+                   epsilon=0.1,
+                   c=2,
+                   K=20,
+                   seed=42)
     app = build_third_party(spec, targets=[], external_forward=fwd)
 """
 # native python modules
@@ -27,26 +33,26 @@ from typing import Any, Dict, List, Tuple
 from fastapi import FastAPI
 
 # local modules
-from src.experiment.services import (ExternalForwardFn,
-                                     ServiceSpec,
+from src.experiment.services import (ExtFwdFn,
+                                     SvcSpec,
                                      make_base_app,
-                                     mount_atomic_service)
+                                     mount_atomic_svc)
 
 
-def build_third_party(spec: ServiceSpec,
+def build_third_party(spec: SvcSpec,
                       targets: List[Tuple[str, float]],
-                      external_forward: ExternalForwardFn) -> FastAPI:
+                      external_forward: ExtFwdFn) -> FastAPI:
     """*build_third_party()* assemble one FastAPI app around a MAS / AS / DS handler.
 
-    Attaches the atomic handler at `/invoke` through `mount_atomic_service` and publishes a `/healthz` endpoint that echoes the per-service knobs the launcher needs.
+    Attaches the atomic handler at `/invoke` through `mount_atomic_svc` and publishes a `/healthz` endpoint that echoes the per-service knobs the launcher needs.
 
     Args:
-        spec (ServiceSpec): per-service knobs (name, port, mu, epsilon, c, K, seed, mem_per_buffer).
+        spec (SvcSpec): per-service knobs (name, port, mu, epsilon, c, K, seed, mem_per_buffer).
         targets (List[Tuple[str, float]]): Jackson-weighted outbound routing row in declaration order; empty for terminal services.
-        external_forward (ExternalForwardFn): async `(target, req) -> ServiceResponse`; typically `HttpForward`. Never invoked for terminal services.
+        external_forward (ExtFwdFn): async `(target, req) -> SvcResp`; typically `HttpForward`. Never invoked for terminal services.
 
     Returns:
-        FastAPI: app ready to bind to `spec.port`. `app.state.ctx` exposes the `ServiceContext` so the launcher can flush its log.
+        FastAPI: app ready to bind to `spec.port`. `app.state.ctx` exposes the `SvcCtx` so the launcher can flush its log.
     """
     def _healthz() -> Dict[str, Any]:
         return {"name": spec.name,
@@ -56,6 +62,6 @@ def build_third_party(spec: ServiceSpec,
 
     _app = make_base_app(title=f"experiment-service::{spec.name}",
                          healthz_fn=_healthz)
-    mount_atomic_service(_app, spec, targets, external_forward,
-                         route="/invoke")
+    mount_atomic_svc(_app, spec, targets, external_forward,
+                     route="/invoke")
     return _app

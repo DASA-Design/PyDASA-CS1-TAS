@@ -44,7 +44,7 @@ class MockPayload:
     blob: str
 
     def to_dict(self) -> Dict[str, Any]:
-        """*to_dict()* return a plain dict suitable for `ServiceRequest.payload`."""
+        """*to_dict()* return a plain dict suitable for `SvcReq.payload`."""
         return {"kind": self.kind,
                 "size_bytes": self.size_bytes,
                 "blob": self.blob}

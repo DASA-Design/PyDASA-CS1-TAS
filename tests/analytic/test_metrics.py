@@ -21,8 +21,8 @@ import pytest
 
 # module under test
 from src.analytic.metrics import (
-    aggregate_network,
-    check_requirements,
+    aggregate_net,
+    check_reqs,
 )
 
 
@@ -65,7 +65,7 @@ class TestAggregateNetwork:
             {"lambda": 30.0, "mu": 50.0, "rho": 0.8,
              "L": 2.0, "Lq": 1.0},
         ])
-        _agg = aggregate_network(_nodes).iloc[0]
+        _agg = aggregate_net(_nodes).iloc[0]
 
         # Structural metrics
         assert _agg["nodes"] == 2
@@ -89,7 +89,7 @@ class TestAggregateNetwork:
             {"lambda": 10.0, "W": 0.1, "Wq": 0.05},
             {"lambda": 30.0, "W": 0.5, "Wq": 0.25},
         ])
-        _agg = aggregate_network(_nodes).iloc[0]
+        _agg = aggregate_net(_nodes).iloc[0]
 
         # throughput-weighted means of W and Wq
         assert _agg["W_net"] == pytest.approx(0.40)
@@ -101,7 +101,7 @@ class TestAggregateNetwork:
             {"lambda": 0.0, "W": 1.0, "Wq": 1.0},
             {"lambda": 0.0, "W": 2.0, "Wq": 2.0},
         ])
-        _agg = aggregate_network(_nodes).iloc[0]
+        _agg = aggregate_net(_nodes).iloc[0]
 
         # idle network => no measured waits
         assert _agg["total_throughput"] == pytest.approx(0.0)
@@ -118,7 +118,7 @@ class TestCheckRequirements:
             {"lambda": 10.0, "W": 0.005},
             {"lambda": 20.0, "W": 0.010},
         ])
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
 
         assert _req["R1"]["pass"] is True
         assert _req["R2"]["pass"] is True
@@ -128,7 +128,7 @@ class TestCheckRequirements:
         """*test_r2_fail_triggers_r3_fail()* a single node over the 26 ms response-time threshold fails R2, and R3 must follow."""
         # W = 50 ms, well above the 26 ms threshold
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.050}])
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
 
         assert _req["R1"]["pass"] is True
         assert _req["R2"]["pass"] is False
@@ -143,7 +143,7 @@ class TestCheckRequirements:
             {"lambda": 10.0, "W": 0.001},
         ])
         _nodes["epsilon"] = [0.01, 0.01]
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
 
         assert _req["R1"]["pass"] is False
         assert _req["R2"]["pass"] is True
@@ -156,7 +156,7 @@ class TestCheckRequirements:
         _nodes["epsilon"] = [0.0]
 
         # but we force a failing failure_rate and a failing response_time
-        _req = check_requirements(
+        _req = check_reqs(
             _nodes,
             failure_rate=0.05,      # 5 percent => R1 fails
             response_time=0.100,    # 100 ms   => R2 fails
@@ -170,7 +170,7 @@ class TestCheckRequirements:
     def test_cost_recorded_but_not_thresholded(self):
         """*test_cost_recorded_but_not_thresholded()* R3.value carries whatever `cost` the caller passes in; R3.threshold is always None because R3 is a ranking concern, not a hard gate."""
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
-        _req = check_requirements(_nodes, cost=42.0)
+        _req = check_reqs(_nodes, cost=42.0)
 
         assert _req["R3"]["value"] == pytest.approx(42.0)
         assert _req["R3"]["threshold"] is None
@@ -180,7 +180,7 @@ class TestCheckRequirements:
     def test_verdict_schema(self):
         """*test_verdict_schema()* every verdict dict must expose the full seven-key schema so downstream writers can serialize them uniformly."""
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
 
         # every verdict keeps the full schema (metric/value/threshold/
         # operator/units/pass/notes); operator + units come from the
@@ -194,7 +194,7 @@ class TestCheckRequirements:
 
 
 class TestThresholdsFromReference:
-    """**TestThresholdsFromReference** verifies that the R1 / R2 thresholds consumed by `check_requirements()` match exactly the values declared in `data/reference/baseline.json` (single source of truth), and that the `operator` / `units` metadata flows through into each verdict."""
+    """**TestThresholdsFromReference** verifies that the R1 / R2 thresholds consumed by `check_reqs()` match exactly the values declared in `data/reference/baseline.json` (single source of truth), and that the `operator` / `units` metadata flows through into each verdict."""
 
     def test_r1_threshold_matches_reference_json(self):
         """*test_r1_threshold_matches_reference_json()* the R1 threshold in every verdict must equal the value written in `data/reference/baseline.json`."""
@@ -202,7 +202,7 @@ class TestThresholdsFromReference:
 
         _ref = load_reference("baseline")["requirements"]
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
 
         # verdict threshold == JSON threshold (single source of truth)
         assert _req["R1"]["threshold"] == pytest.approx(_ref["R1"]["threshold"])
@@ -217,7 +217,7 @@ class TestThresholdsFromReference:
 
         _ref = load_reference("baseline")["requirements"]
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
 
         assert _req["R2"]["threshold"] == pytest.approx(_ref["R2"]["threshold"])
         assert _req["R2"]["operator"] == _ref["R2"]["operator"]
@@ -231,5 +231,5 @@ class TestThresholdsFromReference:
         assert _ref["R3"]["threshold"] is None
 
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
-        _req = check_requirements(_nodes)
+        _req = check_reqs(_nodes)
         assert _req["R3"]["threshold"] is None

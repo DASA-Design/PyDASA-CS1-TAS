@@ -23,7 +23,7 @@ sys.path.insert(0, str(_ROOT))
 from src.experiment.payload import (MockPayload,  # noqa: E402
                                     generate_payload,
                                     resolve_size_for_kind)
-from src.io import load_method_config  # noqa: E402
+from src.io import load_method_cfg  # noqa: E402
 
 
 def _banner(s: str) -> None:
@@ -38,7 +38,7 @@ def main() -> None:
     """*main()* walk through every public payload helper with live output."""
     # 1. show the per-kind size map read from the method config
     _banner("1. per-kind payload sizes declared in experiment.json")
-    _mcfg = load_method_config("experiment")
+    _mcfg = load_method_cfg("experiment")
     _sizes = dict(_mcfg.get("request_size_bytes", {}))
     for _k, _v in _sizes.items():
         print(f"  {_k:<20}  {_v} bytes")

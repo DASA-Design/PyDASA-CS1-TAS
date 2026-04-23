@@ -6,9 +6,9 @@ Module test_third_party.py
 Pins the `build_third_party` instance contract: one FastAPI app per
 MAS / AS / DS, atomic handler mounted at `/invoke`, `/healthz`
 echoing the spec knobs, `app.state.ctx` exposing the per-service
-`ServiceContext` (so the launcher can flush its log).
+`SvcCtx` (so the launcher can flush its log).
 
-    - **TestAppStructure** the returned app has `/healthz` + `/invoke` and a `ServiceContext` on `app.state.ctx`.
+    - **TestAppStructure** the returned app has `/healthz` + `/invoke` and a `SvcCtx` on `app.state.ctx`.
     - **TestTerminalService** empty `targets` returns `success=True` after service-time + epsilon; external-forward is never called.
     - **TestExternalForward** non-empty `targets` picks one hop (seeded) and forwards through `external_forward`.
     - **TestBernoulliEpsilon** epsilon = 1.0 always returns `success=False` with `message="bernoulli failure"`; no forward is called.
@@ -26,27 +26,27 @@ import httpx
 # modules under test
 from src.experiment.instances import build_third_party
 from src.experiment.services import (LOG_COLUMNS,
-                                     ServiceRequest,
-                                     ServiceResponse,
-                                     ServiceSpec)
+                                     SvcReq,
+                                     SvcResp,
+                                     SvcSpec)
 
 
 # ---------------------------------------------------------------- helpers
 
 
 def _mas_spec(*, mu: float = 1e9, epsilon: float = 0.0,
-              c: int = 1, K: int = 10, seed: int = 1) -> ServiceSpec:
-    """*_mas_spec()* build a stock `ServiceSpec` for a third-party leaf (MAS_{1}).
+              c: int = 1, K: int = 10, seed: int = 1) -> SvcSpec:
+    """*_mas_spec()* build a stock `SvcSpec` for a third-party leaf (MAS_{1}).
 
     Defaults to `mu=1e9` so the exponential service time collapses to
     near-zero, keeping the test's wall clock dominated by the asyncio
     scheduler rather than by the simulated service.
     """
-    return ServiceSpec(name="MAS_{1}", role="atomic", port=8006,
+    return SvcSpec(name="MAS_{1}", role="atomic", port=8006,
                        mu=mu, epsilon=epsilon, c=c, K=K, seed=seed)
 
 
-async def _no_forward(_target: str, _req: ServiceRequest) -> ServiceResponse:
+async def _no_forward(_target: str, _req: SvcReq) -> SvcResp:
     """*_no_forward()* assertion-raising forward; fails loudly if the test path calls it."""
     raise AssertionError(f"unexpected external forward to {_target!r}")
 
@@ -54,9 +54,9 @@ async def _no_forward(_target: str, _req: ServiceRequest) -> ServiceResponse:
 def _recorded_forward(_calls: List[Tuple[str, str]]):
     """*_recorded_forward()* forward closure that appends `(target, request_id)` to `_calls` and returns success."""
 
-    async def _fwd(target: str, req: ServiceRequest) -> ServiceResponse:
+    async def _fwd(target: str, req: SvcReq) -> SvcResp:
         _calls.append((target, req.request_id))
-        return ServiceResponse(request_id=req.request_id,
+        return SvcResp(request_id=req.request_id,
                                service_name=target,
                                success=True,
                                message="recorded")
@@ -132,7 +132,7 @@ class TestTerminalService:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="analyse", size_bytes=64)
+            _req = SvcReq(kind="analyse", size_bytes=64)
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         _body = _r.json()
@@ -151,7 +151,7 @@ class TestExternalForward:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="analyse", size_bytes=64)
+            _req = SvcReq(kind="analyse", size_bytes=64)
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         assert len(_calls) == 1
@@ -168,7 +168,7 @@ class TestBernoulliEpsilon:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="analyse", size_bytes=64)
+            _req = SvcReq(kind="analyse", size_bytes=64)
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         _body = _r.json()
@@ -187,7 +187,7 @@ class TestLogRow:
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
             for _i in range(3):
-                _req = ServiceRequest(kind="analyse", size_bytes=64)
+                _req = SvcReq(kind="analyse", size_bytes=64)
                 _r = await _c.post("/invoke", json=_req.model_dump())
                 assert _r.status_code == 200
 

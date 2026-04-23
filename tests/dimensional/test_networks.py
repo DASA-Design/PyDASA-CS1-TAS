@@ -5,7 +5,7 @@ Module test_networks.py
 
 Shape + invariant checks for the configuration-sweep helpers in `src.dimensional.networks`. The two sweep shapes (independent per-artifact vs Jackson-propagated) carry different semantics; each test class pins one contract of one helper.
 
-    - **TestSetpoint** `_setpoint()` resolves the PACS-form variable key and raises on misses.
+    - **TestSetpoint** `read_setpoint()` resolves the PACS-form variable key and raises on misses.
     - **TestSweepArtifact** per-artifact independent sweep returns aligned arrays with finite numeric values.
     - **TestSweepArtifacts** walks every artifact, honours `artifact_filter`, and returns a dict keyed by artifact.
     - **TestFindMaxStableLambdaFactor** the binary-search floor respects the utilisation cap.
@@ -20,9 +20,9 @@ import numpy as np
 import pytest
 
 # modules under test
-from src.dimensional.networks import (_find_max_stable_lambda_factor,
-                                      _setpoint,
-                                      sweep_architecture,
+from src.dimensional.networks import (_find_max_stable_lam_factor,
+                                      read_setpoint,
+                                      sweep_arch,
                                       sweep_artifact,
                                       sweep_artifacts)
 from src.io import load_profile
@@ -59,17 +59,17 @@ def _tas1_vars(_cfg):
 
 
 class TestSetpoint:
-    """**TestSetpoint** `_setpoint()` resolves the PACS-form variable key and raises on misses."""
+    """**TestSetpoint** `read_setpoint()` resolves the PACS-form variable key and raises on misses."""
 
     def test_reads_setpoint_value(self, _tas1_vars):
         """*test_reads_setpoint_value()* the lambda setpoint for TAS_{1} baseline is the published 345 req/s entry."""
-        _lam = _setpoint(_tas1_vars, "\\lambda", "TAS_{1}")
+        _lam = read_setpoint(_tas1_vars, "\\lambda", "TAS_{1}")
         assert _lam == pytest.approx(345.0)
 
     def test_missing_prefix_raises(self, _tas1_vars):
         """*test_missing_prefix_raises()* asking for a non-existent LaTeX prefix raises KeyError with the full symbol in the message."""
         with pytest.raises(KeyError, match=r"\\bogus_\{TAS_\{1\}\}"):
-            _setpoint(_tas1_vars, "\\bogus", "TAS_{1}")
+            read_setpoint(_tas1_vars, "\\bogus", "TAS_{1}")
 
 
 class TestSweepArtifact:
@@ -122,15 +122,15 @@ class TestFindMaxStableLambdaFactor:
 
     def test_factor_keeps_every_node_below_cap(self, _cfg):
         """*test_factor_keeps_every_node_below_cap()* at the returned factor every Jackson-propagated rho is below util_threshold."""
-        from src.analytic.jackson import solve_jackson_lambdas
+        from src.analytic.jackson import solve_jackson_lams
 
         _util = 0.95
         _mu = np.array([float(_a.mu) for _a in _cfg.artifacts])
         _c_int = 1
-        _f = _find_max_stable_lambda_factor(_cfg, _mu, _c_int, _util,
+        _f = _find_max_stable_lam_factor(_cfg, _mu, _c_int, _util,
                                             iters=30)
         assert _f > 0
-        _lams = solve_jackson_lambdas(_cfg.routing,
+        _lams = solve_jackson_lams(_cfg.routing,
                                       _f * _cfg.build_lam_z_vec())
         _rhos = _lams / (_mu * float(_c_int))
         # the binary search converges from below, so every node must be
@@ -141,7 +141,7 @@ class TestFindMaxStableLambdaFactor:
         """*test_zero_floor_on_empty_stable_region()* a nonsensically small mu vector has no stable region; factor should bottom out near zero."""
         # mu = 1e-6 everywhere; any positive lambda saturates instantly
         _mu = np.full(len(_cfg.artifacts), 1e-6)
-        _f = _find_max_stable_lambda_factor(_cfg, _mu, 1, 0.95, iters=20)
+        _f = _find_max_stable_lam_factor(_cfg, _mu, 1, 0.95, iters=20)
         # converges toward 0 (binary search from [0, 100] narrows fast)
         assert _f < 1e-3
 
@@ -152,7 +152,7 @@ class TestSweepArchitecture:
     @pytest.fixture(scope="class")
     def _arch(self, _cfg):
         """*_arch()* class-cached architecture sweep; expensive enough to share across tests."""
-        return sweep_architecture(_cfg, _QUICK_GRID)
+        return sweep_arch(_cfg, _QUICK_GRID)
 
     def test_walks_every_artifact(self, _cfg, _arch):
         """*test_walks_every_artifact()* one top-level entry per artifact in the resolved config."""

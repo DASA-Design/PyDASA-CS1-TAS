@@ -6,11 +6,11 @@ Module stochastic.py
 Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case study. Mirrors the analytic method's contract call-for-call so the two can be compared directly downstream.
 
 Public API:
-    - `run(adp, prf, scn, wrt)` loads a resolved `NetworkConfig` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_network`), and returns per-node metrics + network aggregate + R1 / R2 / R3 verdict.
+    - `run(adp, prf, scn, wrt)` loads a resolved `NetCfg` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_net`), and returns per-node metrics + network aggregate + R1 / R2 / R3 verdict.
 
-Aggregation and threshold checks reuse `src.analytic.metrics` (`aggregate_network` / `check_requirements`) since the math is identical across the two methods.
+Aggregation and threshold checks reuse `src.analytic.metrics` (`aggregate_net` / `check_reqs`) since the math is identical across the two methods.
 
-*IMPORTANT:* the engine runs in SimPy SECONDS; the method config declares the horizon and warmup in INVOCATIONS. Conversion happens in `src.stochastic.simulation.solve_network`.
+*IMPORTANT:* the engine runs in SimPy SECONDS; the method config declares the horizon and warmup in INVOCATIONS. Conversion happens in `src.stochastic.simulation.solve_net`.
 
 CLI::
 
@@ -32,9 +32,9 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 # local modules
-from src.analytic.metrics import aggregate_network, check_requirements
-from src.io import NetworkConfig, load_method_config, load_profile
-from src.stochastic import solve_network
+from src.analytic.metrics import aggregate_net, check_reqs
+from src.io import NetCfg, load_method_cfg, load_profile
+from src.stochastic import solve_net
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -60,7 +60,7 @@ def run(adp: Optional[str] = None,
     Returns:
         Dict[str, Any]: result dict with keys:
 
-            - `config` (NetworkConfig): resolved config.
+            - `config` (NetCfg): resolved config.
             - `method_config` (Dict): stochastic method parameters.
             - `nodes` (pd.DataFrame): per-node frame (analytic schema plus `_std` columns).
             - `network` (pd.DataFrame): network aggregate (one row).
@@ -72,12 +72,12 @@ def run(adp: Optional[str] = None,
     if method_cfg is not None:
         _method_cfg = method_cfg
     else:
-        _method_cfg = load_method_config("stochastic")
+        _method_cfg = load_method_cfg("stochastic")
 
     # run the DES engine end-to-end
-    _nds = solve_network(_cfg, _method_cfg)
-    _net = aggregate_network(_nds)
-    _req = check_requirements(_nds)
+    _nds = solve_net(_cfg, _method_cfg)
+    _net = aggregate_net(_nds)
+    _req = check_reqs(_nds)
 
     # write the result envelope when requested
     _paths: Dict[str, str] = {}
@@ -94,7 +94,7 @@ def run(adp: Optional[str] = None,
     }
 
 
-def _write_results(cfg: NetworkConfig,
+def _write_results(cfg: NetCfg,
                    method_cfg: Dict[str, Any],
                    nds: pd.DataFrame,
                    net: pd.DataFrame,
@@ -102,7 +102,7 @@ def _write_results(cfg: NetworkConfig,
     """*_write_results()* serialise the solver outputs to disk in the PyDASA-style envelope used across methods.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration.
+        cfg (NetCfg): resolved network configuration.
         method_cfg (Dict[str, Any]): stochastic method params; copied verbatim into the result envelope so the run is fully self-describing on disk.
         nds (pd.DataFrame): per-node metrics frame.
         net (pd.DataFrame): network aggregate (one row).

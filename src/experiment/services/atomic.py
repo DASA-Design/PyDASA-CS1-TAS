@@ -3,7 +3,7 @@
 Module services/atomic.py
 =========================
 
-Atomic-service module (no class). One function, `mount_atomic_service`, attaches a handler to a FastAPI app. The handler sleeps for the simulated service time, draws a Bernoulli at rate `epsilon`, picks a routing target, and forwards. The whole thing is wrapped with `@logger(ctx)` so one CSV row lands in `ctx.log` per call, and the built handler is stashed on `ctx.handler` so composite callers can dispatch siblings in-process without going through FastAPI.
+Atomic-service module (no class). One function, `mount_atomic_svc`, attaches a handler to a FastAPI app. The handler sleeps for the simulated service time, draws a Bernoulli at rate `epsilon`, picks a routing target, and forwards. The whole thing is wrapped with `@logger(ctx)` so one CSV row lands in `ctx.log` per call, and the built handler is stashed on `ctx.handler` so composite callers can dispatch siblings in-process without going through FastAPI.
 
 Two optional extension points let composite callers (TAS target system) reuse this machinery without re-implementing the step order:
 
@@ -22,41 +22,41 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 from fastapi import FastAPI
 
 # local modules
-from src.experiment.services.base import (ExternalForwardFn,
-                                          ServiceContext,
-                                          ServiceRequest,
-                                          ServiceResponse,
-                                          ServiceSpec)
+from src.experiment.services.base import (ExtFwdFn,
+                                          SvcCtx,
+                                          SvcReq,
+                                          SvcResp,
+                                          SvcSpec)
 from src.experiment.services.instruments import logger
 
 
-PickTargetFn = Callable[[ServiceContext, ServiceRequest], Optional[str]]
-DispatchFn = Callable[[str, ServiceRequest], Awaitable[ServiceResponse]]
+PickTargetFn = Callable[[SvcCtx, SvcReq], Optional[str]]
+DispatchFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 
-def mount_atomic_service(app: FastAPI,
-                         spec: ServiceSpec,
-                         targets: List[Tuple[str, float]],
-                         external_forward: ExternalForwardFn,
-                         *,
-                         route: str = "/invoke",
-                         pick_target: Optional[PickTargetFn] = None,
-                         dispatch: Optional[DispatchFn] = None) -> ServiceContext:
-    """*mount_atomic_service()* attach one POST route running the atomic handler through `@logger`.
+def mount_atomic_svc(app: FastAPI,
+                     spec: SvcSpec,
+                     targets: List[Tuple[str, float]],
+                     external_forward: ExtFwdFn,
+                     *,
+                     route: str = "/invoke",
+                     pick_target: Optional[PickTargetFn] = None,
+                     dispatch: Optional[DispatchFn] = None) -> SvcCtx:
+    """*mount_atomic_svc()* attach one POST route running the atomic handler through `@logger`.
 
     Args:
         app (FastAPI): app to attach the route to.
-        spec (ServiceSpec): per-service knobs.
+        spec (SvcSpec): per-service knobs.
         targets (List[Tuple[str, float]]): Jackson-weighted outbound routing row in declaration order. Empty means the default `pick_target` returns None, routing the request to the terminal branch.
-        external_forward (ExternalForwardFn): async `(target, req) -> ServiceResponse`. Typically an `HttpForward` instance. Used by the default `dispatch`; callers that override `dispatch` may ignore it.
+        external_forward (ExtFwdFn): async `(target, req) -> SvcResp`. Typically an `HttpForward` instance. Used by the default `dispatch`; callers that override `dispatch` may ignore it.
         route (str): URL path. Defaults to `"/invoke"`.
         pick_target (PickTargetFn | None): override for the target-picking step. Receives `(ctx, req)` and returns the target name, or `None` to force the terminal branch. Defaults to a Jackson-weighted pick over `targets`.
-        dispatch (DispatchFn | None): override for the forward step. Receives `(target, req)` and returns the target's `ServiceResponse`. Defaults to `await external_forward(target, req)`.
+        dispatch (DispatchFn | None): override for the forward step. Receives `(target, req)` and returns the target's `SvcResp`. Defaults to `await external_forward(target, req)`.
 
     Returns:
-        ServiceContext: per-service state `(spec, log, rng, handler)`. Attached to `app.state.ctx` so atomic callers can reach `.log` for flushing; composite callers also read `.handler` for in-process sibling dispatch.
+        SvcCtx: per-service state `(spec, log, rng, handler)`. Attached to `app.state.ctx` so atomic callers can reach `.log` for flushing; composite callers also read `.handler` for in-process sibling dispatch.
     """
-    _ctx = ServiceContext(spec=spec)
+    _ctx = SvcCtx(spec=spec)
     app.state.ctx = _ctx
 
     # default Jackson pick closes over `targets` and the ctx RNG
@@ -64,8 +64,8 @@ def mount_atomic_service(app: FastAPI,
     _weights: List[float] = [float(_w) for _, _w in targets]
 
     if pick_target is None:
-        def pick_target(_pctx: ServiceContext,
-                        _preq: ServiceRequest) -> Optional[str]:
+        def pick_target(_pctx: SvcCtx,
+                        _preq: SvcReq) -> Optional[str]:
             if not _names:
                 return None
             return _pctx.rng.choices(_names, weights=_weights, k=1)[0]
@@ -73,11 +73,11 @@ def mount_atomic_service(app: FastAPI,
     # default forward: delegate to the launcher-supplied external_forward
     if dispatch is None:
         async def dispatch(_dtarget: str,
-                           _dreq: ServiceRequest) -> ServiceResponse:
+                           _dreq: SvcReq) -> SvcResp:
             return await external_forward(_dtarget, _dreq)
 
     @logger(_ctx)
-    async def _handler(req: ServiceRequest) -> ServiceResponse:
+    async def _handler(req: SvcReq) -> SvcResp:
         # 1. simulate service time
         _svc = _ctx.draw_svc_time()
         if _svc > 0:
@@ -85,34 +85,34 @@ def mount_atomic_service(app: FastAPI,
 
         # 2. Bernoulli epsilon: local business failure
         if _ctx.draw_eps():
-            return ServiceResponse(request_id=req.request_id,
-                                   service_name=spec.name,
-                                   success=False,
-                                   message="bernoulli failure")
+            return SvcResp(request_id=req.request_id,
+                           service_name=spec.name,
+                           success=False,
+                           message="bernoulli failure")
 
         # 3. pick target; None means terminal
         _target = pick_target(_ctx, req)
         if _target is None:
-            return ServiceResponse(request_id=req.request_id,
-                                   service_name=spec.name,
-                                   success=True,
-                                   message="terminal")
+            return SvcResp(request_id=req.request_id,
+                           service_name=spec.name,
+                           success=True,
+                           message="terminal")
 
         # 4. dispatch to the picked target
         _inner = await dispatch(_target, req)
-        return ServiceResponse(request_id=req.request_id,
-                               service_name=spec.name,
-                               success=_inner.success,
-                               message=_inner.message)
+        return SvcResp(request_id=req.request_id,
+                       service_name=spec.name,
+                       success=_inner.success,
+                       message=_inner.message)
 
     _ctx.handler = _handler
 
     # FastAPI passes request via DI; expose a clean one-arg coroutine
-    async def _route(req: ServiceRequest) -> ServiceResponse:
+    async def _route(req: SvcReq) -> SvcResp:
         return await _handler(req)
 
     app.add_api_route(route,
                       _route,
                       methods=["POST"],
-                      response_model=ServiceResponse)
+                      response_model=SvcResp)
     return _ctx

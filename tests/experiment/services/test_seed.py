@@ -15,13 +15,13 @@ Pins the "single config seed controls every stochastic draw" invariant.
 import pytest
 
 # modules under test
-from src.experiment.services import (ServiceContext,
-                                     ServiceSpec,
+from src.experiment.services import (SvcCtx,
+                                     SvcSpec,
                                      derive_seed)
 
 # downstream tests below use the pre-refactor name `ServiceState`; alias it
-# to the new lightweight `ServiceContext` so assertions keep working.
-ServiceState = ServiceContext
+# to the new lightweight `SvcCtx` so assertions keep working.
+ServiceState = SvcCtx
 
 
 class TestDeriveSeed:
@@ -49,8 +49,8 @@ class TestDeriveSeed:
 class TestServiceStateRNG:
     """**TestServiceStateRNG** per-service RNG is seeded from `spec.seed`; same spec -> identical draw sequence."""
 
-    def _spec(self, name: str, seed: int) -> ServiceSpec:
-        return ServiceSpec(name=name, role="atomic", port=9000,
+    def _spec(self, name: str, seed: int) -> SvcSpec:
+        return SvcSpec(name=name, role="atomic", port=9000,
                            mu=100.0, epsilon=0.1, c=1, K=10,
                            seed=seed)
 
@@ -90,10 +90,10 @@ class TestLauncherThreadsSeed:
     @pytest.mark.asyncio
     async def test_every_service_has_derived_seed(self):
         from src.experiment.launcher import ExperimentLauncher
-        from src.io import load_method_config, load_profile
+        from src.io import load_method_cfg, load_profile
 
         _cfg = load_profile(adaptation="baseline")
-        _mcfg = load_method_config("experiment")
+        _mcfg = load_method_cfg("experiment")
         _root = int(_mcfg["seed"])
 
         async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,

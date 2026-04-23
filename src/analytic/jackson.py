@@ -8,8 +8,8 @@ study. Three layers, kept separate so each can be unit-tested
 independently.
 
 Public API:
-    - `solve_jackson_lambdas(P, lambda_z)` pure linear solve of `(I - P^T) lamb = lamb_z`, returning the per-node effective arrival rates.
-    - `solve_network(cfg)` takes a resolved `NetworkConfig`, builds a `Queue` per artifact with the Jackson-solved `lamb`, calls `calculate_metrics()`, and returns a pandas DataFrame with one row per node.
+    - `solve_jackson_lams(P, lambda_z)` pure linear solve of `(I - P^T) lamb = lamb_z`, returning the per-node effective arrival rates.
+    - `solve_network(cfg)` takes a resolved `NetCfg`, builds a `Queue` per artifact with the Jackson-solved `lamb`, calls `calculate_metrics()`, and returns a pandas DataFrame with one row per node.
     - rho-indexed helpers (`compute_lams_per_artifact`, `compute_rhos_per_artifact`, `invert_rho_to_lam_z`, `build_rho_grid`) drive the inverse direction used by the experiment orchestrator to build the rho-indexed operating-point grid. Since Jackson is linear in lambda_z, the inversion is one division.
 
 *IMPORTANT:* the routing matrix in `cfg.routing` is stored with `row = source, col = dest`, so it is transposed before solving the linear system.
@@ -27,23 +27,23 @@ import pandas as pd
 
 # local modules
 from src.analytic.queues import Queue
-from src.io.config import NetworkConfig
+from src.io.config import NetCfg
 
 
-def solve_jackson_lambdas(P: Union[np.ndarray, List[float]],
-                          lambda_zero: Union[np.ndarray, List[float]]) -> np.ndarray:
-    """*solve_jackson_lambdas()* solves the Jackson traffic equations `(I - P^T) lamb = lamb_z` for the per-node effective arrival rates.
+def solve_jackson_lams(P: Union[np.ndarray, List[float]],
+                       lam_z: Union[np.ndarray, List[float]]) -> np.ndarray:
+    """*solve_jackson_lams()* solves the Jackson traffic equations `(I - P^T) lamb = lamb_z` for the per-node effective arrival rates.
 
     Args:
         P (Union[np.ndarray, List[float]]): `(n, n)` routing probability matrix. `P[i, j]` is the probability of routing from node `i` to node `j`.
-        lambda_zero (Union[np.ndarray, List[float]]): `(n,)` vector of external arrivals per node ($\\lambda_z$).
+        lam_z (Union[np.ndarray, List[float]]): `(n,)` vector of external arrivals per node ($\\lambda_z$).
 
     Returns:
         np.ndarray: `(n,)` array of per-node effective arrival rate ($\\lambda$).
     """
     # coerce inputs to float arrays (accept lists too)
     _P = np.asarray(P, dtype=float)
-    _lz = np.asarray(lambda_zero, dtype=float)
+    _lz = np.asarray(lam_z, dtype=float)
 
     # build the identity of matching shape and solve the linear system
     _I = np.eye(_P.shape[0])
@@ -51,13 +51,13 @@ def solve_jackson_lambdas(P: Union[np.ndarray, List[float]],
     return _lambdas
 
 
-def solve_network(cfg: NetworkConfig) -> pd.DataFrame:
+def solve_network(cfg: NetCfg) -> pd.DataFrame:
     """*solve_network()* solves the open Jackson network for the given scenario and returns per-node metrics as a pandas DataFrame.
 
     For each of the n-artifacts in `cfg`, creates a `Queue` with its declared `type` / $\\mu$ / $c$ / $K$, injects the Jackson-solved $\\lambda$, and calls `calculate_metrics()`. Stops with a clear error if any node comes out unstable ($\\rho \\geq 1$).
 
     Args:
-        cfg (NetworkConfig): resolved network configuration for one (profile, scenario) pair. Provides artifacts, external arrivals, and the routing matrix.
+        cfg (NetCfg): resolved network configuration for one (profile, scenario) pair. Provides artifacts, external arrivals, and the routing matrix.
 
     Raises:
         ValueError: If one or more nodes are unstable under the Jackson-solved arrival rates.
@@ -66,8 +66,8 @@ def solve_network(cfg: NetworkConfig) -> pd.DataFrame:
         pd.DataFrame: one row per artifact with columns `node`, `key`, `name`, `type`, `lambda`, `mu`, `c`, `K`, `rho`, `L`, `Lq`, `W`, `Wq`.
     """
     # solve the traffic equations once for the whole network
-    _lambdas = solve_jackson_lambdas(cfg.routing,
-                                     cfg.build_lam_z_vec())
+    _lambdas = solve_jackson_lams(cfg.routing,
+                                  cfg.build_lam_z_vec())
 
     # accumulators for per-node rows and any unstable nodes found
     _rows: List[dict] = []
@@ -122,14 +122,14 @@ def solve_network(cfg: NetworkConfig) -> pd.DataFrame:
 # --- bottleneck plus scaling). -------------------------------------
 
 
-def compute_lams_per_artifact(cfg: NetworkConfig,
+def compute_lams_per_artifact(cfg: NetCfg,
                               lambda_z: float) -> np.ndarray:
     """*compute_lams_per_artifact()* effective arrival rate per artifact at the given scalar entry rate.
 
-    Scales the profile's `lambda_z_vector()` (the entry-distribution of λ_z across artifacts) by the scalar `lambda_z` so callers can sweep the entry rate without editing the profile, then delegates to `solve_jackson_lambdas` for the forward solve.
+    Scales the profile's `lambda_z_vector()` (the entry-distribution of λ_z across artifacts) by the scalar `lambda_z` so callers can sweep the entry rate without editing the profile, then delegates to `solve_jackson_lams` for the forward solve.
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         lambda_z (float): total external arrival rate at the network entry.
 
     Returns:
@@ -143,18 +143,18 @@ def compute_lams_per_artifact(cfg: NetworkConfig,
         _entry_vec[0] = float(lambda_z)
     else:
         _entry_vec = _lam_z_vec * (float(lambda_z) / _total)
-    return solve_jackson_lambdas(np.asarray(cfg.routing, dtype=float),
-                                 _entry_vec)
+    return solve_jackson_lams(np.asarray(cfg.routing, dtype=float),
+                              _entry_vec)
 
 
-def compute_rhos_per_artifact(cfg: NetworkConfig,
+def compute_rhos_per_artifact(cfg: NetCfg,
                               lambda_z: float) -> np.ndarray:
     """*compute_rhos_per_artifact()* per-artifact utilisation at the given entry rate.
 
     `ρ_i = λ_i / (c_i · μ_i)`. Returns `+inf` for any artifact with zero capacity (not present in well-formed profiles).
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         lambda_z (float): total external arrival rate at the network entry.
 
     Returns:
@@ -167,7 +167,7 @@ def compute_rhos_per_artifact(cfg: NetworkConfig,
     return _rhos
 
 
-def invert_rho_to_lam_z(cfg: NetworkConfig,
+def invert_rho_to_lam_z(cfg: NetCfg,
                         rho_target: float,
                         *,
                         probe_lambda_z: float = 1.0
@@ -177,7 +177,7 @@ def invert_rho_to_lam_z(cfg: NetworkConfig,
     Since Jackson is linear in λ_z, one probe at any positive rate is enough to identify the bottleneck (artifact with the highest ρ per unit λ_z) and the linear scaling factor.
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         rho_target (float): desired bottleneck utilisation in (0, 1).
         probe_lambda_z (float): any positive probe rate; only used to identify the per-unit-λ bottleneck.
 
@@ -192,24 +192,26 @@ def invert_rho_to_lam_z(cfg: NetworkConfig,
     _rhos = compute_rhos_per_artifact(cfg, probe_lambda_z)
 
     if not np.all(np.isfinite(_rhos)):
-        raise ValueError("at least one artifact has non-finite ρ; check μ and c")
+        raise ValueError(
+            "at least one artifact has non-finite ρ; check μ and c")
     _bottleneck = int(np.argmax(_rhos))
     _per_unit = float(_rhos[_bottleneck]) / float(probe_lambda_z)
 
     if _per_unit <= 0:
-        raise ValueError("bottleneck ρ per unit λ_z is non-positive; check routing")
+        raise ValueError(
+            "bottleneck ρ per unit λ_z is non-positive; check routing")
     _lam_z = float(rho_target) / _per_unit
 
     return _lam_z, _bottleneck, _per_unit
 
 
-def build_rho_grid(cfg: NetworkConfig,
+def build_rho_grid(cfg: NetCfg,
                    rho_grid: Sequence[float]
                    ) -> Sequence[Tuple[float, float, int]]:
     """*build_rho_grid()* map a ρ-indexed operating-point grid to the corresponding λ_z values.
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         rho_grid (Sequence[float]): target bottleneck utilisations.
 
     Returns:

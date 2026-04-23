@@ -31,12 +31,12 @@ from fastapi import FastAPI
 
 # local modules
 from src.experiment.instances import build_tas, build_third_party
-from src.experiment.registry import ServiceRegistry
+from src.experiment.registry import SvcRegistry
 from src.experiment.services import (LOG_COLUMNS,
                                      HttpForward,
-                                     ServiceSpec,
+                                     SvcSpec,
                                      derive_seed)
-from src.io import NetworkConfig
+from src.io import NetCfg
 
 
 # --- transport ------------------------------------------------------------
@@ -79,27 +79,27 @@ def _compute_avg_req_size(sizes_by_kind: Dict[str, int]) -> int:
     return int(sum(_vals) / len(_vals))
 
 
-def _build_specs_from_cfg(cfg: NetworkConfig,
-                       registry: ServiceRegistry,
-                       *,
-                       root_seed: int = 0,
-                       avg_request_size_bytes: int = 0
-                       ) -> Dict[str, ServiceSpec]:
-    """*_build_specs_from_cfg()* build one `ServiceSpec` per artifact by pulling `(mu, epsilon, c, K)` from the profile JSON and `(role, port)` from the registry.
+def _build_specs_from_cfg(cfg: NetCfg,
+                          registry: SvcRegistry,
+                          *,
+                          root_seed: int = 0,
+                          avg_request_size_bytes: int = 0
+                          ) -> Dict[str, SvcSpec]:
+    """*_build_specs_from_cfg()* build one `SvcSpec` per artifact by pulling `(mu, epsilon, c, K)` from the profile JSON and `(role, port)` from the registry.
 
     `root_seed` is the single seed from `experiment.json::seed`. It is folded with each service's name via `derive_seed` so every service has a stable, independent RNG stream; one knob in JSON controls every stochastic draw in the apparatus.
 
-    `avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`). The per-service buffer budget is `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` (1.5x headroom absorbs Pydantic + FastAPI framing overhead without having to physically re-measure the body bytes). The value lives on `ServiceSpec.mem_per_buffer` so downstream analysis can derive the memory-usage coefficient; no admission-time enforcement is applied here (FR-2.4 was dropped).
+    `avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`). The per-service buffer budget is `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` (1.5x headroom absorbs Pydantic + FastAPI framing overhead without having to physically re-measure the body bytes). The value lives on `SvcSpec.mem_per_buffer` so downstream analysis can derive the memory-usage coefficient; no admission-time enforcement is applied here (FR-2.4 was dropped).
     """
-    _specs: Dict[str, ServiceSpec] = {}
-    _headroom = ServiceSpec.MEM_HEADROOM_FACTOR
+    _specs: Dict[str, SvcSpec] = {}
+    _headroom = SvcSpec.MEM_HEADROOM_FACTOR
     for _a in cfg.artifacts:
         if _a.key not in registry.table:
             # artifact in profile but not in experiment.json registry (e.g. a swap slot inactive for this adaptation); skip silently
             continue
         _entry = registry.table[_a.key]
         _K = int(_a.K)
-        _specs[_a.key] = ServiceSpec(
+        _specs[_a.key] = SvcSpec(
             name=_a.key,
             role=_entry.role,
             port=_entry.port,
@@ -113,7 +113,7 @@ def _build_specs_from_cfg(cfg: NetworkConfig,
     return _specs
 
 
-def _read_routing_row(cfg: NetworkConfig, name: str) -> List[Tuple[str, float]]:
+def _read_routing_row(cfg: NetCfg, name: str) -> List[Tuple[str, float]]:
     """*_read_routing_row()* return `(target_name, probability)` pairs for non-zero entries in `name`'s row, in declaration (column-index) order."""
     _names = [_a.key for _a in cfg.artifacts]
     _idx = _names.index(name)
@@ -126,9 +126,9 @@ def _read_routing_row(cfg: NetworkConfig, name: str) -> List[Tuple[str, float]]:
     return _out
 
 
-def _build_router_kind_map(cfg: NetworkConfig,
-                     name: str
-                     ) -> Tuple[Dict[str, str], Dict[str, float]]:
+def _build_router_kind_map(cfg: NetCfg,
+                           name: str
+                           ) -> Tuple[Dict[str, str], Dict[str, float]]:
     """*_build_router_kind_map()* build `(kind_to_target, kind_weights)` for a router composite.
 
     Kind label == target artifact name (simplest, self-documenting). Weights normalise probabilities to sum to 1 across the row's non-zero entries.
@@ -158,20 +158,20 @@ class ExperimentLauncher:
     Use via `async with launcher:` to bind setup / teardown to context lifetime.
 
     Attributes:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         method_cfg (Dict[str, Any]): loaded `experiment.json`.
         adaptation (str): one of `"baseline"`, `"s1"`, `"s2"`, `"aggregate"`.
         base_port_override (int): override `method_cfg["base_port"]`; 0 means "use the config value". Useful for parallel test runs.
     """
 
-    cfg: NetworkConfig
+    cfg: NetCfg
     method_cfg: Dict[str, Any]
     adaptation: str
     base_port_override: int = 0
 
     # populated on __aenter__
-    registry: Optional[ServiceRegistry] = None
-    specs: Dict[str, ServiceSpec] = field(default_factory=dict)
+    registry: Optional[SvcRegistry] = None
+    specs: Dict[str, SvcSpec] = field(default_factory=dict)
     apps: Dict[str, FastAPI] = field(default_factory=dict)
     client: Optional[httpx.AsyncClient] = None
     _transport: Optional[_MultiASGITransport] = None
@@ -180,13 +180,14 @@ class ExperimentLauncher:
 
     async def __aenter__(self) -> "ExperimentLauncher":
         # 1. registry + per-artifact specs. The single `experiment.json::seed` is folded with each service name so every service has a stable, independent RNG seed derived from the one config knob. `mem_per_buffer = K * avg_request_size * 1.5` is baked into each spec so the memory-usage coefficient is derivable downstream (no admission-time enforcement; FR-2.4 dropped).
-        self.registry = ServiceRegistry.from_config(
+        self.registry = SvcRegistry.from_config(
             self.method_cfg, base_port_override=self.base_port_override)
         _root_seed = int(self.method_cfg.get("seed", 0))
-        _avg_size = _compute_avg_req_size(self.method_cfg.get("request_size_bytes", {}))
+        _avg_size = _compute_avg_req_size(
+            self.method_cfg.get("request_size_bytes", {}))
         self.specs = _build_specs_from_cfg(self.cfg, self.registry,
-                                        root_seed=_root_seed,
-                                        avg_request_size_bytes=_avg_size)
+                                           root_seed=_root_seed,
+                                           avg_request_size_bytes=_avg_size)
 
         # 2. identify the client-facing entry router (TAS_{1} by convention) and derive its kind weights / kind-to-target map from its routing-matrix row. Among composite_client roles (TAS_{1}, TAS_{5}, TAS_{6}), the entry is the one with a non-empty outbound row; TAS_{5} and TAS_{6} are terminal.
         def _is_entry_router(_name: str) -> bool:
@@ -207,19 +208,19 @@ class ExperimentLauncher:
         self.client = httpx.AsyncClient(transport=self._transport,
                                         timeout=httpx.Timeout(10.0))
 
-        # 4. build every service. The TAS target system is ONE FastAPI app hosting six embedded atomic handlers (TAS_{1..6}), built via `build_tas` over `mount_composite_service`. Third-party services (MAS / AS / DS) are built via `build_third_party` over `mount_atomic_service`. Both paths use the same `HttpForward` instance for cross-service HTTP hops.
+        # 4. build every service. The TAS target system is ONE FastAPI app hosting six embedded atomic handlers (TAS_{1..6}), built via `build_tas` over `mount_composite_svc`. Third-party services (MAS / AS / DS) are built via `build_third_party` over `mount_atomic_svc`. Both paths use the same `HttpForward` instance for cross-service HTTP hops.
         _forward = HttpForward(self.client, self.registry)
         _port_to_app: Dict[int, FastAPI] = {}
 
         # 4a. collect the six TAS component specs + their routing rows
-        _tas_specs: Dict[str, ServiceSpec] = {}
+        _tas_specs: Dict[str, SvcSpec] = {}
         _tas_rows: Dict[str, List[Tuple[str, float]]] = {}
         for _name, _spec in self.specs.items():
             if _name.startswith("TAS_"):
                 _tas_specs[_name] = _spec
                 _tas_rows[_name] = _read_routing_row(self.cfg, _name)
 
-        # 4b. one TAS app; every TAS component gets its own `ServiceContext` attached via `mount_composite_service`, exposed as `{name: ServiceContext}` on `app.state.tas_components`.
+        # 4b. one TAS app; every TAS component gets its own `SvcCtx` attached via `mount_composite_svc`, exposed as `{name: SvcCtx}` on `app.state.tas_components`.
         if _tas_specs:
             _tas_app = build_tas(_tas_specs,
                                  _tas_rows,
@@ -232,7 +233,8 @@ class ExperimentLauncher:
                 _tas_port = _tas_specs[_name].port
                 _port_to_app[_tas_port] = _tas_app
             if _tas_port is not None:
-                self._transport._transports[_tas_port] = httpx.ASGITransport(app=_tas_app)
+                self._transport._transports[_tas_port] = httpx.ASGITransport(
+                    app=_tas_app)
 
         # 4c. third-party services; one app per port
         for _name, _spec in self.specs.items():
@@ -242,7 +244,8 @@ class ExperimentLauncher:
             _app = build_third_party(_spec, _targets, _forward)
             self.apps[_name] = _app
             _port_to_app[_spec.port] = _app
-            self._transport._transports[_spec.port] = httpx.ASGITransport(app=_app)
+            self._transport._transports[_spec.port] = httpx.ASGITransport(
+                app=_app)
 
         return self
 
@@ -292,7 +295,8 @@ class ExperimentLauncher:
             if id(_ctx) in _flushed:
                 continue
             _flushed.add(id(_ctx))
-            _fname = _name.replace("{", "_").replace("}", "_").replace(",", "_")
+            _fname = _name.replace(
+                "{", "_").replace("}", "_").replace(",", "_")
             _path = _dir / f"{_fname}.csv"
             _counts[_name] = _ctx.flush_log(_path, LOG_COLUMNS)
         return _counts

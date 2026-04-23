@@ -20,8 +20,8 @@ import pytest
 
 # module under test
 from src.stochastic.simulation import (
-    _model_string,
-    simulate_network,
+    format_model_string,
+    simulate_net,
 )
 
 
@@ -39,9 +39,9 @@ class TestMM1Convergence:
         """*test_rho_L_W_Wq_match_textbook()* lambda=5, mu=10, 3 reps of 1500 sec -> closed-form rho / L / W / Wq within 12 %."""
         # single-node network, no onward routing: P = [[0]]. 3 x 1500 sec
         # gives ~21 000 collected samples at lambda=5, plenty for CLT.
-        _summary = simulate_network(
+        _summary = simulate_net(
             mu=[10.0],
-            lambda_zero=[5.0],
+            lam_z=[5.0],
             c=[1],
             K=[None],
             P=np.array([[0.0]]),
@@ -61,9 +61,9 @@ class TestMM1Convergence:
 
     def test_std_columns_populated(self):
         """*test_std_columns_populated()* the groupby-agg summary must expose non-NaN `_std` columns when reps > 1 so downstream CI bands have a usable sigma."""
-        _summary = simulate_network(
+        _summary = simulate_net(
             mu=[10.0],
-            lambda_zero=[5.0],
+            lam_z=[5.0],
             c=[1],
             K=[None],
             P=np.array([[0.0]]),
@@ -86,7 +86,7 @@ class TestSeededReproducibility:
         """*test_same_seed_same_summary()* two identical calls with `seed=42` must return DataFrames that compare equal cell-for-cell."""
         _args = dict(
             mu=[10.0],
-            lambda_zero=[5.0],
+            lam_z=[5.0],
             c=[1],
             K=[None],
             P=np.array([[0.0]]),
@@ -95,8 +95,8 @@ class TestSeededReproducibility:
             reps=2,
             seed=42,
         )
-        _first = simulate_network(**_args)
-        _second = simulate_network(**_args)
+        _first = simulate_net(**_args)
+        _second = simulate_net(**_args)
 
         # every numeric column must match exactly
         for _col in _first.columns:
@@ -110,9 +110,9 @@ class TestBlockingBoundary:
 
     def test_saturated_system_blocks(self):
         """*test_saturated_system_blocks()* rho ~ 1.5 (arrival rate above service rate) with K=5 must generate blocking."""
-        _summary = simulate_network(
+        _summary = simulate_net(
             mu=[10.0],
-            lambda_zero=[15.0],
+            lam_z=[15.0],
             c=[1],
             K=[5],
             P=np.array([[0.0]]),
@@ -125,9 +125,9 @@ class TestBlockingBoundary:
 
     def test_unloaded_system_no_blocks(self):
         """*test_unloaded_system_no_blocks()* rho ~ 0.05 (very light load) with K=5 must not drop any jobs."""
-        _summary = simulate_network(
+        _summary = simulate_net(
             mu=[10.0],
-            lambda_zero=[0.5],
+            lam_z=[0.5],
             c=[1],
             K=[5],
             P=np.array([[0.0]]),
@@ -144,16 +144,16 @@ class TestModelString:
 
     def test_mm1_unbounded(self):
         """*test_mm1_unbounded()* c=1, K=None -> 'M/M/1'."""
-        assert _model_string(1, None) == "M/M/1"
+        assert format_model_string(1, None) == "M/M/1"
 
     def test_mm1_finite_capacity(self):
         """*test_mm1_finite_capacity()* c=1, K=10 -> 'M/M/1/10'."""
-        assert _model_string(1, 10) == "M/M/1/10"
+        assert format_model_string(1, 10) == "M/M/1/10"
 
     def test_mmc_unbounded(self):
         """*test_mmc_unbounded()* c=3, K=None -> 'M/M/3'."""
-        assert _model_string(3, None) == "M/M/3"
+        assert format_model_string(3, None) == "M/M/3"
 
     def test_mmc_finite_capacity(self):
         """*test_mmc_finite_capacity()* c=2, K=20 -> 'M/M/2/20'."""
-        assert _model_string(2, 20) == "M/M/2/20"
+        assert format_model_string(2, 20) == "M/M/2/20"

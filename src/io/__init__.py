@@ -3,16 +3,16 @@
 
 from src.io.config import (
     ArtifactSpec,
-    NetworkConfig,
+    NetCfg,
     load_profile,
-    load_method_config,
+    load_method_cfg,
     load_reference,
 )
 
 __all__ = [
     "ArtifactSpec",
-    "NetworkConfig",
-    "load_method_config",
+    "NetCfg",
+    "load_method_cfg",
     "load_profile",
     "load_reference",
 ]

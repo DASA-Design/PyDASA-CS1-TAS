@@ -34,9 +34,9 @@ import httpx  # noqa: E402
 from src.experiment.instances import build_tas  # noqa: E402
 from src.experiment.services import (  # noqa: E402
     LOG_COLUMNS,
-    ServiceRequest,
-    ServiceResponse,
-    ServiceSpec,
+    SvcReq,
+    SvcResp,
+    SvcSpec,
 )
 
 
@@ -48,13 +48,20 @@ def _banner(_s: str) -> None:
     print("=" * 72)
 
 
-def _tas_spec(name: str, *, seed: int = 1) -> ServiceSpec:
+def _tas_spec(name: str, *, seed: int = 1) -> SvcSpec:
     """*_tas_spec()* stock TAS-member spec; `mu=1e9` keeps service time near-zero."""
-    return ServiceSpec(name=name, role="composite", port=8001,
-                       mu=1e9, epsilon=0.0, c=1, K=10, seed=seed)
+    _specs = SvcSpec(name=name,
+                     role="tas",
+                     port=8000,
+                     mu=1e9,
+                     epsilon=0.0,
+                     c=1,
+                     K=10,
+                     seed=seed)
+    return _specs
 
 
-async def _no_forward(_target: str, _req: ServiceRequest) -> ServiceResponse:
+async def _no_forward(_target: str, _req: SvcReq) -> SvcResp:
     """*_no_forward()* raise on any call; used by sections that must stay in-process."""
     raise AssertionError(f"unexpected forward to {_target!r}")
 
@@ -62,23 +69,24 @@ async def _no_forward(_target: str, _req: ServiceRequest) -> ServiceResponse:
 def _recorded_forward(_calls: List[Tuple[str, str]]):
     """*_recorded_forward()* build a forward closure that appends `(target, request_id)` to `_calls`."""
 
-    async def _fwd(target: str, req: ServiceRequest) -> ServiceResponse:
+    async def _fwd(target: str, req: SvcReq) -> SvcResp:
         _calls.append((target, req.request_id))
-        return ServiceResponse(request_id=req.request_id,
-                               service_name=target,
-                               success=True,
-                               message="recorded")
+        _res = SvcResp(request_id=req.request_id,
+                       service_name=target,
+                       success=True,
+                       message="recorded")
+        return _res
 
     return _fwd
 
 
 async def _post_entry(_app, _kind: str,
                       _size_bytes: int = 64) -> httpx.Response:
-    """*_post_entry()* POST one `ServiceRequest` to `/TAS_1/invoke` over `ASGITransport`."""
+    """*_post_entry()* POST one `SvcReq` to `/TAS_1/invoke` over `ASGITransport`."""
     _transport = httpx.ASGITransport(app=_app)
     async with httpx.AsyncClient(transport=_transport,
                                  base_url="http://t") as _c:
-        _req = ServiceRequest(kind=_kind, size_bytes=_size_bytes)
+        _req = SvcReq(kind=_kind, size_bytes=_size_bytes)
         return await _c.post("/TAS_1/invoke", json=_req.model_dump())
 
 

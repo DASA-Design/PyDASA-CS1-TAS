@@ -5,7 +5,7 @@ Module dimensional.py
 
 Dimensional method orchestrator for the CS-01 TAS case study.
 
-Walks the 13 (or 16) artifacts in a resolved `NetworkConfig`, builds a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via Buckingham's theorem, applies the operationally meaningful coefficient specs (theta, sigma, eta, phi) from `data/config/method/dimensional.json`, runs a symbolic sensitivity pass at the variable means, and emits a PyDASA-style JSON.
+Walks the 13 (or 16) artifacts in a resolved `NetCfg`, builds a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via Buckingham's theorem, applies the operationally meaningful coefficient specs (theta, sigma, eta, phi) from `data/config/method/dimensional.json`, runs a symbolic sensitivity pass at the variable means, and emits a PyDASA-style JSON.
 
 Public API:
     - `run(adp, prf, scn, wrt)` resolves the profile + method config, loops artifacts, and returns per-artifact `pi_groups`, `coefficients`, `sensitivity` blocks.
@@ -40,7 +40,7 @@ from src.dimensional import (analyse_symbolic,
                              build_engine,
                              build_schema,
                              derive_coefs)
-from src.io import ArtifactSpec, NetworkConfig, load_method_config, load_profile
+from src.io import ArtifactSpec, NetCfg, load_method_cfg, load_profile
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -56,7 +56,7 @@ def _analyse_artifact(artifact: ArtifactSpec,
     Builds an engine from the artifact's Variable dict, derives Pi-groups, applies the named coefficient specs, evaluates setpoints, and runs one symbolic sensitivity pass.
 
     Args:
-        artifact (ArtifactSpec): one resolved artifact from the `NetworkConfig`.
+        artifact (ArtifactSpec): one resolved artifact from the `NetCfg`.
         schema (Schema): framework schema built once for the full run.
         coef_specs (list[dict[str, Any]]): coefficient specs from the method config.
         sens_cfg (dict[str, Any]): sensitivity sub-config keyed by `val_type` and `cat`.
@@ -126,7 +126,7 @@ def run(adp: Optional[str] = None,
     Returns:
         Dict[str, Any]: result dict with keys:
 
-            - `config` (NetworkConfig): resolved config.
+            - `config` (NetCfg): resolved config.
             - `method_config` (Dict): dimensional method parameters.
             - `artifacts` (Dict[str, Dict]): per-artifact analysis blocks keyed by artifact key.
             - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
@@ -136,7 +136,7 @@ def run(adp: Optional[str] = None,
     if method_cfg is not None:
         _mcfg = method_cfg
     else:
-        _mcfg = load_method_config("dimensional")
+        _mcfg = load_method_cfg("dimensional")
 
     # build the framework schema once; reused across all artifacts
     _sch = build_schema(_mcfg["fdus"])
@@ -161,13 +161,13 @@ def run(adp: Optional[str] = None,
     }
 
 
-def _write_results(cfg: NetworkConfig,
+def _write_results(cfg: NetCfg,
                    method_cfg: Dict[str, Any],
                    artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
     """*_write_results()* serialise the dimensional-analysis outputs to disk in the PACS-style result envelope.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration.
+        cfg (NetCfg): resolved network configuration.
         method_cfg (Dict[str, Any]): dimensional method params; copied verbatim into the result envelope so the run is self-describing on disk.
         artifacts (Dict[str, Dict[str, Any]]): per-artifact analysis blocks.
 

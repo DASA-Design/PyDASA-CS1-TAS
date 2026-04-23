@@ -3,7 +3,7 @@
 Module services/instruments.py
 ==============================
 
-Aspect-oriented annotation that records one CSV row per invocation around a handler. Framework-agnostic: works on any async coroutine with signature `(req: ServiceRequest) -> ServiceResponse`. The decorator tracks timestamps and outcome; it does not admit, queue, or gate concurrency.
+Aspect-oriented annotation that records one CSV row per invocation around a handler. Framework-agnostic: works on any async coroutine with signature `(req: SvcReq) -> SvcResp`. The decorator tracks timestamps and outcome; it does not admit, queue, or gate concurrency.
 
 Queue behaviour emerges from FastAPI and asyncio running requests concurrently. We capture only the observable side (receipt, start, end, outcome) so downstream methods can derive rho, L, and W from the recorded rows.
 """
@@ -15,16 +15,16 @@ from functools import wraps
 from typing import Awaitable, Callable
 
 # local modules
-from src.experiment.services.base import (ServiceContext,
-                                          ServiceRequest,
-                                          ServiceResponse)
+from src.experiment.services.base import (SvcCtx,
+                                          SvcReq,
+                                          SvcResp)
 
 
 # signature required by the decorator's wrapped handler
-HandlerFn = Callable[[ServiceRequest], Awaitable[ServiceResponse]]
+HandlerFn = Callable[[SvcReq], Awaitable[SvcResp]]
 
 
-def logger(ctx: ServiceContext) -> Callable[[HandlerFn], HandlerFn]:
+def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
     """*@logger(ctx)* decorator: append one row to `ctx.log` around each call.
 
     Writes per-invocation rows in the frozen `LOG_COLUMNS` shape. The wrapped handler's return value passes through unchanged; its `success` flag is recorded as the local outcome ONLY when the response's `service_name` matches this context. When it does not match, the response came from a downstream, so this row records local success (eps did not fire here) regardless of the rolled-up downstream value.
@@ -32,14 +32,14 @@ def logger(ctx: ServiceContext) -> Callable[[HandlerFn], HandlerFn]:
     If the handler raises, a failure row is appended before the exception propagates so row counts match arrival counts.
 
     Args:
-        ctx (ServiceContext): per-service state carrying `spec`, `log`, and `rng`.
+        ctx (SvcCtx): per-service state carrying `spec`, `log`, and `rng`.
 
     Returns:
         Callable: decorator that wraps a handler coroutine.
     """
     def _decorator(handler: HandlerFn) -> HandlerFn:
         @wraps(handler)
-        async def _wrapped(req: ServiceRequest) -> ServiceResponse:
+        async def _wrapped(req: SvcReq) -> SvcResp:
             _recv_ts = time.time()
 
             # no separate queue-wait phase; start == recv

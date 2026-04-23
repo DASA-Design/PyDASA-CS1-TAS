@@ -36,20 +36,20 @@ import pandas as pd
 
 # local modules
 from src.analytic.jackson import build_rho_grid
-from src.analytic.metrics import aggregate_network, check_requirements
-from src.experiment.client import ClientConfig
+from src.analytic.metrics import aggregate_net, check_reqs
+from src.experiment.client import ClientCfg
 from src.experiment.client import ClientSimulator
 from src.experiment.client import build_ramp_cfg
 from src.experiment.launcher import ExperimentLauncher
 from src.experiment.services import derive_seed
-from src.io import NetworkConfig, load_method_config, load_profile
+from src.io import NetCfg, load_method_cfg, load_profile
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
 
 
-def _build_svc_df_from_logs(cfg: NetworkConfig,
+def _build_svc_df_from_logs(cfg: NetCfg,
                             log_dir: Path,
                             duration_s: float) -> pd.DataFrame:
     """*_build_svc_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs.
@@ -62,7 +62,7 @@ def _build_svc_df_from_logs(cfg: NetworkConfig,
     Both are stored on the DataFrame; downstream R1 checks use `epsilon` only.
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         log_dir (Path): directory carrying `<service>.csv` files.
         duration_s (float): wall-clock duration the measurement covers; used to compute lambda.
 
@@ -125,7 +125,8 @@ def _build_svc_df_from_logs(cfg: NetworkConfig,
 
             # utilisation via c_used_at_start (PASTA: Poisson arrivals see time averages, so arrival-time samples approximate time average)
             if len(_succ) > 0 and "c_used_at_start" in _succ.columns:
-                _used = pd.to_numeric(_succ["c_used_at_start"], errors="coerce")
+                _used = pd.to_numeric(
+                    _succ["c_used_at_start"], errors="coerce")
                 _rho = float(np.nanmean(_used) / max(int(_a.c), 1))
 
         _rows.append({
@@ -149,14 +150,14 @@ def _build_svc_df_from_logs(cfg: NetworkConfig,
     return pd.DataFrame(_rows)
 
 
-async def _run_async(cfg: NetworkConfig,
+async def _run_async(cfg: NetCfg,
                      method_cfg: Dict[str, Any],
                      adp: str,
                      log_dir: Path) -> Dict[str, Any]:
     """*_run_async()* drive one adaptation end-to-end: launch mesh, snapshot effective config (FR-3.3), run ramp, flush logs.
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         method_cfg (Dict[str, Any]): experiment method config.
         adp (str): adaptation label (`baseline` / `s1` / `s2` / `aggregate`).
         log_dir (Path): directory that receives the per-service CSVs and the config snapshot.
@@ -187,7 +188,7 @@ async def _run_async(cfg: NetworkConfig,
                 for (_r, _lz, _b) in _grid
             ]
 
-        _client_cfg = ClientConfig(
+        _client_cfg = ClientCfg(
             entry_service="TAS_{1}",
             seed=_seed,
             request_size_bytes=_req_size,
@@ -251,7 +252,7 @@ def run(adp: Optional[str] = None,
     if method_cfg is not None:
         _mcfg = method_cfg
     else:
-        _mcfg = load_method_config("experiment")
+        _mcfg = load_method_cfg("experiment")
     _adp = adp or "baseline"
 
     # FR-3.8: replicate loop. Per-replicate seed = derive_seed(root, "rep_<k>") using the same FNV-1a machine that seeds every per-service RNG, so replicate seeds are stable across processes and distinct from every per-service seed. R=1 keeps the flat log-dir layout (back-compat).
@@ -286,8 +287,8 @@ def run(adp: Optional[str] = None,
                 _nds = _build_svc_df_from_logs(_cfg, _log_dir,
                                                _run_out["duration_s"])
 
-        _net = aggregate_network(_nds)
-        _req = check_requirements(_nds)
+        _net = aggregate_net(_nds)
+        _req = check_reqs(_nds)
         if wrt:
             _rep_log_dir = str(_log_dir)
         else:
@@ -333,7 +334,7 @@ def run(adp: Optional[str] = None,
     return _ans
 
 
-def _write_results(cfg: NetworkConfig,
+def _write_results(cfg: NetCfg,
                    method_cfg: Dict[str, Any],
                    nds: pd.DataFrame,
                    net: pd.DataFrame,
@@ -342,7 +343,7 @@ def _write_results(cfg: NetworkConfig,
     """*_write_results()* serialise the experiment outputs to the scenario-scoped directory.
 
     Args:
-        cfg (NetworkConfig): resolved profile + scenario.
+        cfg (NetCfg): resolved profile + scenario.
         method_cfg (Dict[str, Any]): experiment method config, copied verbatim into the envelope so the run is self-describing on disk.
         nds (pd.DataFrame): per-service metrics frame.
         net (pd.DataFrame): network aggregate (one row).

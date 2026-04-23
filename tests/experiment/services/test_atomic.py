@@ -19,22 +19,22 @@ import httpx
 from fastapi import FastAPI
 
 # modules under test
-from src.experiment.services import (ServiceRequest,
-                                     ServiceResponse,
-                                     ServiceSpec,
+from src.experiment.services import (SvcReq,
+                                     SvcResp,
+                                     SvcSpec,
                                      make_base_app,
-                                     mount_atomic_service)
+                                     mount_atomic_svc)
 
 
-def _spec(**kwargs) -> ServiceSpec:
-    """*_spec()* build a ServiceSpec with sensible defaults; override via kwargs."""
+def _spec(**kwargs) -> SvcSpec:
+    """*_spec()* build a SvcSpec with sensible defaults; override via kwargs."""
     _defaults = dict(name="MAS_{1}", role="atomic", port=8006,
                      mu=1000.0, epsilon=0.0, c=1, K=10, seed=42)
     _defaults.update(kwargs)
-    return ServiceSpec(**_defaults)
+    return SvcSpec(**_defaults)
 
 
-async def _noop_forward(_target: str, _req: ServiceRequest) -> ServiceResponse:
+async def _noop_forward(_target: str, _req: SvcReq) -> SvcResp:
     """*_noop_forward()* asserts the external-forward hook never fires (used for terminal services)."""
     raise AssertionError(
         f"terminal service must not forward; target={_target!r}")
@@ -42,9 +42,9 @@ async def _noop_forward(_target: str, _req: ServiceRequest) -> ServiceResponse:
 
 def _recorded_forward(calls: List[Tuple[str, str]]):
     """*_recorded_forward()* external-forward stub that logs `(target, request_id)` and returns success."""
-    async def _fwd(target: str, req: ServiceRequest) -> ServiceResponse:
+    async def _fwd(target: str, req: SvcReq) -> SvcResp:
         calls.append((target, req.request_id))
-        return ServiceResponse(request_id=req.request_id,
+        return SvcResp(request_id=req.request_id,
                                service_name=target,
                                success=True,
                                message="recorded")
@@ -54,13 +54,13 @@ def _recorded_forward(calls: List[Tuple[str, str]]):
 class TestMountAtomicService:
     """**TestMountAtomicService** atomic-service module: healthz, terminal path, ε=1 business failure."""
 
-    def _make_app(self, spec: ServiceSpec,
+    def _make_app(self, spec: SvcSpec,
                   targets=None, forward=None) -> FastAPI:
         _app = make_base_app(f"test::{spec.name}",
                              healthz_fn=lambda: {"name": spec.name,
                                                  "role": spec.role,
                                                  "c": spec.c, "K": spec.K})
-        mount_atomic_service(_app, spec,
+        mount_atomic_svc(_app, spec,
                              targets or [],
                              forward or _noop_forward)
         return _app
@@ -73,7 +73,7 @@ class TestMountAtomicService:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="analyse", size_bytes=64)
+            _req = SvcReq(kind="analyse", size_bytes=64)
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         _body = _r.json()
@@ -91,7 +91,7 @@ class TestMountAtomicService:
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
             _tasks = [asyncio.create_task(
-                _c.post("/invoke", json=ServiceRequest().model_dump()))
+                _c.post("/invoke", json=SvcReq().model_dump()))
                 for _ in range(5)]
             _responses = await asyncio.gather(*_tasks)
         for _r in _responses:
@@ -109,7 +109,7 @@ class TestMountAtomicService:
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
             _tasks = [asyncio.create_task(
-                _c.post("/invoke", json=ServiceRequest().model_dump()))
+                _c.post("/invoke", json=SvcReq().model_dump()))
                 for _ in range(20)]
             _responses = await asyncio.gather(*_tasks)
         assert all(_r.json()["success"] for _r in _responses)
@@ -125,7 +125,7 @@ class TestMountAtomicService:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="analyse", size_bytes=64)
+            _req = SvcReq(kind="analyse", size_bytes=64)
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         assert _calls == [("TAS_{4}", _req.request_id)]

@@ -3,7 +3,7 @@
 demo_registry.py
 ================
 
-Show what `ServiceRegistry.from_config(method_cfg)` builds, and how
+Show what `SvcRegistry.from_config(method_cfg)` builds, and how
 `build_invoke_url` / `build_healthz_url` resolve each service name
 into a URL. The six TAS_{i} components share a port and get distinct
 `/TAS_<i>/invoke` routes; third-party services each have their own
@@ -27,8 +27,8 @@ _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
 sys.path.insert(0, str(_ROOT))
 
-from src.experiment.registry import ServiceRegistry  # noqa: E402
-from src.io import load_method_config  # noqa: E402
+from src.experiment.registry import SvcRegistry  # noqa: E402
+from src.io import load_method_cfg  # noqa: E402
 
 
 def _banner(s: str) -> None:
@@ -41,7 +41,7 @@ def _banner(s: str) -> None:
 
 def main() -> None:
     """*main()* walk through every public registry helper with live output."""
-    _mcfg = load_method_config("experiment")
+    _mcfg = load_method_cfg("experiment")
 
     _banner("1. raw registry block from experiment.json")
     print(f"  host        = {_mcfg.get('host')}")
@@ -51,8 +51,8 @@ def main() -> None:
         print(f"    {_name:<14}  offset={_spec['port_offset']}  "
               f"role={_spec['role']!r}")
 
-    _banner("2. ServiceRegistry.from_config() resolves offsets to concrete ports")
-    _reg = ServiceRegistry.from_config(_mcfg)
+    _banner("2. SvcRegistry.from_config() resolves offsets to concrete ports")
+    _reg = SvcRegistry.from_config(_mcfg)
     print(f"  host={_reg.host}  base_port={_reg.base_port}")
     for _name, _entry in _reg.table.items():
         print(f"    {_name:<14}  port={_entry.port}  role={_entry.role!r}")

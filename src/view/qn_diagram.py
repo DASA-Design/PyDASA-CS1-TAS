@@ -424,7 +424,7 @@ def _add_network_summary(ax: plt.Axes,
 
     Args:
         ax: matplotlib axis (graph subplot).
-        net (pd.Series): single row from `aggregate_network()`.
+        net (pd.Series): single row from `aggregate_net()`.
         corner (str): anchor corner; see `_add_param_glossary()`.
     """
     # Each line renders the symbol in bold via `\mathbf{...}` while
@@ -524,7 +524,7 @@ def plot_qn_topology(rout: np.ndarray,
     Args:
         rout (np.ndarray): `(n, n)` routing-probability matrix.
         nds (pd.DataFrame): per-node metrics frame aligned with `rout`. `rho` column drives node colouring when present.
-        net (Optional[pd.DataFrame]): single-row frame from `aggregate_network()`. When given, its values are overlaid as a network-wide summary box on the topology.
+        net (Optional[pd.DataFrame]): single-row frame from `aggregate_net()`. When given, its values are overlaid as a network-wide summary box on the topology.
         nd_names (Optional[List[str]]): per-node display names. Defaults to `nds["key"]` when present, else `"Node {i}"`.
         title (Optional[str]): figure title. Defaults to `"Queue-Network Topology"`.
         file_path (Optional[str]): directory to save the figure into.
@@ -623,10 +623,10 @@ _DIM_COEF_SYMS = {
 # own list via `plot_dim_topology(..., glossary=...)`.
 DIM_GLOSSARY_DEFAULT = [
     "LEGEND",
-    r"$\theta = \lambda / (c\,\mu)$: Occupancy",
-    r"$\sigma = \mu / \lambda$: Service intensity",
-    r"$\eta$: Fault exposure",
-    r"$\phi$: Memory footprint",
+    r"$\theta = L/K$: Occupancy (queue fill ratio)",
+    r"$\sigma = W\lambda/L$: Stall (Little's-law residual; blocking)",
+    r"$\eta = \chi K/(\mu c)$: Effective-yield (utilisation headroom)",
+    r"$\phi = M_{act}/M_{buf}$: Memory-usage (buffer fill)",
 ]
 
 
@@ -636,10 +636,11 @@ def _draw_dim_topology_axis(ax: plt.Axes,
                             nds: pd.DataFrame,
                             nd_names: List[str],
                             *,
-                            color_by: str = "theta",
+                            color_by: str = "eta",
                             edge_label_threshold: float = 0.01,
+                            color_min: Optional[float] = None,
                             color_max: Optional[float] = None) -> None:
-    """*_draw_dim_topology_axis()* draw the dimensionless topology into a given axis; nodes coloured by `color_by` (default `theta`), with a four-line label per node showing every available coefficient.
+    """*_draw_dim_topology_axis()* draw the dimensionless topology into a given axis; nodes coloured by `color_by` using data-driven min-max normalisation, with a compact 2-line label per node showing the artifact key and its $\\theta$ value.
 
     Args:
         ax: matplotlib axis to draw into.
@@ -647,21 +648,26 @@ def _draw_dim_topology_axis(ax: plt.Axes,
         pos (dict): BFS (or similar) layout positions.
         nds (pd.DataFrame): per-node coefficients frame (output of `coefs_to_nodes()`).
         nd_names (List[str]): display names aligned with the graph.
-        color_by (str): column driving the node colour; must be present in `nds`. Defaults to `"theta"`.
+        color_by (str): column driving the node colour. Defaults to `"eta"` (effective-yield), which is unbounded and benefits from min-max normalisation.
         edge_label_threshold (float): routing probabilities below this are drawn without a numeric label.
-        color_max (Optional[float]): shared colour scale for multi-panel plots; defaults to `max(1.0, nds[color_by].max())` so theta-like columns visually saturate at 1.
+        color_min (Optional[float]): shared colour-scale lower bound; defaults to `nds[color_by].min()`.
+        color_max (Optional[float]): shared colour-scale upper bound; defaults to `nds[color_by].max()`.
     """
     _n = len(nd_names)
 
-    # node colours from the selected coefficient; scale uses max(1.0, data.max()) by default so theta visually saturates at 1 (matching the rho convention) while still accommodating columns that exceed 1 (e.g. sigma).
+    # node colours from the selected coefficient. Unlike rho / theta (bounded to [0, 1]), eta can exceed 1, so we normalise across the data's own [min, max] so the hottest node always saturates to red and the coolest to blue regardless of absolute magnitude.
     if color_by in nds.columns:
         _vals = nds[color_by].to_numpy(dtype=float)
-        if color_max is not None:
-            _scale = color_max
+        if color_min is not None:
+            _vmin = color_min
         else:
-            _scale = max(float(_vals.max()), 1.0)
-        _scale = max(_scale, 1e-9)
-        _node_colors = [_TOPOLOGY_CMAP(_v / _scale) for _v in _vals]
+            _vmin = float(_vals.min())
+        if color_max is not None:
+            _vmax = color_max
+        else:
+            _vmax = float(_vals.max())
+        _span = max(_vmax - _vmin, 1e-9)
+        _node_colors = [_TOPOLOGY_CMAP((_v - _vmin) / _span) for _v in _vals]
     else:
         _node_colors = ["skyblue"] * _n
 
@@ -702,20 +708,18 @@ def _draw_dim_topology_axis(ax: plt.Axes,
                                  connectionstyle="arc3,rad=0.2",
                                  ax=ax)
 
-    # node labels: artifact key on line 1, then one line per available coefficient in declared order. Each coefficient line is rendered as mathtext so Greek symbols + subscripts display correctly.
+    # node labels: artifact key on line 1, theta on line 2. Full per-coefficient breakdown lives in the table below; the graph stays readable.
     _labels: dict = {}
     for _i in range(_n):
         _name = nd_names[_i]
         _parts = [rf"$\mathbf{{{_name}}}$"]
-        for _c in _DIM_COEF_COLS:
-            if _c in nds.columns:
-                _sym = _DIM_COEF_SYMS[_c]
-                _val = float(nds[_c].iloc[_i])
-                _parts.append(rf"$\mathbf{{{_sym} = {_val:.2f}}}$")
+        if "theta" in nds.columns:
+            _val = float(nds["theta"].iloc[_i])
+            _parts.append(rf"$\mathbf{{\theta = {_val:.2f}}}$")
         _labels[_i] = "\n".join(_parts)
     nx.draw_networkx_labels(graph, pos,
                             labels=_labels,
-                            font_size=10,
+                            font_size=12,
                             font_weight="bold",
                             font_color=_TEXT_BLACK,
                             ax=ax)
@@ -750,7 +754,8 @@ def _add_dim_node_table(ax: plt.Axes,
             _cells.append(f"{float(_row[_c]):.4f}")
         _rows.append(_cells)
 
-    _col_widths = [0.22] + [0.14] * len(_present_cols)
+    # Component column narrower than a coefficient column; artifact keys are short (`TAS_{1}`, `MAS_{2}`, etc.) so 0.14 covers them while leaving more room for coefficient values.
+    _col_widths = [0.14] + [0.18] * len(_present_cols)
     _table = ax.table(cellText=_rows, loc="center", cellLoc="center",
                       colWidths=_col_widths)
     _table.auto_set_font_size(False)
@@ -763,24 +768,58 @@ def _add_dim_node_table(ax: plt.Axes,
         _table[(0, _j)].set_text_props(weight="bold")
 
 
+def _add_dim_network_summary(ax: plt.Axes,
+                             nds: pd.DataFrame,
+                             *,
+                             corner: str = "upper right") -> None:
+    """*_add_dim_network_summary()* overlay the architecture-wide coefficient averages (mean of each $\\theta$ / $\\sigma$ / $\\eta$ / $\\phi$ column across every component) as a text box in the chosen corner of the graph axis.
+
+    Args:
+        ax: matplotlib axis (graph subplot).
+        nds (pd.DataFrame): per-node coefficients frame. Every present coefficient gets an averaged line; absent columns are skipped.
+        corner (str): anchor corner; see `_add_param_glossary()`.
+    """
+    # Header line matches the queueing summary's "NETWORK" banner for visual parity with the QN view.
+    _lines = [r"$\mathbf{NETWORK}$"]
+    for _c in _DIM_COEF_COLS:
+        if _c in nds.columns:
+            _sym = _DIM_COEF_SYMS[_c]
+            _mean = float(nds[_c].mean())
+            _lines.append(rf"$\mathbf{{\overline{{{_sym}}}}}$: {_mean:.4f}")
+    _text = "\n".join(_lines)
+    _y = 0.98 if "upper" in corner else 0.02
+    _x = 0.98 if "right" in corner else 0.02
+    _va = "top" if "upper" in corner else "bottom"
+    _ha = "right" if "right" in corner else "left"
+    _props = dict(boxstyle="round,pad=0.5", facecolor="lightblue",
+                  alpha=0.85, edgecolor="steelblue")
+    ax.text(_x, _y, _text,
+            transform=ax.transAxes,
+            fontsize=14,
+            color=_TEXT_BLACK,
+            verticalalignment=_va,
+            horizontalalignment=_ha,
+            bbox=_props)
+
+
 def plot_dim_topology(rout: np.ndarray,
                       nds: pd.DataFrame,
                       *,
-                      color_by: str = "theta",
+                      color_by: str = "eta",
                       glossary: Optional[List[str]] = None,
                       nd_names: Optional[List[str]] = None,
                       title: Optional[str] = None,
                       file_path: Optional[str] = None,
                       fname: Optional[str] = None,
                       verbose: bool = False) -> Figure:
-    """*plot_dim_topology()* draw the dimensionless topology for one scenario; nodes coloured by a chosen coefficient column (default `theta`), labelled with every available per-node coefficient, edge labels show routing probabilities, a colourbar tracks the colouring coefficient, a glossary explains the four dimensionless groups, and a per-node coefficient table sits below the graph.
+    """*plot_dim_topology()* draw the dimensionless topology for one scenario; nodes coloured by a chosen coefficient column (default `eta`, min-max normalised), labelled with the artifact key + its $\\theta$ value, edge labels show routing probabilities, a colourbar tracks the colouring coefficient, a network-wide coefficient-average overlay sits top-right, a glossary explains the four dimensionless groups, and a per-node coefficient table sits below the graph.
 
     Mirrors `plot_qn_topology` in layout (3/4 graph + 1/4 table, same BFS layout, same edge style) so the dimensional view and the queueing view align visually side-by-side when compared across a method matrix.
 
     Args:
         rout (np.ndarray): `(n, n)` routing-probability matrix.
         nds (pd.DataFrame): per-node coefficients frame from `src.dimensional.coefs_to_nodes`; expected columns include `key` plus one or more of `theta`, `sigma`, `eta`, `phi`.
-        color_by (str): coefficient column driving node colours. Defaults to `"theta"`.
+        color_by (str): coefficient column driving node colours. Defaults to `"eta"` (effective-yield); normalisation uses the data's own min / max span so the hottest node saturates to red and the coolest to blue.
         glossary (Optional[List[str]]): parameter glossary lines (LaTeX OK). When None, `DIM_GLOSSARY_DEFAULT` is used; pass `[]` to suppress.
         nd_names (Optional[List[str]]): per-node display names. Defaults to `nds["key"]` when present, else `"Node {i}"`.
         title (Optional[str]): figure title. Defaults to `"Dimensionless Topology"`.
@@ -815,19 +854,24 @@ def plot_dim_topology(rout: np.ndarray,
     _draw_dim_topology_axis(_ax_graph, _graph, _pos, nds, nd_names,
                             color_by=color_by)
 
-    # colourbar tracks the colouring coefficient; the scale mirrors
-    # `_draw_dim_topology_axis` so bar and nodes agree
+    # colourbar tracks the colouring coefficient with data-driven min/max so the bar scale matches the node colouring exactly (the chosen coefficient, eta by default, can exceed 1, so a fixed [0,1] cap would distort the colouring).
     if color_by in nds.columns:
         _vals = nds[color_by].to_numpy(dtype=float)
-        _cbar_max = max(float(_vals.max()), 1.0, 1e-9)
+        _vmin = float(_vals.min())
+        _vmax = float(_vals.max())
+        if _vmax <= _vmin:
+            _vmax = _vmin + 1e-9
         _sm = cm.ScalarMappable(cmap=_TOPOLOGY_CMAP,
-                                norm=plt.Normalize(vmin=0.0, vmax=_cbar_max))
+                                norm=plt.Normalize(vmin=_vmin, vmax=_vmax))
         _sm.set_array([])
         _cbar = _fig.colorbar(_sm, ax=_ax_graph, shrink=0.6, pad=0.02)
         _sym = _DIM_COEF_SYMS.get(color_by, color_by)
         _cbar.set_label(rf"${_sym}$ (dimensionless)",
                         color=_TEXT_BLACK, fontsize=14, fontweight="bold")
         _cbar.ax.tick_params(colors=_TEXT_BLACK)
+
+    # architecture-average overlay at top-right (mirrors the queueing view's network-summary box, but reports mean(theta), mean(sigma), mean(eta), mean(phi) across every component).
+    _add_dim_network_summary(_ax_graph, nds, corner="upper right")
 
     # glossary overlay (bottom-right); empty list suppresses
     _gloss = glossary if glossary is not None else DIM_GLOSSARY_DEFAULT
@@ -868,7 +912,7 @@ def plot_qn_topology_grid(routs: List[np.ndarray],
         routs (List[np.ndarray]): per-scenario routing matrices.
         ndss (List[pd.DataFrame]): per-scenario node frames (aligned with `routs` by index).
         names (List[str]): per-scenario display names for subplot titles.
-        nets (Optional[List[pd.DataFrame]]): per-scenario network-wide frames from `aggregate_network()`. When given, each subplot gets a network summary overlay.
+        nets (Optional[List[pd.DataFrame]]): per-scenario network-wide frames from `aggregate_net()`. When given, each subplot gets a network summary overlay.
         glossary (Optional[List[str]]): parameter glossary lines (LaTeX OK) drawn once on the first subplot. When None, no glossary overlay is rendered.
         nd_names (Optional[List[str]]): per-node display names. Defaults to the first frame's `key` column when present.
         title (Optional[str]): overall figure title (suptitle).
@@ -1363,7 +1407,7 @@ def plot_net_bars(nets: List[pd.DataFrame],
     """*plot_net_bars()* grouped-bar chart of network-wide metrics across N scenarios.
 
     Args:
-        nets (List[pd.DataFrame]): per-scenario single-row network frames produced by `aggregate_network()`.
+        nets (List[pd.DataFrame]): per-scenario single-row network frames produced by `aggregate_net()`.
         names (List[str]): per-scenario display names.
         metrics (Optional[List[str]]): columns to plot. Defaults to every numeric column in the first frame.
         labels (Optional[List[str]]): display labels for the metric columns. Defaults to the metric names.

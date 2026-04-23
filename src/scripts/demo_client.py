@@ -6,7 +6,7 @@ demo_client.py
 Show a `ClientSimulator` sending ONE kind-tagged request end-to-end
 through the in-process mesh. Prints:
 
-    - the resolved `ClientConfig` (kind weights, ramp, size map, seed)
+    - the resolved `ClientCfg` (kind weights, ramp, size map, seed)
     - the request that goes out (id, kind, size_bytes, payload blob preview)
     - the headers attached to the HTTP call
     - the response body received
@@ -31,16 +31,16 @@ sys.path.insert(0, str(_ROOT))
 
 import httpx   # noqa: E402
 
-from src.experiment.client import (CascadeConfig,  # noqa: E402
-                                   ClientConfig,
+from src.experiment.client import (CascadeCfg,  # noqa: E402
+                                   ClientCfg,
                                    ClientSimulator,
                                    InvocationRecord,
-                                   RampConfig)
+                                   RampCfg)
 from src.experiment.launcher import ExperimentLauncher  # noqa: E402
 from src.experiment.payload import generate_payload as _generate_payload  # noqa: E402
 from src.experiment.payload import resolve_size_for_kind  # noqa: E402
-from src.experiment.services import ServiceRequest  # noqa: E402
-from src.io import load_method_config, load_profile  # noqa: E402
+from src.experiment.services import SvcReq  # noqa: E402
+from src.io import load_method_cfg, load_profile  # noqa: E402
 
 
 def _banner(s: str) -> None:
@@ -54,7 +54,7 @@ def _banner(s: str) -> None:
 async def _demo() -> None:
     """*_demo()* spin up the launcher, send one request, show the InvocationRecord."""
     _cfg = load_profile(adaptation="baseline")
-    _mcfg = load_method_config("experiment")
+    _mcfg = load_method_cfg("experiment")
     # keep the ramp tiny; we send ONE request manually below so ramp config values do not really matter but must be present to satisfy validation
     _mcfg["ramp"] = {"min_samples_per_kind": 32,
                      "max_probe_window_s": 5.0,
@@ -65,19 +65,19 @@ async def _demo() -> None:
     async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
                                   adaptation="baseline") as _lnc:
         # ---- 1. show the client config the launcher would build ------
-        _banner("1. ClientConfig (seed, entry, kind weights, size-by-kind, ramp)")
+        _banner("1. ClientCfg (seed, entry, kind weights, size-by-kind, ramp)")
         _seed = int(_mcfg["seed"])
         _sizes_by_kind = dict(_mcfg.get("request_size_bytes", {}))
-        _client_cfg = ClientConfig(
+        _client_cfg = ClientCfg(
             entry_service="TAS_{1}",
             seed=_seed,
             request_size_bytes=int(_sizes_by_kind.get("analyse_request", 256)),
             request_sizes_by_kind=_sizes_by_kind,
             kind_weights=dict(_lnc.kind_weights),
-            ramp=RampConfig(min_samples_per_kind=32,
-                            max_probe_window_s=5.0,
-                            rates=[2.0],
-                            cascade=CascadeConfig()),
+            ramp=RampCfg(min_samples_per_kind=32,
+                         max_probe_window_s=5.0,
+                         rates=[2.0],
+                         cascade=CascadeCfg()),
         )
         print(f"  seed            = {_client_cfg.seed}")
         print(f"  entry_service   = {_client_cfg.entry_service!r}")
@@ -90,23 +90,24 @@ async def _demo() -> None:
         print(f"  picked kind (deterministic) = {_sim._pick_kind()!r}")
 
         # ---- 2. show how _send_one would build + send a request ------
-        _banner("2. build one ServiceRequest (kind + real ASCII payload)")
+        _banner("2. build one SvcReq (kind + real ASCII payload)")
         # route a medical request into the TAS mesh
         _kind = "TAS_{2}"
         _size = resolve_size_for_kind(_client_cfg.request_sizes_by_kind, _kind,
                                       default=_client_cfg.request_size_bytes)
         _payload = _generate_payload(_kind, _size,
                                      rng=random.Random(_seed))
-        _req = ServiceRequest(request_id=str(uuid.uuid4()),
-                              kind=_kind,
-                              size_bytes=_size,
-                              payload=_payload.to_dict())
+        _req = SvcReq(request_id=str(uuid.uuid4()),
+                      kind=_kind,
+                      size_bytes=_size,
+                      payload=_payload.to_dict())
         print(f"  request_id       = {_req.request_id}")
         print(f"  kind             = {_req.kind!r}")
         print(f"  size_bytes       = {_req.size_bytes}")
         print(f"  payload.kind     = {_req.payload['kind']!r}")
         print(f"  payload.blob[:60]= {_req.payload['blob'][:60]!r}...")
-        print(f"  entry URL        = {_lnc.registry.build_invoke_url('TAS_{1}')}")
+        print(
+            f"  entry URL        = {_lnc.registry.build_invoke_url('TAS_{1}')}")
 
         # ---- 3. actually send it ----
         _banner("3. HTTP POST to the TAS entry and observe the response")

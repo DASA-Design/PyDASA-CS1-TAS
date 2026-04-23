@@ -6,13 +6,13 @@ Module services/base.py
 Shared building blocks every service reads. No queueing logic lives here on purpose. Queue behaviour emerges from FastAPI and asyncio running requests concurrently, so we do not encode it with classes or admission counters.
 
 Exports:
-    - `ServiceSpec`: frozen per-service knobs (mu, eps, c, K, seed, mem_per_buffer).
+    - `SvcSpec`: frozen per-service knobs (mu, eps, c, K, seed, mem_per_buffer).
     - `derive_seed(root, name)`: deterministic per-component seed derivation.
-    - `ServiceRequest`, `ServiceResponse`: pydantic wire schema.
+    - `SvcReq`, `SvcResp`: pydantic wire schema.
     - `LOG_COLUMNS`: frozen per-invocation CSV schema.
-    - `ServiceContext`: mutable per-service state (spec, log, rng). No counters, no semaphores.
+    - `SvcCtx`: mutable per-service state (spec, log, rng). No counters, no semaphores.
     - `make_base_app(title, healthz_fn)`: bare FastAPI app with /healthz.
-    - `HttpForward(client, registry)`: async `(target, req) -> ServiceResponse` over HTTP.
+    - `HttpForward(client, registry)`: async `(target, req) -> SvcResp` over HTTP.
 """
 # native python modules
 from __future__ import annotations
@@ -30,16 +30,16 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from src.experiment.registry import ServiceRegistry
+    from src.experiment.registry import SvcRegistry
 
 
 # ---------------------------------------------------------------------------
-# ServiceSpec + seed derivation
+# SvcSpec + seed derivation
 
 
 @dataclass(frozen=True)
-class ServiceSpec:
-    """**ServiceSpec** immutable per-service knobs.
+class SvcSpec:
+    """**SvcSpec** immutable per-service knobs.
 
     Declares the inputs that shape emergent queue behaviour: service rate, failure rate, concurrency ceiling, capacity, seed, memory budget. Downstream models (analytic, stochastic, dimensional) read these values together with measured timestamps to quantify what actually emerged at runtime.
     """
@@ -107,8 +107,8 @@ def derive_seed(root_seed: int, service_name: str) -> int:
 # Wire schemas
 
 
-class ServiceRequest(BaseModel):
-    """**ServiceRequest** pydantic wire schema for every component invocation."""
+class SvcReq(BaseModel):
+    """**SvcReq** pydantic wire schema for every component invocation."""
 
     # client UUID; stable across every hop
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -123,8 +123,8 @@ class ServiceRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ServiceResponse(BaseModel):
-    """**ServiceResponse** pydantic wire schema returned by every component."""
+class SvcResp(BaseModel):
+    """**SvcResp** pydantic wire schema returned by every component."""
 
     # echoes the request's UUID for end-to-end tracing
     request_id: str
@@ -159,16 +159,16 @@ LOG_COLUMNS = (
 
 
 @dataclass
-class ServiceContext:
-    """**ServiceContext** mutable per-service state.
+class SvcCtx:
+    """**SvcCtx** mutable per-service state.
 
-    Carries the four things that downstream code needs: the spec (so rows carry `service_name`), a log list (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), and the bound request handler (set by `mount_atomic_service` after the handler is built, so composite callers can dispatch siblings in-process).
+    Carries the four things that downstream code needs: the spec (so rows carry `service_name`), a log list (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), and the bound request handler (set by `mount_atomic_svc` after the handler is built, so composite callers can dispatch siblings in-process).
 
     Holds no admission counter, no semaphore, and no `in_system`. Concurrency is whatever uvicorn and asyncio produce naturally under the declared ceiling `spec.c`.
     """
 
     # immutable per-service knobs
-    spec: ServiceSpec
+    spec: SvcSpec
 
     # CSV rows buffered until flush
     log: List[Dict[str, Any]] = field(default_factory=list)
@@ -176,7 +176,7 @@ class ServiceContext:
     # per-service RNG seeded from spec.seed
     rng: random.Random = field(init=False)
 
-    # bound request handler; set by mount_atomic_service after build
+    # bound request handler; set by mount_atomic_svc after build
     handler: Optional[Callable[..., Any]] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -231,7 +231,7 @@ def make_base_app(title: str,
                   ) -> FastAPI:
     """*make_base_app()* bare FastAPI app exposing `/healthz` and no other route.
 
-    Practitioners attach invoke routes via `mount_atomic_service` or `mount_composite_service`, and attach service state via `app.state`.
+    Practitioners attach invoke routes via `mount_atomic_svc` or `mount_composite_svc`, and attach service state via `app.state`.
 
     Args:
         title (str): FastAPI app title.
@@ -254,33 +254,33 @@ def make_base_app(title: str,
 # External-forward callback shape: used when a service's routing row
 # picks a target that isn't local (for the composite service, "local"
 # means a sibling member; for atomic, all targets are external).
-ExternalForwardFn = Callable[[str, ServiceRequest], Awaitable[ServiceResponse]]
+ExtFwdFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 
 class HttpForward:
-    """**HttpForward** async callback `(target, req) -> ServiceResponse` over HTTP.
+    """**HttpForward** async callback `(target, req) -> SvcResp` over HTTP.
 
-    Closes over a shared `httpx.AsyncClient` and a `ServiceRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
+    Closes over a shared `httpx.AsyncClient` and a `SvcRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
     """
 
     def __init__(self,
                  client: httpx.AsyncClient,
-                 registry: "ServiceRegistry") -> None:
+                 registry: "SvcRegistry") -> None:
         self._client = client
         self._registry = registry
 
-    async def __call__(self, target: str, req: ServiceRequest) -> ServiceResponse:
+    async def __call__(self, target: str, req: SvcReq) -> SvcResp:
         """*__call__()* POST `req` to `target`'s invoke URL; return the parsed response.
 
         Args:
             target (str): downstream service name.
-            req (ServiceRequest): request body, forwarded verbatim.
+            req (SvcReq): request body, forwarded verbatim.
 
         Raises:
             httpx.HTTPStatusError: on non-2xx response (infrastructure failure).
 
         Returns:
-            ServiceResponse: parsed body. Business failure (eps fired) comes back as HTTP 200 with `success=False`.
+            SvcResp: parsed body. Business failure (eps fired) comes back as HTTP 200 with `success=False`.
         """
         _r = await self._client.post(
             self._registry.build_invoke_url(target),
@@ -289,4 +289,4 @@ class HttpForward:
                      "X-Request-Size-Bytes": str(req.size_bytes),
                      "X-Request-Kind": req.kind})
         _r.raise_for_status()
-        return ServiceResponse(**_r.json())
+        return SvcResp(**_r.json())

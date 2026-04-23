@@ -3,7 +3,7 @@
 Module test_logger_integration.py
 =================================
 
-End-to-end integration test for the `@logger` decorator from `src.experiment.services.instruments`: decorator -> `ServiceContext.flush_log` -> `ExperimentLauncher.flush_logs` -> on-disk CSV. Unit tests for the decorator alone live in `tests/experiment/services/test_instruments.py`; this file pins the integration across base + instruments + launcher.
+End-to-end integration test for the `@logger` decorator from `src.experiment.services.instruments`: decorator -> `SvcCtx.flush_log` -> `ExperimentLauncher.flush_logs` -> on-disk CSV. Unit tests for the decorator alone live in `tests/experiment/services/test_instruments.py`; this file pins the integration across base + instruments + launcher.
 
 FR-3.4: lock the per-invocation row schema (`LOG_COLUMNS`) so downstream analysis (`06-comparison.ipynb`) can depend on it without rename shims.
 
@@ -20,7 +20,7 @@ import pytest
 # modules under test
 from src.experiment.launcher import ExperimentLauncher
 from src.experiment.services import LOG_COLUMNS
-from src.io import load_method_config, load_profile
+from src.io import load_method_cfg, load_profile
 
 
 class TestJourneySchemaLocked:
@@ -49,7 +49,7 @@ class TestReplicateLayout:
     async def test_flat_layout_when_replicate_id_omitted(self):
         """*test_flat_layout_when_replicate_id_omitted()* without `replicate_id`, CSVs sit directly under the cell directory with no `rep_<k>/` nesting."""
         _cfg = load_profile(adaptation="baseline")
-        _mcfg = load_method_config("experiment")
+        _mcfg = load_method_cfg("experiment")
         async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
                                       adaptation="baseline") as _lnc:
             # inject one row into every queue so flush writes files. The TAS app holds six member queues under state.tas_components; third-party apps hold one queue under state.ctx.
@@ -80,7 +80,7 @@ class TestReplicateLayout:
     async def test_nested_layout_with_replicate_id(self):
         """*test_nested_layout_with_replicate_id()* passing `replicate_id=N` nests CSV outputs under `rep_<N>/` inside the cell directory."""
         _cfg = load_profile(adaptation="baseline")
-        _mcfg = load_method_config("experiment")
+        _mcfg = load_method_cfg("experiment")
         async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
                                       adaptation="baseline") as _lnc:
             _seen_ids = set()
@@ -110,7 +110,7 @@ class TestReplicateLayout:
     async def test_csv_columns_match_locked_schema(self):
         """*test_csv_columns_match_locked_schema()* the CSV header row written by `flush_logs` matches the `LOG_COLUMNS` tuple byte-for-byte."""
         _cfg = load_profile(adaptation="baseline")
-        _mcfg = load_method_config("experiment")
+        _mcfg = load_method_cfg("experiment")
         async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
                                       adaptation="baseline") as _lnc:
             _seen_ids = set()

@@ -19,12 +19,12 @@ from pathlib import Path
 import pytest
 
 # modules under test
-from src.experiment.client import (CascadeConfig,
-                                   ClientConfig,
+from src.experiment.client import (CascadeCfg,
+                                   ClientCfg,
                                    ClientSimulator,
-                                   RampConfig)
+                                   RampCfg)
 from src.experiment.launcher import ExperimentLauncher
-from src.io import load_method_config, load_profile
+from src.io import load_method_cfg, load_profile
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +33,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture(scope="module")
 def _method_cfg():
     """*_method_cfg()* module-cached method config (`experiment.json`)."""
-    return load_method_config("experiment")
+    return load_method_cfg("experiment")
 
 
 @pytest.fixture(scope="module")
@@ -44,12 +44,12 @@ def _profile_cfg():
 
 def _tiny_ramp_cfg(rate: float,
                    min_samples: int = 32,
-                   max_probe_window_s: float = 10.0) -> RampConfig:
+                   max_probe_window_s: float = 10.0) -> RampCfg:
     """*_tiny_ramp_cfg()* single-rate ramp, just enough to exercise the probe machinery."""
-    return RampConfig(min_samples_per_kind=min_samples,
+    return RampCfg(min_samples_per_kind=min_samples,
                       max_probe_window_s=max_probe_window_s,
                       rates=[rate],
-                      cascade=CascadeConfig(mode="rolling",
+                      cascade=CascadeCfg(mode="rolling",
                                             threshold=0.5,
                                             window=50))
 
@@ -109,7 +109,7 @@ class TestLauncherE2E:
                 adaptation="baseline") as _lnc:
             # low load well below saturation: lam_entry / 10, min samples 32
             _rate = _lnc.get_lam_z_entry() / 10.0
-            _client_cfg = ClientConfig(entry_service="TAS_{1}",
+            _client_cfg = ClientCfg(entry_service="TAS_{1}",
                                        seed=42,
                                        kind_weights=_lnc.kind_weights,
                                        ramp=_tiny_ramp_cfg(_rate))
@@ -146,7 +146,7 @@ class TestLauncherE2E:
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
             _rate = _lnc.get_lam_z_entry() / 20.0
-            _client_cfg = ClientConfig(entry_service="TAS_{1}",
+            _client_cfg = ClientCfg(entry_service="TAS_{1}",
                                        seed=7,
                                        kind_weights=_lnc.kind_weights,
                                        ramp=_tiny_ramp_cfg(_rate))

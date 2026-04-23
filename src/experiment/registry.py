@@ -6,12 +6,12 @@ Module registry.py
 Resolve service-name to HTTP URL using the layout declared in `data/config/method/experiment.json::service_registry`. The registry is built once at experiment startup and shared across the composite services, the client simulator, and the launcher's health barrier.
 
 Public API:
-    - `ServiceRegistry(host, base_port, table)` maps names to URLs.
-    - `ServiceRegistry.from_config(method_cfg)` builds one from the loaded method config.
-    - `ServiceRegistry.resolve_base_url(name)` returns the fully-qualified base URL.
-    - `ServiceRegistry.build_invoke_url(name)` returns the per-service invoke endpoint.
-    - `ServiceRegistry.build_healthz_url(name)` returns the `/healthz` endpoint.
-    - `ServiceRegistry.list_names()` / `filter_names_role(role)` enumerate the table.
+    - `SvcRegistry(host, base_port, table)` maps names to URLs.
+    - `SvcRegistry.from_config(method_cfg)` builds one from the loaded method config.
+    - `SvcRegistry.resolve_base_url(name)` returns the fully-qualified base URL.
+    - `SvcRegistry.build_invoke_url(name)` returns the per-service invoke endpoint.
+    - `SvcRegistry.build_healthz_url(name)` returns the `/healthz` endpoint.
+    - `SvcRegistry.list_names()` / `filter_names_role(role)` enumerate the table.
 """
 # native python modules
 from __future__ import annotations
@@ -40,8 +40,8 @@ class RegistryEntry:
 
 
 @dataclass(frozen=True)
-class ServiceRegistry:
-    """*ServiceRegistry* immutable service-name to URL resolver.
+class SvcRegistry:
+    """*SvcRegistry* immutable service-name to URL resolver.
 
     Attributes:
         host (str): host address (usually `"127.0.0.1"`).
@@ -60,7 +60,7 @@ class ServiceRegistry:
     def from_config(cls,
                     method_cfg: Dict[str, Any],
                     *,
-                    base_port_override: int = 0) -> "ServiceRegistry":
+                    base_port_override: int = 0) -> "SvcRegistry":
         """*from_config()* build a registry from a loaded `experiment.json`.
 
         Args:
@@ -68,7 +68,7 @@ class ServiceRegistry:
             base_port_override (int): when non-zero, replaces `method_cfg["base_port"]`. Used for CI / parallel runs via env var.
 
         Returns:
-            ServiceRegistry: populated registry.
+            SvcRegistry: populated registry.
         """
         _host = method_cfg.get("host", "127.0.0.1")
         if base_port_override > 0:

@@ -10,10 +10,10 @@ well under a second.
     - **TestInvocationRecord** `(status_code, success)` maps to `infra_failure` / `business_failure` / `response_time_s` derived properties.
     - **TestCascadeConfigDefaults** dataclass defaults.
     - **TestRampConfigDefaults** dataclass defaults.
-    - **TestClientConfigKindWeights** `ClientConfig` kind-weights validation fires at `ClientSimulator.__init__` time, not at dataclass construction.
+    - **TestClientConfigKindWeights** `ClientCfg` kind-weights validation fires at `ClientSimulator.__init__` time, not at dataclass construction.
     - **TestPickKind** `_pick_kind` respects the declared weights under a seeded RNG and is deterministic given the same seed.
     - **TestValidateRamp** min_samples_per_kind floor, rates monotonicity, cascade mode, threshold and window bounds.
-    - **TestBuildRampCfg** builds a `RampConfig` plus `CascadeConfig` from a dict; validates first.
+    - **TestBuildRampCfg** builds a `RampCfg` plus `CascadeCfg` from a dict; validates first.
     - **TestCascadeDetectorFailFast** trips on the first infra failure.
     - **TestCascadeDetectorRolling** trips only once the threshold is breached over a full window.
     - **TestSendOne** payload blob, `size_bytes`, and `X-Request-*` headers propagate to the outbound request.
@@ -30,22 +30,22 @@ import pytest
 import httpx
 
 # modules under test
-from src.experiment.client import (CascadeConfig,
-                                   ClientConfig,
+from src.experiment.client import (CascadeCfg,
+                                   ClientCfg,
                                    ClientSimulator,
                                    InvocationRecord,
-                                   RampConfig,
+                                   RampCfg,
                                    _CascadeDetector,
                                    build_ramp_cfg,
                                    validate_ramp)
-from src.experiment.registry import ServiceRegistry
+from src.experiment.registry import SvcRegistry
 
 
 # ---------- small helpers ------------------------------------------------
 
 
-def _registry() -> ServiceRegistry:
-    return ServiceRegistry.from_config({
+def _registry() -> SvcRegistry:
+    return SvcRegistry.from_config({
         "host": "127.0.0.1",
         "base_port": 9000,
         "service_registry": {
@@ -125,8 +125,8 @@ class TestCascadeConfigDefaults:
     """**TestCascadeConfigDefaults** safe defaults: rolling mode, 10% over 50 responses."""
 
     def test_defaults(self):
-        """*test_defaults()* default CascadeConfig = rolling mode, 10% threshold, 50-request window."""
-        _c = CascadeConfig()
+        """*test_defaults()* default CascadeCfg = rolling mode, 10% threshold, 50-request window."""
+        _c = CascadeCfg()
         assert _c.mode == "rolling"
         assert _c.threshold == 0.10
         assert _c.window == 50
@@ -136,29 +136,29 @@ class TestRampConfigDefaults:
     """**TestRampConfigDefaults** CLT-floor sample count, sane 60s probe window."""
 
     def test_defaults(self):
-        """*test_defaults()* default RampConfig honours CLT floor (32 samples/kind) + 60s probe window + ascending rate schedule + default CascadeConfig."""
-        _r = RampConfig()
+        """*test_defaults()* default RampCfg honours CLT floor (32 samples/kind) + 60s probe window + ascending rate schedule + default CascadeCfg."""
+        _r = RampCfg()
         assert _r.min_samples_per_kind == 32
         assert _r.max_probe_window_s == 60.0
         assert _r.rates[0] == 1.0
-        assert isinstance(_r.cascade, CascadeConfig)
+        assert isinstance(_r.cascade, CascadeCfg)
 
 
-# ------------------- ClientConfig kind-weights -------------------------
+# ------------------- ClientCfg kind-weights -------------------------
 
 
 class TestClientConfigKindWeights:
-    """**TestClientConfigKindWeights** validation fires at `ClientSimulator.__init__`, not at `ClientConfig` construction."""
+    """**TestClientConfigKindWeights** validation fires at `ClientSimulator.__init__`, not at `ClientCfg` construction."""
 
     def test_empty_kind_weights_rejected_at_simulator_construction(self):
-        """*test_empty_kind_weights_rejected_at_simulator_construction()* an empty weights dict makes `ClientSimulator.__init__` raise; `ClientConfig` itself accepts it (lazy validation)."""
-        _cfg = ClientConfig(kind_weights={})
+        """*test_empty_kind_weights_rejected_at_simulator_construction()* an empty weights dict makes `ClientSimulator.__init__` raise; `ClientCfg` itself accepts it (lazy validation)."""
+        _cfg = ClientCfg(kind_weights={})
         with pytest.raises(ValueError, match="must sum to > 0"):
             ClientSimulator(_mock_client(_ok_handler), _registry(), _cfg)
 
     def test_zero_weight_rejected_at_simulator_construction(self):
         """*test_zero_weight_rejected_at_simulator_construction()* a single kind with weight 0.0 sums to 0, which is also rejected at simulator construction."""
-        _cfg = ClientConfig(kind_weights={"TAS_{2}": 0.0})
+        _cfg = ClientCfg(kind_weights={"TAS_{2}": 0.0})
         with pytest.raises(ValueError, match="must sum to > 0"):
             ClientSimulator(_mock_client(_ok_handler), _registry(), _cfg)
 
@@ -171,14 +171,14 @@ class TestPickKind:
 
     def test_single_kind_always_returned(self):
         """*test_single_kind_always_returned()* a one-entry weights dict makes `_pick_kind` a constant function."""
-        _cfg = ClientConfig(seed=1, kind_weights={"TAS_{2}": 1.0})
+        _cfg = ClientCfg(seed=1, kind_weights={"TAS_{2}": 1.0})
         _sim = ClientSimulator(_mock_client(_ok_handler), _registry(), _cfg)
         for _ in range(20):
             assert _sim._pick_kind() == "TAS_{2}"
 
     def test_weighted_draws_approx_match_weights(self):
         """*test_weighted_draws_approx_match_weights()* 10000-draw histogram tracks the declared 75/25 weights within tolerance."""
-        _cfg = ClientConfig(seed=42, kind_weights={"A": 0.75, "B": 0.25})
+        _cfg = ClientCfg(seed=42, kind_weights={"A": 0.75, "B": 0.25})
         _sim = ClientSimulator(_mock_client(_ok_handler), _registry(), _cfg)
         _counts: Dict[str, int] = {"A": 0, "B": 0}
         for _ in range(10_000):
@@ -189,7 +189,7 @@ class TestPickKind:
 
     def test_deterministic_under_same_seed(self):
         """*test_deterministic_under_same_seed()* two simulators built with the same seed produce identical 50-draw sequences."""
-        _cfg = ClientConfig(seed=7, kind_weights={"A": 0.5, "B": 0.5})
+        _cfg = ClientCfg(seed=7, kind_weights={"A": 0.5, "B": 0.5})
         _s1 = ClientSimulator(_mock_client(_ok_handler), _registry(), _cfg)
         _s2 = ClientSimulator(_mock_client(_ok_handler), _registry(), _cfg)
         _draws_1 = [_s1._pick_kind() for _ in range(50)]
@@ -253,10 +253,10 @@ class TestValidateRamp:
 
 
 class TestBuildRampCfg:
-    """**TestBuildRampCfg** constructs `RampConfig` + `CascadeConfig` from a dict."""
+    """**TestBuildRampCfg** constructs `RampCfg` + `CascadeCfg` from a dict."""
 
     def test_construction_round_trip(self):
-        """*test_construction_round_trip()* `build_ramp_cfg(dict)` produces a `RampConfig` with a populated nested `CascadeConfig` matching every input field."""
+        """*test_construction_round_trip()* `build_ramp_cfg(dict)` produces a `RampCfg` with a populated nested `CascadeCfg` matching every input field."""
         _cfg = build_ramp_cfg({
             "min_samples_per_kind": 40,
             "max_probe_window_s": 12.0,
@@ -282,21 +282,21 @@ class TestCascadeDetectorFailFast:
 
     def test_no_trip_on_clean_traffic(self):
         """*test_no_trip_on_clean_traffic()* 100 successful responses in a row never trip fail-fast."""
-        _d = _CascadeDetector(CascadeConfig(mode="fail_fast"))
+        _d = _CascadeDetector(CascadeCfg(mode="fail_fast"))
         for _ in range(100):
             _d.observe(_rec(200, True))
         assert _d.tripped is False
 
     def test_no_trip_on_business_failure(self):
         """*test_no_trip_on_business_failure()* business failures (HTTP 200 / `success=False`) are not infra failures; fail-fast ignores them."""
-        _d = _CascadeDetector(CascadeConfig(mode="fail_fast"))
+        _d = _CascadeDetector(CascadeCfg(mode="fail_fast"))
         for _ in range(100):
             _d.observe(_rec(200, False))
         assert _d.tripped is False
 
     def test_trip_on_503(self):
         """*test_trip_on_503()* the first 503 trips the detector; the reason carries the status code."""
-        _d = _CascadeDetector(CascadeConfig(mode="fail_fast"))
+        _d = _CascadeDetector(CascadeCfg(mode="fail_fast"))
         _d.observe(_rec(200, True))
         _d.observe(_rec(503, False))
         assert _d.tripped is True
@@ -304,7 +304,7 @@ class TestCascadeDetectorFailFast:
 
     def test_trip_on_transport_exception(self):
         """*test_trip_on_transport_exception()* `status_code = -1` (transport exception sentinel) counts as infra failure and trips fail-fast."""
-        _d = _CascadeDetector(CascadeConfig(mode="fail_fast"))
+        _d = _CascadeDetector(CascadeCfg(mode="fail_fast"))
         _d.observe(_rec(-1, False))
         assert _d.tripped is True
 
@@ -314,7 +314,7 @@ class TestCascadeDetectorRolling:
 
     def test_below_threshold_no_trip(self):
         """*test_below_threshold_no_trip()* 4 infra of 10 = 40% < 50% threshold, no trip."""
-        _d = _CascadeDetector(CascadeConfig(mode="rolling",
+        _d = _CascadeDetector(CascadeCfg(mode="rolling",
                                             threshold=0.5, window=10))
         for _ in range(4):
             _d.observe(_rec(503, False))
@@ -324,7 +324,7 @@ class TestCascadeDetectorRolling:
 
     def test_above_threshold_trip_only_after_window_fills(self):
         """*test_above_threshold_trip_only_after_window_fills()* the rolling detector waits for `window` samples before comparing to threshold; partial windows cannot trip."""
-        _d = _CascadeDetector(CascadeConfig(mode="rolling",
+        _d = _CascadeDetector(CascadeCfg(mode="rolling",
                                             threshold=0.3, window=10))
         # first 9 are infra; window not full yet -> no trip
         for _ in range(9):
@@ -353,7 +353,7 @@ class TestSendOne:
             _captured.append((str(request.url), _body, _headers))
             return _ok_handler(request)
 
-        _cfg = ClientConfig(seed=1, kind_weights={"TAS_{2}": 1.0},
+        _cfg = ClientCfg(seed=1, kind_weights={"TAS_{2}": 1.0},
                             request_sizes_by_kind={"TAS_{2}": 256})
         _sim = ClientSimulator(_mock_client(_handler), _registry(), _cfg)
         _rec = await _sim._send_one("TAS_{2}")
@@ -376,7 +376,7 @@ class TestSendOne:
         def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, json={"detail": "boom"})
 
-        _cfg = ClientConfig(seed=1, kind_weights={"TAS_{2}": 1.0},
+        _cfg = ClientCfg(seed=1, kind_weights={"TAS_{2}": 1.0},
                             request_sizes_by_kind={"TAS_{2}": 64})
         _sim = ClientSimulator(_mock_client(_handler), _registry(), _cfg)
         _rec = await _sim._send_one("TAS_{2}")
@@ -397,13 +397,13 @@ class TestProbeStopsOnCascade:
         def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, json={"detail": "buffer full"})
 
-        _cfg = ClientConfig(
+        _cfg = ClientCfg(
             seed=1,
             kind_weights={"TAS_{2}": 1.0},
             request_sizes_by_kind={"TAS_{2}": 64},
-            ramp=RampConfig(min_samples_per_kind=32, max_probe_window_s=5.0,
+            ramp=RampCfg(min_samples_per_kind=32, max_probe_window_s=5.0,
                             rates=[10.0],
-                            cascade=CascadeConfig(mode="fail_fast")),
+                            cascade=CascadeCfg(mode="fail_fast")),
         )
         _sim = ClientSimulator(_mock_client(_handler), _registry(), _cfg)
         _detector = _CascadeDetector(_cfg.ramp.cascade)

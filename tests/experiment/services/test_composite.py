@@ -19,19 +19,19 @@ import httpx
 from fastapi import FastAPI
 
 # modules under test
-from src.experiment.services import (ServiceRequest,
-                                     ServiceResponse,
-                                     ServiceSpec,
+from src.experiment.services import (SvcReq,
+                                     SvcResp,
+                                     SvcSpec,
                                      make_base_app,
-                                     mount_composite_service)
+                                     mount_composite_svc)
 from src.experiment.services.composite import parse_tas_idx
 
 
 def _recorded_forward(calls: List[Tuple[str, str]]):
     """*_recorded_forward()* external-forward stub that logs `(target, request_id)` and returns success."""
-    async def _fwd(target: str, req: ServiceRequest) -> ServiceResponse:
+    async def _fwd(target: str, req: SvcReq) -> SvcResp:
         calls.append((target, req.request_id))
-        return ServiceResponse(request_id=req.request_id,
+        return SvcResp(request_id=req.request_id,
                                service_name=target,
                                success=True,
                                message="recorded")
@@ -44,7 +44,7 @@ class TestMountCompositeService:
     def _build_tas_like(self, *, forward) -> FastAPI:
         """*_build_tas_like()* build a mini TAS-shaped composite: TAS_{1} kind-routes to TAS_{2}, TAS_{2} to external MAS."""
         _specs = {
-            "TAS_{1}": ServiceSpec(name="TAS_{1}",
+            "TAS_{1}": SvcSpec(name="TAS_{1}",
                                    role="composite_client",
                                    port=8001,
                                    mu=10_000.0,
@@ -52,7 +52,7 @@ class TestMountCompositeService:
                                    c=1,
                                    K=10,
                                    seed=1),
-            "TAS_{2}": ServiceSpec(name="TAS_{2}",
+            "TAS_{2}": SvcSpec(name="TAS_{2}",
                                    role="composite_medical",
                                    port=8001,
                                    mu=10_000.0,
@@ -67,19 +67,19 @@ class TestMountCompositeService:
         }
         _k2t = {"TAS_{2}": "TAS_{2}"}
         _app = make_base_app("test::TAS")
-        mount_composite_service(_app, _specs, _rows, _k2t,
+        mount_composite_svc(_app, _specs, _rows, _k2t,
                                 forward,
                                 entry_name="TAS_{1}")
         return _app
 
     @pytest.mark.asyncio
     async def test_each_member_has_its_own_context(self):
-        """*test_each_member_has_its_own_context()* every composite member gets a distinct `ServiceContext` exposed on `app.state.tas_components`."""
+        """*test_each_member_has_its_own_context()* every composite member gets a distinct `SvcCtx` exposed on `app.state.tas_components`."""
         _calls: List[Tuple[str, str]] = []
         _app = self._build_tas_like(forward=_recorded_forward(_calls))
         _ctxs = _app.state.tas_components
         assert set(_ctxs.keys()) == {"TAS_{1}", "TAS_{2}"}
-        # distinct ServiceContext objects
+        # distinct SvcCtx objects
         assert _ctxs["TAS_{1}"] is not _ctxs["TAS_{2}"]
 
     @pytest.mark.asyncio
@@ -90,7 +90,7 @@ class TestMountCompositeService:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="TAS_{2}", size_bytes=64)
+            _req = SvcReq(kind="TAS_{2}", size_bytes=64)
             _r = await _c.post("/TAS_1/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         _ctxs = _app.state.tas_components
@@ -106,7 +106,7 @@ class TestMountCompositeService:
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://t") as _c:
-            _req = ServiceRequest(kind="NOT_A_KIND", size_bytes=64)
+            _req = SvcReq(kind="NOT_A_KIND", size_bytes=64)
             _r = await _c.post("/TAS_1/invoke", json=_req.model_dump())
         # FastAPI surfaces HTTPException(400) from the kind router
         assert _r.status_code == 400

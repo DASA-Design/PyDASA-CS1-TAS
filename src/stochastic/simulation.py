@@ -6,14 +6,14 @@ Module simulation.py
 SimPy DES engine for the open Jackson queueing network used by the CS-01 TAS case study. Two collaborating layers:
 
     - **QueueNode** per-node SimPy `Resource` with finite capacity K and c parallel servers, plus per-job timing collection (service time, queue wait, total system time) and event-driven L / Lq tracking for time-weighted averages.
-    - **simulate_network()** top-level driver. Spawns a `QueueNode` per slot, fires Poisson arrivals at the externally-driven nodes, runs each replication for `horizon` seconds with a `warmup` cut-off, repeats `reps` times, and returns one summary DataFrame with mean and std per node across replications.
+    - **simulate_net()** top-level driver. Spawns a `QueueNode` per slot, fires Poisson arrivals at the externally-driven nodes, runs each replication for `horizon` seconds with a `warmup` cut-off, repeats `reps` times, and returns one summary DataFrame with mean and std per node across replications.
 
 Public API:
     - `QueueNode` node class.
     - `job(env, node_id, nodes, P, results)` single-job SimPy generator.
     - `job_generator(env, node_id, rate, nodes, P, results)` Poisson source.
-    - `simulate_network(mu, lambda_zero, c, K, P, ...)` multi-rep driver.
-    - `solve_network(cfg, method_cfg)` NetworkConfig adapter mirroring `src.analytic.jackson.solve_network`.
+    - `simulate_net(mu, lam_z, c, K, P, ...)` multi-rep driver.
+    - `solve_net(cfg, method_cfg)` NetCfg adapter mirroring `src.analytic.jackson.solve_net`.
 
 *IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation counts. The method-config JSON declares the latter; the orchestrator in `src.methods.stochastic` converts via `seconds = invocations / sum(lambda_z)` before calling here.
 
@@ -33,7 +33,7 @@ import pandas as pd
 import simpy
 
 # local modules
-from src.io.config import NetworkConfig
+from src.io.config import NetCfg
 
 
 # ---------------------------------------------------------------------------
@@ -272,22 +272,22 @@ def job(env: simpy.Environment,
 # ---------------------------------------------------------------------------
 
 
-def simulate_network(mu: List[float],
-                     lambda_zero: List[float],
-                     c: List[int],
-                     K: List[Optional[int]],
-                     P: np.ndarray,
-                     *,
-                     horizon: float = 5000.0,
-                     warmup: float = 1000.0,
-                     reps: int = 10,
-                     seed: Optional[int] = None,
-                     verbose: bool = False) -> pd.DataFrame:
-    """*simulate_network()* run the full network simulation `reps` times and return a per-node summary frame (mean / std across replications).
+def simulate_net(mu: List[float],
+                 lam_z: List[float],
+                 c: List[int],
+                 K: List[Optional[int]],
+                 P: np.ndarray,
+                 *,
+                 horizon: float = 5000.0,
+                 warmup: float = 1000.0,
+                 reps: int = 10,
+                 seed: Optional[int] = None,
+                 verbose: bool = False) -> pd.DataFrame:
+    """*simulate_net()* run the full network simulation `reps` times and return a per-node summary frame (mean / std across replications).
 
     Args:
         mu (List[float]): per-node service rate.
-        lambda_zero (List[float]): per-node external arrival rate. Nodes with `lambda_zero[i] > 0` get a Poisson generator.
+        lam_z (List[float]): per-node external arrival rate. Nodes with `lam_z[i] > 0` get a Poisson generator.
         c (List[int]): per-node server count.
         K (List[Optional[int]]): per-node capacity; `None` for unbounded.
         P (np.ndarray): `(n, n)` routing matrix.
@@ -334,7 +334,7 @@ def simulate_network(mu: List[float],
             _node.record_state_change(_env)
 
         # arm the Poisson sources at every externally-driven node
-        for _i, _rate in enumerate(lambda_zero):
+        for _i, _rate in enumerate(lam_z):
             if _rate > 0:
                 _env.process(job_generator(_env,
                                            _i,
@@ -426,8 +426,8 @@ def _summarise_replication(nodes: List[QueueNode],
         _arrivals = _jobs_served + _blocked
 
         # time-weighted L and Lq
-        _L = _time_weighted_mean(_s_data, _coll_duration)
-        _Lq = _time_weighted_mean(_q_data, _coll_duration)
+        _L = compute_time_weighted_mean(_s_data, _coll_duration)
+        _Lq = compute_time_weighted_mean(_q_data, _coll_duration)
 
         # per-job W and Wq
         if _system_times:
@@ -457,7 +457,7 @@ def _summarise_replication(nodes: List[QueueNode],
         else:
             _rho = 0.0
 
-        _model = _model_string(_node.c, _node.K)
+        _model = format_model_string(_node.c, _node.K)
 
         if _arrivals > 0:
             _blocking_prob = _blocked / _arrivals
@@ -501,9 +501,9 @@ def _filter_length_data(data: List[Tuple[int, float]],
     return _out
 
 
-def _time_weighted_mean(data: List[Tuple[int, float]],
-                        fallback_duration: float) -> float:
-    """*_time_weighted_mean()* sum(length * duration) / sum(duration) over the (length, duration) intervals; falls back to `fallback_duration` for the denominator if every recorded duration is zero.
+def compute_time_weighted_mean(data: List[Tuple[int, float]],
+                               fallback_duration: float) -> float:
+    """*compute_time_weighted_mean()* sum(length * duration) / sum(duration) over the (length, duration) intervals; falls back to `fallback_duration` for the denominator if every recorded duration is zero.
     """
     if not data:
         return 0.0
@@ -511,8 +511,8 @@ def _time_weighted_mean(data: List[Tuple[int, float]],
     return sum(_length * _d for _length, _d in data) / _total_time
 
 
-def _model_string(c: int, K: Optional[int]) -> str:
-    """*_model_string()* build the queue model label, e.g. `M/M/1`, `M/M/2/10`, matching the analytic notation."""
+def format_model_string(c: int, K: Optional[int]) -> str:
+    """*format_model_string()* build the queue model label, e.g. `M/M/1`, `M/M/2/10`, matching the analytic notation."""
     if c == 1:
         if K is None:
             return "M/M/1"
@@ -523,22 +523,22 @@ def _model_string(c: int, K: Optional[int]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# NetworkConfig adapter (mirrors `src.analytic.jackson.solve_network`)
+# NetCfg adapter (mirrors `src.analytic.jackson.solve_net`)
 # ---------------------------------------------------------------------------
 
 
-# stochastic metric columns that get a `_mean` + `_std` pair out of `simulate_network`'s groupby-agg summary
+# stochastic metric columns that get a `_mean` + `_std` pair out of `simulate_net`'s groupby-agg summary
 _STAT_COLS = ("lambda", "mu", "rho", "L", "Lq", "W", "Wq")
 
 
-def solve_network(cfg: NetworkConfig,
-                  method_cfg: Dict[str, Any]) -> pd.DataFrame:
-    """*solve_network()* run the SimPy DES engine for one resolved `(profile, scenario)` pair and return per-node metrics with the same schema the analytic method produces, plus `<metric>_std` columns for the stochastic CI machinery.
+def solve_net(cfg: NetCfg,
+              method_cfg: Dict[str, Any]) -> pd.DataFrame:
+    """*solve_net()* run the SimPy DES engine for one resolved `(profile, scenario)` pair and return per-node metrics with the same schema the analytic method produces, plus `<metric>_std` columns for the stochastic CI machinery.
 
-    *IMPORTANT:* the method config declares the horizon / warmup in *invocations*, but `simulate_network` runs in SimPy seconds. Conversion `seconds = invocations / sum(lambda_z)` happens here so callers can stay in the natural "invocation count" unit.
+    *IMPORTANT:* the method config declares the horizon / warmup in *invocations*, but `simulate_net` runs in SimPy seconds. Conversion `seconds = invocations / sum(lambda_z)` happens here so callers can stay in the natural "invocation count" unit.
 
     Args:
-        cfg (NetworkConfig): resolved network configuration. Provides `mu`, `c`, `K`, `lambda_z`, and `routing` per artifact.
+        cfg (NetCfg): resolved network configuration. Provides `mu`, `c`, `K`, `lambda_z`, and `routing` per artifact.
         method_cfg (Dict[str, Any]): contents of `data/config/method/stochastic.json`. Expected keys:
             - `seed` (int): PRNG seed.
             - `horizon_invocations` (int): total jobs per rep before the run is cut off.
@@ -548,7 +548,7 @@ def solve_network(cfg: NetworkConfig,
     Returns:
         pd.DataFrame: one row per artifact with columns `node`, `key`, `name`, `type`, `lambda`, `mu`, `c`, `K`, `rho`, `L`, `Lq`, `W`, `Wq`, plus `<metric>_std` for every stochastic metric.
     """
-    # unpack the NetworkConfig into per-node arrays the engine expects
+    # unpack the NetCfg into per-node arrays the engine expects
     _mu = [float(_a.mu) for _a in cfg.artifacts]
     _c = [int(_a.c) for _a in cfg.artifacts]
     _K: List[Optional[int]] = []
@@ -568,9 +568,9 @@ def solve_network(cfg: NetworkConfig,
     _warmup = float(method_cfg["warmup_invocations"]) / _total_rate
 
     # run the SimPy engine
-    _summary = simulate_network(
+    _summary = simulate_net(
         mu=_mu,
-        lambda_zero=_lambda_z,
+        lam_z=_lambda_z,
         c=_c,
         K=_K,
         P=_P,
@@ -585,12 +585,12 @@ def solve_network(cfg: NetworkConfig,
 
 
 def _reshape_summary(summary: pd.DataFrame,
-                     cfg: NetworkConfig) -> pd.DataFrame:
-    """*_reshape_summary()* turn `simulate_network`'s groupby-agg frame into a per-node frame with analytic-compatible column names (`lambda` instead of `lambda_mean`, etc.) plus `_std` companions for every stochastic metric.
+                     cfg: NetCfg) -> pd.DataFrame:
+    """*_reshape_summary()* turn `simulate_net`'s groupby-agg frame into a per-node frame with analytic-compatible column names (`lambda` instead of `lambda_mean`, etc.) plus `_std` companions for every stochastic metric.
 
     Args:
-        summary (pd.DataFrame): `simulate_network()`'s output (columns like `lambda_mean`, `lambda_std`, ...).
-        cfg (NetworkConfig): resolved config, used to attach `key`, `name`, `type`, `c`, `K` columns per slot.
+        summary (pd.DataFrame): `simulate_net()`'s output (columns like `lambda_mean`, `lambda_std`, ...).
+        cfg (NetCfg): resolved config, used to attach `key`, `name`, `type`, `c`, `K` columns per slot.
 
     Returns:
         pd.DataFrame: flat per-node frame ordered by `node` index.

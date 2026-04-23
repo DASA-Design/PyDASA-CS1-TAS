@@ -7,8 +7,8 @@ Network-wide aggregates and R1 / R2 / R3 validation for the analytic method of t
 
 Two layers, kept separate so the aggregation math can be unit-tested independently of the validation thresholds:
 
-    - `aggregate_network(nodes)` reduces the per-node DataFrame into a single network-wide row (same semantics as the old `calculate_net_metrics` in `__OLD__/src/model/analytical.py`).
-    - `check_requirements(nodes, ...)` evaluates the R1 / R2 / R3 targets against the thresholds declared in a reference file (default: `data/reference/baseline.json`, which carries the Camara 2023 values):
+    - `aggregate_net(nodes)` reduces the per-node DataFrame into a single network-wide row (same semantics as the old `calculate_net_metrics` in `__OLD__/src/model/analytical.py`).
+    - `check_reqs(nodes, ...)` evaluates the R1 / R2 / R3 targets against the thresholds declared in a reference file (default: `data/reference/baseline.json`, which carries the Camara 2023 values):
 
         R1  failure rate   <= 0.03 %   (Availability)
         R2  response time  <= 26 ms    (Performance)
@@ -31,8 +31,8 @@ import pandas as pd
 from src.io import load_reference
 
 
-def aggregate_network(nodes: pd.DataFrame) -> pd.DataFrame:
-    """*aggregate_network()* reduces the per-node metrics frame into a single network-wide row.
+def aggregate_net(nodes: pd.DataFrame) -> pd.DataFrame:
+    """*aggregate_net()* reduces the per-node metrics frame into a single network-wide row.
 
     Args:
         nodes (pd.DataFrame): per-node metrics as produced by `solve_network()`. Required columns: `lambda`, `mu`, `rho`, `L`, `Lq`, `W`, `Wq`.
@@ -80,19 +80,19 @@ def aggregate_network(nodes: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame([_row])
 
 
-def check_requirements(
+def check_reqs(
     nodes: pd.DataFrame,
     failure_rate: Optional[float] = None,
     response_time: Optional[float] = None,
     cost: Optional[float] = None,
     reference: str = "baseline",
 ) -> Dict[str, Dict[str, Any]]:
-    """*check_requirements()* evaluates the R1 / R2 / R3 targets against the thresholds declared in a reference file, using either caller-supplied values or values derived from the per-node frame.
+    """*check_reqs()* evaluates the R1 / R2 / R3 targets against the thresholds declared in a reference file, using either caller-supplied values or values derived from the per-node frame.
 
     Thresholds come from `data/reference/<reference>.json` (default `baseline.json`, which carries the Camara 2023 values). When the `failure_rate` / `response_time` kwargs are omitted, the defaults are derived as follows:
 
         - `failure_rate` from per-node `epsilon` (mean) if that column is present on `nodes`; otherwise assumed 0.0 (analytic model without faults).
-        - `response_time` from the throughput-weighted network `W` returned by `aggregate_network()`.
+        - `response_time` from the throughput-weighted network `W` returned by `aggregate_net()`.
         - `cost` is not derivable from analytic-only results; callers pass it in from the service catalogue, or accept `None` (in which case the R3 value is recorded as `None` but the pass verdict still follows R1 and R2).
 
     Args:
@@ -119,7 +119,7 @@ def check_requirements(
     # derive the response time: explicit override > throughput-weighted W
     _resp = response_time
     if _resp is None:
-        _agg = aggregate_network(nodes)
+        _agg = aggregate_net(nodes)
         _resp = float(_agg["W_net"].iloc[0])
 
     # evaluate each hard-threshold requirement
