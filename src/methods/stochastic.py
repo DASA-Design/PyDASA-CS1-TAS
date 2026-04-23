@@ -3,20 +3,14 @@
 Module stochastic.py
 ====================
 
-Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case
-study. Mirrors the analytic method's contract call-for-call so the
-two can be compared directly downstream.
+Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case study. Mirrors the analytic method's contract call-for-call so the two can be compared directly downstream.
 
 Public API:
     - `run(adp, prf, scn, wrt)` loads a resolved `NetworkConfig` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_network`), and returns per-node metrics + network aggregate + R1 / R2 / R3 verdict.
 
-Aggregation and threshold checks reuse `src.analytic.metrics`
-(`aggregate_network` / `check_requirements`) since the math is
-identical across the two methods.
+Aggregation and threshold checks reuse `src.analytic.metrics` (`aggregate_network` / `check_requirements`) since the math is identical across the two methods.
 
-*IMPORTANT:* the engine runs in SimPy SECONDS; the method config
-declares the horizon and warmup in INVOCATIONS. Conversion happens
-in `src.stochastic.simulation.solve_network`.
+*IMPORTANT:* the engine runs in SimPy SECONDS; the method config declares the horizon and warmup in INVOCATIONS. Conversion happens in `src.stochastic.simulation.solve_network`.
 
 CLI::
 
@@ -73,11 +67,12 @@ def run(adp: Optional[str] = None,
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
             - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
-    # load the profile (artifact nodes + routing); method config is
-    # either passed in (tests) or loaded from disk (CLI / notebook).
+    # load the profile (artifact nodes + routing); method config is either passed in (tests) or loaded from disk (CLI / notebook)
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
-    _method_cfg = (method_cfg if method_cfg is not None
-                   else load_method_config("stochastic"))
+    if method_cfg is not None:
+        _method_cfg = method_cfg
+    else:
+        _method_cfg = load_method_config("stochastic")
 
     # run the DES engine end-to-end
     _nds = solve_network(_cfg, _method_cfg)
@@ -119,8 +114,7 @@ def _write_results(cfg: NetworkConfig,
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
 
-    # topology carried alongside metrics so the blob is
-    # self-contained for later path reconstruction
+    # topology carried alongside metrics so the blob is self-contained for later path reconstruction
     _doc = {
         "profile": cfg.profile,
         "scenario": cfg.scenario,
@@ -207,9 +201,15 @@ def main() -> None:
     # R1 / R2 / R3 verdict
     print("requirements:")
     for _k, _v in _req.items():
-        _status = "PASS" if _v["pass"] else "FAIL"
+        if _v["pass"]:
+            _status = "PASS"
+        else:
+            _status = "FAIL"
         _val = _v["value"]
-        _val_str = f"{_val:.6g}" if isinstance(_val, (int, float)) else "n/a"
+        if isinstance(_val, (int, float)):
+            _val_str = f"{_val:.6g}"
+        else:
+            _val_str = "n/a"
         print(f"  {_k}: {_status}  ({_v['metric']}={_val_str})")
 
     # written-file paths

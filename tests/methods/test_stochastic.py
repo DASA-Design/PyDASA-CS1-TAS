@@ -13,9 +13,6 @@ Each class groups tests by the contract under verification:
 
 *IMPORTANT:* tests use `_QUICK_CFG` (2 reps x 300 invocations) not the production config (10 reps x 10 000 invocations). This cuts the per-adaptation run time below ~1 second with the trade-off of wider CIs; the rho / W agreement tolerances are loosened to match. To re-run any test at full fidelity just swap `method_cfg=_QUICK_CFG` for `method_cfg=None` in the call.
 """
-# native python modules
-# (none)
-
 # testing framework
 import pytest
 
