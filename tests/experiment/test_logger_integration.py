@@ -31,6 +31,7 @@ class TestJourneySchemaLocked:
         assert LOG_COLUMNS == (
             "request_id", "service_name", "kind",
             "recv_ts", "start_ts", "end_ts",
+            "c_used_at_start",
             "success", "status_code",
             "size_bytes",
         )

@@ -16,17 +16,17 @@ import nest_asyncio
 nest_asyncio.apply()
 
 # data types
-from typing import Any, Dict
+from typing import Any, Dict  # noqa: E402
 
 # scientific stack
-import numpy as np
+import numpy as np  # noqa: E402
 
 # testing framework
-import pytest
+import pytest  # noqa: E402
 
 # modules under test
-from src.experiment.networks import sweep_arch_exp
-from src.io import load_method_cfg, load_profile
+from src.experiment.networks import sweep_arch_exp  # noqa: E402
+from src.io import load_method_cfg, load_profile  # noqa: E402
 
 
 # small grid + tight ramp; one combo only, just enough to exercise the

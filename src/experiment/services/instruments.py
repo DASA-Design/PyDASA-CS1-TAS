@@ -10,9 +10,10 @@ Queue behaviour emerges from FastAPI and asyncio running requests concurrently. 
 # native python modules
 from __future__ import annotations
 
+import contextvars
 import time
 from functools import wraps
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 # local modules
 from src.experiment.services.base import (SvcCtx,
@@ -22,6 +23,33 @@ from src.experiment.services.base import (SvcCtx,
 
 # signature required by the decorator's wrapped handler
 HandlerFn = Callable[[SvcReq], Awaitable[SvcResp]]
+
+
+# per-task admit-time channel: an atomic handler calls `mark_admit_time()`
+# right after its semaphore acquire, so `@logger` can use that timestamp as
+# `start_ts` and the difference `start_ts - recv_ts` becomes real Wq.
+# Composite handlers do not gate, so they never set this and their Wq
+# correctly reads as 0
+_admit_var: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "admit_ts", default=None)
+_c_used_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "c_used_at_admit", default=None)
+
+
+def mark_admit_time(c_used: int) -> None:
+    """*mark_admit_time()* publish post-admission timestamp + in-flight count.
+
+    Atomic handlers call this from inside their `async with ctx.sem:` block;
+    `@logger` reads both back when writing the row so `start_ts` reflects
+    when the request actually started service (not just when it arrived)
+    and `c_used_at_start` reflects admitted concurrency, not asyncio's
+    natural concurrency.
+
+    Args:
+        c_used (int): in-flight count after this request acquired its permit.
+    """
+    _admit_var.set(time.time())
+    _c_used_var.set(int(c_used))
 
 
 def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
@@ -40,38 +68,44 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
     def _decorator(handler: HandlerFn) -> HandlerFn:
         @wraps(handler)
         async def _wrapped(req: SvcReq) -> SvcResp:
+            # bracketing timestamps for response-time R; the handler is
+            # responsible for any admission gating around its local work
+            # (composite handlers cannot be gated here without deadlocking
+            # the downstream dispatch chain). Atomic handlers publish a
+            # post-admit timestamp via `mark_admit_time()`; if absent
+            # (composite path), Wq reads 0 -- correct for an un-gated node
             _recv_ts = time.time()
+            _admit_var.set(None)
+            _c_used_var.set(None)
 
-            # gate admission through the per-service semaphore so the wait
-            # time is real Wq and the in-flight count is real c_used. Without
-            # this, asyncio runs every coroutine concurrently and Wq = 0,
-            # c_used = N/A regardless of `spec.c`.
-            async with ctx.sem:
-                _start_ts = time.time()
-                # PASTA sample: capture in-flight count AFTER acquiring this
-                # permit, so the value includes the current request itself
-                _c_used = ctx.c_in_use
-
-                try:
-                    _resp = await handler(req)
-                except Exception as _exc:
-                    _end_ts = time.time()
-                    _status = getattr(_exc, "status_code", 500)
-                    ctx.log.append({
-                        "request_id": req.request_id,
-                        "service_name": ctx.spec.name,
-                        "kind": req.kind,
-                        "recv_ts": _recv_ts,
-                        "start_ts": _start_ts,
-                        "end_ts": _end_ts,
-                        "c_used_at_start": int(_c_used),
-                        "success": False,
-                        "status_code": int(_status),
-                        "size_bytes": req.size_bytes,
-                    })
-                    raise
-
+            try:
+                _resp = await handler(req)
+            except Exception as _exc:
                 _end_ts = time.time()
+                _start_ts = _admit_var.get() or _recv_ts
+                _c_used_at_start = _c_used_var.get()
+                if _c_used_at_start is None:
+                    _c_used_at_start = ctx.c_in_use
+                _status = getattr(_exc, "status_code", 500)
+                ctx.log.append({
+                    "request_id": req.request_id,
+                    "service_name": ctx.spec.name,
+                    "kind": req.kind,
+                    "recv_ts": _recv_ts,
+                    "start_ts": _start_ts,
+                    "end_ts": _end_ts,
+                    "c_used_at_start": int(_c_used_at_start),
+                    "success": False,
+                    "status_code": int(_status),
+                    "size_bytes": req.size_bytes,
+                })
+                raise
+
+            _end_ts = time.time()
+            _start_ts = _admit_var.get() or _recv_ts
+            _c_used_at_start = _c_used_var.get()
+            if _c_used_at_start is None:
+                _c_used_at_start = ctx.c_in_use
 
             # local outcome only; downstream success does not apply here
             if _resp.service_name == ctx.spec.name:
@@ -86,7 +120,7 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
                 "recv_ts": _recv_ts,
                 "start_ts": _start_ts,
                 "end_ts": _end_ts,
-                "c_used_at_start": int(_c_used),
+                "c_used_at_start": int(_c_used_at_start),
                 "success": _local_success,
                 "status_code": 200,
                 "size_bytes": req.size_bytes,

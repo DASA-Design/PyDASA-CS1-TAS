@@ -27,7 +27,7 @@ from src.experiment.services.base import (ExtFwdFn,
                                           SvcReq,
                                           SvcResp,
                                           SvcSpec)
-from src.experiment.services.instruments import logger
+from src.experiment.services.instruments import logger, mark_admit_time
 
 
 PickTargetFn = Callable[[SvcCtx, SvcReq], Optional[str]]
@@ -78,19 +78,28 @@ def mount_atomic_svc(app: FastAPI,
 
     @logger(_ctx)
     async def _handler(req: SvcReq) -> SvcResp:
-        # 1. simulate service time
-        _svc = _ctx.draw_svc_time()
-        if _svc > 0:
-            await asyncio.sleep(_svc)
+        # 1. simulate service time under admission control. The semaphore
+        #    has `spec.c` permits, so concurrent in-service is capped at c
+        #    and any excess arrival waits here -- the wait time becomes
+        #    measurable Wq downstream. Held only around the local work,
+        #    NOT around the dispatch, so composite chains do not deadlock.
+        async with _ctx.sem:
+            # publish post-admit timestamp + admitted concurrency so
+            # @logger can compute Wq = start_ts - recv_ts
+            mark_admit_time(_ctx.c_in_use)
 
-        # 2. Bernoulli epsilon: local business failure
-        if _ctx.draw_eps():
-            return SvcResp(request_id=req.request_id,
-                           service_name=spec.name,
-                           success=False,
-                           message="bernoulli failure")
+            _svc = _ctx.draw_svc_time()
+            if _svc > 0:
+                await asyncio.sleep(_svc)
 
-        # 3. pick target; None means terminal
+            # 2. Bernoulli epsilon: local business failure (still holds permit)
+            if _ctx.draw_eps():
+                return SvcResp(request_id=req.request_id,
+                               service_name=spec.name,
+                               success=False,
+                               message="bernoulli failure")
+
+        # 3. pick target; None means terminal (permit already released)
         _target = pick_target(_ctx, req)
         if _target is None:
             return SvcResp(request_id=req.request_id,

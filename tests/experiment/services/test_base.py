@@ -55,8 +55,13 @@ class TestServiceSpec:
         assert _s.epsilon == 0.05
 
     def test_defaults(self):
-        _s = SvcSpec(name="X", role="atomic", port=9000,
-                         mu=100.0, epsilon=0.0, c=1, K=10)
+        _s = SvcSpec(name="X",
+                     role="atomic",
+                     port=9000,
+                     mu=100.0,
+                     epsilon=0.0,
+                     c=1,
+                     K=10)
         assert _s.seed == 0
         assert _s.mem_per_buffer == 0
         assert _s.buffer_budget_bytes == 0
@@ -134,6 +139,7 @@ class TestLogColumns:
         assert LOG_COLUMNS == (
             "request_id", "service_name", "kind",
             "recv_ts", "start_ts", "end_ts",
+            "c_used_at_start",
             "success", "status_code",
             "size_bytes",
         )
