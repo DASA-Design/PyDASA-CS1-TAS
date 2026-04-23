@@ -10,7 +10,7 @@ from src.io.config import (
 
 __all__ = [
     "NetworkConfig",
-    "load_profile",
     "load_method_config",
+    "load_profile",
     "load_reference",
 ]

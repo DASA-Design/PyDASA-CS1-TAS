@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Shared service building blocks.
 
 Four modules, one responsibility each:

@@ -1,8 +1,7 @@
+# -*- coding: utf-8 -*-
 """TAS dimensional-method adapters around PyDASA.
 
-This subpackage is intentionally thin: PyDASA does the math, these modules
-provide the case-study glue (config-driven FDU schema, per-artifact engine
-construction, coefficient derivation from spec, sensitivity reshaping).
+This subpackage is intentionally thin: PyDASA does the math, these modules provide the case-study glue (config-driven FDU schema, per-artifact engine construction, coefficient derivation from spec, sensitivity reshaping).
 """
 
 from src.dimensional.coefficients import derive_coefs

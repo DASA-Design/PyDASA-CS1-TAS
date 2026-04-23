@@ -6,10 +6,10 @@ from src.analytic.jackson import solve_network, solve_jackson_lambdas
 from src.analytic.metrics import aggregate_network, check_requirements
 
 __all__ = [
-    "Queue",
     "BasicQueue",
-    "solve_network",
-    "solve_jackson_lambdas",
+    "Queue",
     "aggregate_network",
     "check_requirements",
+    "solve_jackson_lambdas",
+    "solve_network",
 ]
