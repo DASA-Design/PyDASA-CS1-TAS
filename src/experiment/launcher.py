@@ -3,10 +3,7 @@
 Module launcher.py
 ==================
 
-Assembles the full architectural-experiment mesh. The profile JSON is the
-single source of truth for DASA knobs (mu, epsilon, c, K, routing); the
-method JSON (`experiment.json`) carries only deployment plumbing (ports,
-ramp, request sizes, role tagging).
+Assembles the full architectural-experiment mesh. The profile JSON is the single source of truth for DASA knobs (mu, epsilon, c, K, routing); the method JSON (`experiment.json`) carries only deployment plumbing (ports, ramp, request sizes, role tagging).
 
 Two composite flavours wired per the `role` field in `experiment.json`:
 
@@ -15,17 +12,12 @@ Two composite flavours wired per the `role` field in `experiment.json`:
 
 No hardcoded workflow; the routing matrix is the ONLY wiring source.
 
-The shared `httpx.AsyncClient` routes through a `_MultiASGITransport`
-dispatching per port. All port->app entries register BEFORE the client
-handles any traffic (two-pass construction avoids post-hoc transport
-mutation -- the shared `_port_to_app` dict on `_MultiASGITransport`
-gets each composite entry added synchronously during startup, then the
-client becomes reachable to callers only when `__aenter__` returns).
+The shared `httpx.AsyncClient` routes through a `_MultiASGITransport` dispatching per port. All port->app entries register BEFORE the client handles any traffic (two-pass construction avoids post-hoc transport mutation; the shared `_port_to_app` dict on `_MultiASGITransport` gets each composite entry added synchronously during startup, then the client becomes reachable to callers only when `__aenter__` returns).
 """
 # native python modules
 from __future__ import annotations
 
-# data types
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -62,7 +54,10 @@ class _MultiASGITransport(httpx.AsyncBaseTransport):
     async def handle_async_request(
             self, request: httpx.Request) -> httpx.Response:
         _port = request.url.port
-        _t = self._transports.get(_port) if _port is not None else None
+        if _port is None:
+            _t = None
+        else:
+            _t = self._transports.get(_port)
         if _t is None:
             return httpx.Response(status_code=404,
                                   json={"detail": f"no app for port {_port}"})
@@ -92,25 +87,15 @@ def _specs_from_config(cfg: NetworkConfig,
                        ) -> Dict[str, ServiceSpec]:
     """*_specs_from_config()* build one `ServiceSpec` per artifact by pulling `(mu, epsilon, c, K)` from the profile JSON and `(role, port)` from the registry.
 
-    `root_seed` is the single seed from `experiment.json::seed`. It is
-    folded with each service's name via `derive_seed` so every service
-    has a stable, independent RNG stream — one knob in JSON controls
-    every stochastic draw in the apparatus.
+    `root_seed` is the single seed from `experiment.json::seed`. It is folded with each service's name via `derive_seed` so every service has a stable, independent RNG stream; one knob in JSON controls every stochastic draw in the apparatus.
 
-    `avg_request_size_bytes` is the expected payload size per kind (from
-    `method_cfg["request_size_bytes"]`). The per-service buffer budget is
-    `K · avg_request_size_bytes · MEM_HEADROOM_FACTOR` (1.5× headroom
-    absorbs Pydantic + FastAPI framing overhead without having to
-    physically re-measure the body bytes). The apparatus enforces this
-    at admission time via `HTTPException(413)` and the 1.5× headroom IS
-    the reason we don't pay the per-request body-scan cost.
+    `avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`). The per-service buffer budget is `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` (1.5x headroom absorbs Pydantic + FastAPI framing overhead without having to physically re-measure the body bytes). The value lives on `ServiceSpec.mem_per_buffer` so downstream analysis can derive the memory-usage coefficient; no admission-time enforcement is applied here (FR-2.4 was dropped).
     """
     _specs: Dict[str, ServiceSpec] = {}
     _headroom = ServiceSpec.MEM_HEADROOM_FACTOR
     for _a in cfg.artifacts:
         if _a.key not in registry.table:
-            # artifact in profile but not in experiment.json registry (e.g. a
-            # swap slot inactive for this adaptation); skip silently
+            # artifact in profile but not in experiment.json registry (e.g. a swap slot inactive for this adaptation); skip silently
             continue
         _entry = registry.table[_a.key]
         _K = int(_a.K)
@@ -146,19 +131,21 @@ def _router_kind_map(cfg: NetworkConfig,
                      ) -> Tuple[Dict[str, str], Dict[str, float]]:
     """*_router_kind_map()* build `(kind_to_target, kind_weights)` for a router composite.
 
-    Kind label == target artifact name (simplest, self-documenting). Weights
-    normalise probabilities to sum to 1 across the row's non-zero entries.
+    Kind label == target artifact name (simplest, self-documenting). Weights normalise probabilities to sum to 1 across the row's non-zero entries.
     """
     _row = _routing_row(cfg, name)
     _total = sum(_p for _, _p in _row)
     _kind_to_target = {_t: _t for _t, _ in _row}
-    _kind_weights = {_t: (_p / _total if _total > 0 else 0.0)
-                     for _t, _p in _row}
+    _kind_weights: Dict[str, float] = {}
+    for _t, _p in _row:
+        if _total > 0:
+            _kind_weights[_t] = _p / _total
+        else:
+            _kind_weights[_t] = 0.0
     return _kind_to_target, _kind_weights
 
 
-# external-forward closure is now a class in `http/forward.py`
-# (`HttpForward`); the launcher instantiates it once per run.
+# external-forward closure is a class `HttpForward` in `services/base.py`; the launcher instantiates it once per run.
 
 
 # --- launcher -------------------------------------------------------------
@@ -192,11 +179,7 @@ class ExperimentLauncher:
     kind_to_target: Dict[str, str] = field(default_factory=dict)
 
     async def __aenter__(self) -> "ExperimentLauncher":
-        # 1. registry + per-artifact specs. The single `experiment.json::seed`
-        #    is folded with each service name so every service has a stable,
-        #    independent RNG seed derived from the one config knob.
-        #    FR-2.4: `mem_per_buffer = K * avg_request_size` is baked into
-        #    each spec so the memory-usage coefficient is derivable downstream.
+        # 1. registry + per-artifact specs. The single `experiment.json::seed` is folded with each service name so every service has a stable, independent RNG seed derived from the one config knob. `mem_per_buffer = K * avg_request_size * 1.5` is baked into each spec so the memory-usage coefficient is derivable downstream (no admission-time enforcement; FR-2.4 dropped).
         self.registry = ServiceRegistry.from_config(
             self.method_cfg, base_port_override=self.base_port_override)
         _root_seed = int(self.method_cfg.get("seed", 0))
@@ -205,11 +188,7 @@ class ExperimentLauncher:
                                         root_seed=_root_seed,
                                         avg_request_size_bytes=_avg_size)
 
-        # 2. identify the client-facing entry router (TAS_{1} by convention)
-        #    and derive its kind weights / kind-to-target map from its
-        #    routing-matrix row. Among composite_client roles (TAS_{1},
-        #    TAS_{5}, TAS_{6}), the entry is the one with a non-empty
-        #    outbound row — TAS_{5} and TAS_{6} are terminal.
+        # 2. identify the client-facing entry router (TAS_{1} by convention) and derive its kind weights / kind-to-target map from its routing-matrix row. Among composite_client roles (TAS_{1}, TAS_{5}, TAS_{6}), the entry is the one with a non-empty outbound row; TAS_{5} and TAS_{6} are terminal.
         def _is_entry_router(_name: str) -> bool:
             _entry = self.registry.table[_name]
             if _entry.role != "composite_client":
@@ -223,19 +202,12 @@ class ExperimentLauncher:
             self.kind_to_target, self.kind_weights = _router_kind_map(
                 self.cfg, _routers[0])
 
-        # 3. transport + shared client built against an initially empty
-        #    port map. Every service registers its port → app mapping into
-        #    the transport synchronously before any HTTP traffic flows.
+        # 3. transport + shared client built against an initially empty port map. Every service registers its port -> app mapping into the transport synchronously before any HTTP traffic flows.
         self._transport = _MultiASGITransport({})
         self.client = httpx.AsyncClient(transport=self._transport,
                                         timeout=httpx.Timeout(10.0))
 
-        # 4. build every service. The TAS target system is ONE FastAPI app
-        #    hosting six embedded atomic components (TAS_{1..6}), built via
-        #    `build_tas` over `CompositeQueue` + `mount_composite`. Third-
-        #    party services (MAS / AS / DS) are built via `build_third_party`
-        #    over `AtomicQueue` + `mount_atomic`. Both paths use the same
-        #    `HttpForward` instance for cross-service HTTP hops.
+        # 4. build every service. The TAS target system is ONE FastAPI app hosting six embedded atomic handlers (TAS_{1..6}), built via `build_tas` over `mount_composite_service`. Third-party services (MAS / AS / DS) are built via `build_third_party` over `mount_atomic_service`. Both paths use the same `HttpForward` instance for cross-service HTTP hops.
         _forward = HttpForward(self.client, self.registry)
         _port_to_app: Dict[int, FastAPI] = {}
 
@@ -247,17 +219,13 @@ class ExperimentLauncher:
                 _tas_specs[_name] = _spec
                 _tas_rows[_name] = _routing_row(self.cfg, _name)
 
-        # 4b. one TAS app; every TAS component gets its own AtomicQueue
-        #     inside the shared CompositeQueue (exposed via
-        #     app.state.tas_components + app.state.composite).
+        # 4b. one TAS app; every TAS component gets its own `ServiceContext` attached via `mount_composite_service`, exposed as `{name: ServiceContext}` on `app.state.tas_components`.
         if _tas_specs:
             _tas_app = build_tas(_tas_specs,
                                  _tas_rows,
                                  self.kind_to_target,
                                  _forward)
-            # register each TAS_{i} logical name → the same FastAPI app;
-            # the registry's invoke_url() returns distinct /TAS_<i>/invoke
-            # paths so each component's route routes correctly.
+            # register each TAS_{i} logical name -> the same FastAPI app; the registry's `build_invoke_url()` returns distinct `/TAS_<i>/invoke` paths so each component's route routes correctly.
             _tas_port: Optional[int] = None
             for _name in _tas_specs:
                 self.apps[_name] = _tas_app
@@ -266,7 +234,7 @@ class ExperimentLauncher:
             if _tas_port is not None:
                 self._transport._transports[_tas_port] = httpx.ASGITransport(app=_tas_app)
 
-        # 4c. third-party services — one app per port
+        # 4c. third-party services; one app per port
         for _name, _spec in self.specs.items():
             if _name.startswith("TAS_"):
                 continue
@@ -290,17 +258,9 @@ class ExperimentLauncher:
                    replicate_id: Optional[int] = None) -> Dict[str, int]:
         """*flush_logs()* write each component's log buffer to a CSV; return per-component row counts.
 
-        The TAS target system hosts six components (TAS_{1..6}) inside one
-        FastAPI app; their states live on `app.state.tas_components`.
-        Third-party services expose a single state on `app.state.service`.
-        This method iterates `self.specs` (one entry per component, including
-        all six TAS entries) and flushes the state from whichever attribute
-        carries it.
+        The TAS target system hosts six components (TAS_{1..6}) inside one FastAPI app; their states live on `app.state.tas_components`. Third-party services expose a single state on `app.state.ctx`. This method iterates `self.specs` (one entry per component, including all six TAS entries) and flushes the state from whichever attribute carries it.
 
-        FR-3.8: when `replicate_id` is given, outputs nest under
-        `<output_dir>/rep_<id>/<component>.csv` so every replicate of the
-        same cell has its own subtree. When `None`, writes flat under
-        `<output_dir>/<component>.csv`.
+        FR-3.8: when `replicate_id` is given, outputs nest under `<output_dir>/rep_<id>/<component>.csv` so every replicate of the same cell has its own subtree. When `None`, writes flat under `<output_dir>/<component>.csv`.
 
         Args:
             output_dir (Path): cell-level directory.
@@ -309,7 +269,10 @@ class ExperimentLauncher:
         Returns:
             Dict[str, int]: per-component row counts written.
         """
-        _dir = output_dir if replicate_id is None else output_dir / f"rep_{int(replicate_id)}"
+        if replicate_id is None:
+            _dir = output_dir
+        else:
+            _dir = output_dir / f"rep_{int(replicate_id)}"
         _dir.mkdir(parents=True, exist_ok=True)
         _counts: Dict[str, int] = {}
         _flushed: set = set()
@@ -317,9 +280,7 @@ class ExperimentLauncher:
             _app = self.apps.get(_name)
             if _app is None:
                 continue
-            # The TAS app exposes its six member contexts via
-            # app.state.tas_components; a third-party app exposes its
-            # single context via app.state.ctx.
+            # The TAS app exposes its six member contexts via `app.state.tas_components`; a third-party app exposes its single context via `app.state.ctx`.
             _components = getattr(_app.state, "tas_components", None)
             if _components is not None and _name in _components:
                 _ctx = _components[_name]
@@ -327,9 +288,7 @@ class ExperimentLauncher:
                 _ctx = getattr(_app.state, "ctx", None)
                 if _ctx is None:
                     continue
-            # The same context object may surface under multiple specs
-            # (the TAS app is shared across TAS_{1..6}), so flush each
-            # context once.
+            # The same context object may surface under multiple specs (the TAS app is shared across TAS_{1..6}), so flush each context once.
             if id(_ctx) in _flushed:
                 continue
             _flushed.add(id(_ctx))
@@ -351,10 +310,9 @@ class ExperimentLauncher:
                         extras: Optional[Dict[str, Any]] = None) -> Path:
         """*snapshot_config()* write `config.json` capturing the effective controlled values applied to THIS cell.
 
-        This is the FR-3.3 snapshot: downstream analysis joins on what
-        actually ran, not on the source profile. Captures:
+        This is the FR-3.3 snapshot: downstream analysis joins on what actually ran, not on the source profile. Captures:
 
-            - per-artifact `(role, port, mu, epsilon, c, K, seed, mem_per_buffer)` — as resolved by the launcher, post any CLI / scenario overrides.
+            - per-artifact `(role, port, mu, epsilon, c, K, seed, mem_per_buffer)` as resolved by the launcher, post any CLI / scenario overrides.
             - adaptation / profile / scenario labels.
             - routing matrix + `lambda_z` vector.
             - kind_to_target + kind_weights derived at launcher startup.
@@ -367,8 +325,6 @@ class ExperimentLauncher:
         Returns:
             Path: absolute path to the written `config.json`.
         """
-        import json as _json
-
         output_dir.mkdir(parents=True, exist_ok=True)
 
         _artifacts: Dict[str, Any] = {}
@@ -401,5 +357,5 @@ class ExperimentLauncher:
 
         _path = output_dir / "config.json"
         with _path.open("w", encoding="utf-8") as _fh:
-            _json.dump(_snapshot, _fh, indent=4, ensure_ascii=False)
+            json.dump(_snapshot, _fh, indent=4, ensure_ascii=False)
         return _path

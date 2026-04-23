@@ -32,11 +32,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture(scope="module")
 def _method_cfg():
+    """*_method_cfg()* module-cached method config (`experiment.json`)."""
     return load_method_config("experiment")
 
 
 @pytest.fixture(scope="module")
 def _profile_cfg():
+    """*_profile_cfg()* module-cached baseline profile config."""
     return load_profile(adaptation="baseline")
 
 
@@ -57,6 +59,7 @@ class TestLauncherStartup:
 
     @pytest.mark.asyncio
     async def test_all_services_healthy(self, _profile_cfg, _method_cfg):
+        """*test_all_services_healthy()* every deployed service answers `/healthz` with HTTP 200 after startup; TAS returns a `components: [...]` list while third-party services return `{"name": <name>, ...}`."""
         async with ExperimentLauncher(
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
@@ -81,7 +84,7 @@ class TestLauncherStartup:
     @pytest.mark.asyncio
     async def test_kind_weights_derived_from_routing(self, _profile_cfg,
                                                      _method_cfg):
-        """Launcher exposes kind_weights + kind_to_target derived from TAS_{1}'s routing row."""
+        """*test_kind_weights_derived_from_routing()* `kind_weights` and `kind_to_target` are derived from TAS_{1}'s routing row; weights sum to 1; every kind targets a deployed artifact."""
         async with ExperimentLauncher(
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
@@ -100,6 +103,7 @@ class TestLauncherE2E:
 
     @pytest.mark.asyncio
     async def test_baseline_quick_run(self, _profile_cfg, _method_cfg, tmp_path):
+        """*test_baseline_quick_run()* at lam_entry / 10 the cascade never trips, the probe collects >= 5 records with >= 1 success, and `flush_logs` writes non-empty TAS_{1} + some MAS_{*} rows."""
         async with ExperimentLauncher(
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
@@ -137,6 +141,7 @@ class TestLauncherE2E:
     @pytest.mark.asyncio
     async def test_flush_writes_csv_per_service(self, _profile_cfg,
                                                 _method_cfg, tmp_path):
+        """*test_flush_writes_csv_per_service()* `flush_logs` writes at least one `TAS_*.csv` file to the output directory after a small ramp."""
         async with ExperimentLauncher(
                 cfg=_profile_cfg, method_cfg=_method_cfg,
                 adaptation="baseline") as _lnc:
