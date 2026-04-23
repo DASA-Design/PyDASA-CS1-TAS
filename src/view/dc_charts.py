@@ -873,7 +873,10 @@ def plot_system_behaviour(coeff_data: Dict[str, Any],
     _ax.view_init(elev=30, azim=110)
     _style_3d_panes(_ax)
     _ax.grid(True, **_GRID_STY_3D)
-    _apply_sci_format(_ax, axes_list=["x", "y", "z"])
+    _apply_sci_format(_ax, axes_list=["x", "z"])
+    # sigma clusters tightly around 1.0 (Little's-law identity); bump precision
+    # so adjacent ticks do not all collapse to the same "1.0e+00" string
+    _apply_sci_format(_ax, axes_list=["y"], sig=4)
     for _axis_name in ("x", "y", "z"):
         _ax.tick_params(axis=_axis_name, **_TICK_STY_3D_SINGLE)
 
