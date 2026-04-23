@@ -5,10 +5,11 @@ Module qn_diagram.py
 
 Queue-network visualisation for the CS-01 TAS case study.
 
-Seven plotters with a uniform parameter-IO convention (keyword-only args after the required positional inputs; every plotter returns the `matplotlib.figure.Figure` and persists to disk when both `file_path` and `fname` are supplied):
+Eight plotters with a uniform parameter-IO convention (keyword-only args after the required positional inputs; every plotter returns the `matplotlib.figure.Figure` and persists to disk when both `file_path` and `fname` are supplied):
 
     - `plot_qn_topology(rout, nds, ...)` single-scenario architecture diagram (topology + rho colouring + edge labels).
     - `plot_qn_topology_grid(routs, ndss, names, ...)` N scenarios arranged in a row of topologies with a shared rho colourbar.
+    - `plot_dim_topology(rout, coefs, ...)` single-scenario dimensionless topology diagram; nodes coloured by `theta` (or any coefficient column), labelled with the four per-node coefficients, table below.
     - `plot_nd_heatmap(ndss, names, nodes, ...)` per-node heatmap across N scenarios; one subplot per scenario.
     - `plot_nd_diffmap(deltas, nodes, ...)` per-node delta heatmap (single panel) with a symmetric colour scale centred on 0 %.
     - `plot_nd_ci(nds, *, metric, reference, ...)` per-node mean with a 95 % CI band (stochastic), optional analytic reference overlay.
@@ -591,6 +592,256 @@ def plot_qn_topology(rout: np.ndarray,
     # subtitle above the metrics table; figtext (not ax) so it sits in
     # the gap between the two subplots
     plt.figtext(0.50, 0.27, "Node Metrics Table",
+                fontsize=18, fontweight="bold",
+                va="center", ha="center", color=_TEXT_BLACK)
+
+    _fig.tight_layout()
+
+    _save_figure(_fig, file_path, fname, verbose=verbose)
+    return _fig
+
+
+# ---------------------------------------------------------------------------
+# Dimensional-topology support (shared with plot_dim_topology below)
+# ---------------------------------------------------------------------------
+
+
+# Per-node dimensionless-coefficient columns emitted by `coefs_to_nodes()`;
+# declaration order drives label lines and table columns.
+_DIM_COEF_COLS = ("theta", "sigma", "eta", "phi")
+
+# LaTeX symbol for each coefficient (used in node labels, table headers, and
+# the colourbar label).
+_DIM_COEF_SYMS = {
+    "theta": r"\theta",
+    "sigma": r"\sigma",
+    "eta": r"\eta",
+    "phi": r"\phi",
+}
+
+# Default glossary for the dimensional topology plot. Callers can pass their
+# own list via `plot_dim_topology(..., glossary=...)`.
+DIM_GLOSSARY_DEFAULT = [
+    "LEGEND",
+    r"$\theta = \lambda / (c\,\mu)$: Occupancy",
+    r"$\sigma = \mu / \lambda$: Service intensity",
+    r"$\eta$: Fault exposure",
+    r"$\phi$: Memory footprint",
+]
+
+
+def _draw_dim_topology_axis(ax: plt.Axes,
+                            graph: nx.DiGraph,
+                            pos: dict,
+                            nds: pd.DataFrame,
+                            nd_names: List[str],
+                            *,
+                            color_by: str = "theta",
+                            edge_label_threshold: float = 0.01,
+                            color_max: Optional[float] = None) -> None:
+    """*_draw_dim_topology_axis()* draw the dimensionless topology into a given axis; nodes coloured by `color_by` (default `theta`), with a four-line label per node showing every available coefficient.
+
+    Args:
+        ax: matplotlib axis to draw into.
+        graph (nx.DiGraph): prebuilt topology graph.
+        pos (dict): BFS (or similar) layout positions.
+        nds (pd.DataFrame): per-node coefficients frame (output of `coefs_to_nodes()`).
+        nd_names (List[str]): display names aligned with the graph.
+        color_by (str): column driving the node colour; must be present in `nds`. Defaults to `"theta"`.
+        edge_label_threshold (float): routing probabilities below this are drawn without a numeric label.
+        color_max (Optional[float]): shared colour scale for multi-panel plots; defaults to `max(1.0, nds[color_by].max())` so theta-like columns visually saturate at 1.
+    """
+    _n = len(nd_names)
+
+    # node colours from the selected coefficient; scale uses max(1.0, data.max()) by default so theta visually saturates at 1 (matching the rho convention) while still accommodating columns that exceed 1 (e.g. sigma).
+    if color_by in nds.columns:
+        _vals = nds[color_by].to_numpy(dtype=float)
+        if color_max is not None:
+            _scale = color_max
+        else:
+            _scale = max(float(_vals.max()), 1.0)
+        _scale = max(_scale, 1e-9)
+        _node_colors = [_TOPOLOGY_CMAP(_v / _scale) for _v in _vals]
+    else:
+        _node_colors = ["skyblue"] * _n
+
+    # nodes
+    nx.draw_networkx_nodes(graph, pos,
+                           node_size=1800,
+                           node_color=_node_colors,
+                           alpha=0.9,
+                           ax=ax)
+
+    # edges (uniform connection style; same as the queueing-network view)
+    nx.draw_networkx_edges(graph, pos,
+                           width=1.5,
+                           alpha=0.7,
+                           edge_color=_TEXT_BLACK,
+                           arrows=True,
+                           arrowsize=20,
+                           arrowstyle="-|>",
+                           connectionstyle="arc3,rad=0.2",
+                           ax=ax)
+
+    # edge labels: routing probability (same threshold as plot_qn_topology)
+    _edge_lbl = {
+        (_u, _v): f"{_d['weight']:.2f}"
+        for _u, _v, _d in graph.edges(data=True)
+        if _d["weight"] >= edge_label_threshold
+    }
+    nx.draw_networkx_edge_labels(graph, pos,
+                                 edge_labels=_edge_lbl,
+                                 font_size=11,
+                                 font_color=_TEXT_BLACK,
+                                 font_weight="light",
+                                 bbox=dict(facecolor="white",
+                                           edgecolor="none",
+                                           alpha=0.9,
+                                           pad=0.3),
+                                 label_pos=0.5,
+                                 connectionstyle="arc3,rad=0.2",
+                                 ax=ax)
+
+    # node labels: artifact key on line 1, then one line per available coefficient in declared order. Each coefficient line is rendered as mathtext so Greek symbols + subscripts display correctly.
+    _labels: dict = {}
+    for _i in range(_n):
+        _name = nd_names[_i]
+        _parts = [rf"$\mathbf{{{_name}}}$"]
+        for _c in _DIM_COEF_COLS:
+            if _c in nds.columns:
+                _sym = _DIM_COEF_SYMS[_c]
+                _val = float(nds[_c].iloc[_i])
+                _parts.append(rf"$\mathbf{{{_sym} = {_val:.2f}}}$")
+        _labels[_i] = "\n".join(_parts)
+    nx.draw_networkx_labels(graph, pos,
+                            labels=_labels,
+                            font_size=10,
+                            font_weight="bold",
+                            font_color=_TEXT_BLACK,
+                            ax=ax)
+
+    ax.set_axis_off()
+
+
+def _add_dim_node_table(ax: plt.Axes,
+                        nds: pd.DataFrame,
+                        nd_names: List[str]) -> None:
+    """*_add_dim_node_table()* draw a per-node coefficient table (Component, theta, sigma, eta, phi) into a dedicated axis below the dimensional topology graph.
+
+    Args:
+        ax: matplotlib axis reserved for the table (axis is hidden).
+        nds (pd.DataFrame): per-node coefficients frame.
+        nd_names (List[str]): display names aligned with the rows.
+    """
+    ax.set_axis_off()
+
+    # header: Component + one column per present coefficient in declared order
+    _present_cols = [_c for _c in _DIM_COEF_COLS if _c in nds.columns]
+    _header = ["Component"]
+    for _c in _present_cols:
+        _sym = _DIM_COEF_SYMS[_c]
+        _header.append(rf"${_sym}$")
+
+    _rows = [_header]
+    for _i in range(len(nd_names)):
+        _row = nds.iloc[_i]
+        _cells = [f"${nd_names[_i]}$"]
+        for _c in _present_cols:
+            _cells.append(f"{float(_row[_c]):.4f}")
+        _rows.append(_cells)
+
+    _col_widths = [0.22] + [0.14] * len(_present_cols)
+    _table = ax.table(cellText=_rows, loc="center", cellLoc="center",
+                      colWidths=_col_widths)
+    _table.auto_set_font_size(False)
+    _table.set_fontsize(12)
+    _table.scale(1, 1.25)
+
+    # header row styling
+    for _j in range(len(_header)):
+        _table[(0, _j)].set_facecolor("#E4EBF1")
+        _table[(0, _j)].set_text_props(weight="bold")
+
+
+def plot_dim_topology(rout: np.ndarray,
+                      nds: pd.DataFrame,
+                      *,
+                      color_by: str = "theta",
+                      glossary: Optional[List[str]] = None,
+                      nd_names: Optional[List[str]] = None,
+                      title: Optional[str] = None,
+                      file_path: Optional[str] = None,
+                      fname: Optional[str] = None,
+                      verbose: bool = False) -> Figure:
+    """*plot_dim_topology()* draw the dimensionless topology for one scenario; nodes coloured by a chosen coefficient column (default `theta`), labelled with every available per-node coefficient, edge labels show routing probabilities, a colourbar tracks the colouring coefficient, a glossary explains the four dimensionless groups, and a per-node coefficient table sits below the graph.
+
+    Mirrors `plot_qn_topology` in layout (3/4 graph + 1/4 table, same BFS layout, same edge style) so the dimensional view and the queueing view align visually side-by-side when compared across a method matrix.
+
+    Args:
+        rout (np.ndarray): `(n, n)` routing-probability matrix.
+        nds (pd.DataFrame): per-node coefficients frame from `src.dimensional.coefs_to_nodes`; expected columns include `key` plus one or more of `theta`, `sigma`, `eta`, `phi`.
+        color_by (str): coefficient column driving node colours. Defaults to `"theta"`.
+        glossary (Optional[List[str]]): parameter glossary lines (LaTeX OK). When None, `DIM_GLOSSARY_DEFAULT` is used; pass `[]` to suppress.
+        nd_names (Optional[List[str]]): per-node display names. Defaults to `nds["key"]` when present, else `"Node {i}"`.
+        title (Optional[str]): figure title. Defaults to `"Dimensionless Topology"`.
+        file_path (Optional[str]): directory to save the figure into.
+        fname (Optional[str]): filename (with extension) for the save.
+        verbose (bool): if True, prints a one-line save message.
+
+    Returns:
+        Figure: the matplotlib figure.
+    """
+    _n = rout.shape[0]
+
+    # resolve display names; prefer the `key` column when available
+    if nd_names is None:
+        if "key" in nds.columns:
+            nd_names = nds["key"].tolist()
+        else:
+            nd_names = [f"Node {_i}" for _i in range(_n)]
+
+    # build the topology and BFS layout from the entry node (0)
+    _graph = _build_topology_graph(rout, nd_names)
+    _pos = nx.bfs_layout(_graph, start=0)
+
+    # stacked layout matching plot_qn_topology: graph (3/4) + table (1/4)
+    _fig = plt.figure(figsize=(18, 22), facecolor="white")
+    _ax_graph = plt.subplot2grid((4, 1), (0, 0), rowspan=3)
+    _ax_table = plt.subplot2grid((4, 1), (3, 0), rowspan=1)
+    _ax_graph.set_facecolor("white")
+    _ax_table.set_facecolor("white")
+
+    # draw the dimensionless topology
+    _draw_dim_topology_axis(_ax_graph, _graph, _pos, nds, nd_names,
+                            color_by=color_by)
+
+    # colourbar tracks the colouring coefficient; the scale mirrors
+    # `_draw_dim_topology_axis` so bar and nodes agree
+    if color_by in nds.columns:
+        _vals = nds[color_by].to_numpy(dtype=float)
+        _cbar_max = max(float(_vals.max()), 1.0, 1e-9)
+        _sm = cm.ScalarMappable(cmap=_TOPOLOGY_CMAP,
+                                norm=plt.Normalize(vmin=0.0, vmax=_cbar_max))
+        _sm.set_array([])
+        _cbar = _fig.colorbar(_sm, ax=_ax_graph, shrink=0.6, pad=0.02)
+        _sym = _DIM_COEF_SYMS.get(color_by, color_by)
+        _cbar.set_label(rf"${_sym}$ (dimensionless)",
+                        color=_TEXT_BLACK, fontsize=14, fontweight="bold")
+        _cbar.ax.tick_params(colors=_TEXT_BLACK)
+
+    # glossary overlay (bottom-right); empty list suppresses
+    _gloss = glossary if glossary is not None else DIM_GLOSSARY_DEFAULT
+    if _gloss:
+        _add_param_glossary(_ax_graph, _gloss, corner="lower right")
+
+    # per-node coefficient table at the bottom of the figure
+    _add_dim_node_table(_ax_table, nds, nd_names)
+
+    _ax_graph.set_title(title or "Dimensionless Topology",
+                        fontsize=24, fontweight="bold", color=_TEXT_BLACK,
+                        va="center", ha="center", pad=20)
+
+    plt.figtext(0.50, 0.27, "Node Coefficient Table",
                 fontsize=18, fontweight="bold",
                 va="center", ha="center", color=_TEXT_BLACK)
 

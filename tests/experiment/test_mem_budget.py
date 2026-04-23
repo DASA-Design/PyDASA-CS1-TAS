@@ -11,7 +11,7 @@ launcher threads from `experiment.json::request_size_bytes` into every
 Runtime enforcement is deferred per `notes/prototype.md` FR-2.4; this
 module covers the declaration-and-audit path only.
 
-    - **TestAvgRequestSize** `_avg_request_size` takes the arithmetic mean over declared per-kind sizes, ignoring zeros.
+    - **TestAvgRequestSize** `_compute_avg_req_size` takes the arithmetic mean over declared per-kind sizes, ignoring zeros.
     - **TestServiceSpecBudget** `ServiceSpec.mem_per_buffer` and `buffer_budget_bytes` round-trip the declared value; default is 0.
     - **TestLauncherPopulatesBudget** the launcher derives `mem_per_buffer = K * avg_request_size * MEM_HEADROOM_FACTOR` into every spec and surfaces it in `config.json::artifacts`.
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 # modules under test
-from src.experiment.launcher import ExperimentLauncher, _avg_request_size
+from src.experiment.launcher import ExperimentLauncher, _compute_avg_req_size
 from src.experiment.services import ServiceRequest, ServiceResponse, ServiceSpec
 from src.io import load_method_config, load_profile
 
@@ -46,15 +46,15 @@ class TestAvgRequestSize:
 
     def test_mean_of_three_sizes(self):
         """*test_mean_of_three_sizes()* `{100, 200, 300}` averages to 200."""
-        assert _avg_request_size({"a": 100, "b": 200, "c": 300}) == 200
+        assert _compute_avg_req_size({"a": 100, "b": 200, "c": 300}) == 200
 
     def test_empty_map_is_zero(self):
         """*test_empty_map_is_zero()* an empty dict averages to 0 (guard against ZeroDivision)."""
-        assert _avg_request_size({}) == 0
+        assert _compute_avg_req_size({}) == 0
 
     def test_ignores_zeros(self):
         """*test_ignores_zeros()* zero-valued entries are dropped before averaging."""
-        assert _avg_request_size({"a": 0, "b": 200, "c": 300}) == 250
+        assert _compute_avg_req_size({"a": 0, "b": 200, "c": 300}) == 250
 
 
 class TestServiceSpecBudget:
@@ -85,7 +85,7 @@ class TestLauncherPopulatesBudget:
         _cfg = load_profile(adaptation="baseline")
         _mcfg = load_method_config("experiment")
         _sizes = _mcfg.get("request_size_bytes", {})
-        _avg = _avg_request_size(_sizes)
+        _avg = _compute_avg_req_size(_sizes)
         assert _avg > 0, "fixture method config must declare at least one positive size"
 
         async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,

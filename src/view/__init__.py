@@ -9,7 +9,9 @@ from src.view.dc_charts import (
     plot_yoly_chart,
 )
 from src.view.qn_diagram import (
+    DIM_GLOSSARY_DEFAULT,
     QN_GLOSSARY_DEFAULT,
+    plot_dim_topology,
     plot_qn_topology,
     plot_qn_topology_grid,
     plot_nd_heatmap,
@@ -20,8 +22,10 @@ from src.view.qn_diagram import (
 )
 
 __all__ = [
+    "DIM_GLOSSARY_DEFAULT",
     "QN_GLOSSARY_DEFAULT",
     "plot_arts_distributions",
+    "plot_dim_topology",
     "plot_nd_ci",
     "plot_nd_diffmap",
     "plot_nd_heatmap",
