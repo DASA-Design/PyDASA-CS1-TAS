@@ -19,13 +19,10 @@ Seven plotters with a uniform parameter-IO convention (keyword-only args after t
 
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
 
 import os
 from pathlib import Path
-
-# data types
 from typing import List, Optional
 
 # scientific stack
@@ -74,9 +71,12 @@ _LBL_STYLE = dict(fontweight="bold", color=_TEXT_BLACK)
 _TITLE_STYLE = dict(fontsize=14, fontweight="bold", pad=20)
 _SUPTITLE_STYLE = dict(fontsize=16, fontweight="bold")
 
-# bar chart colours for the delta view
-_BAR_GREEN = "#4CAF50"   # improvement
-_BAR_RED = "#FF5252"     # degradation
+# bar chart colours for the delta view. Neutral direction semantics:
+# pastel blue for a metric that decreased, pastel orange for one that
+# increased. Interpretation (good / bad) is a domain concern and is
+# left to the caller; the colour rule here is sign-only.
+_BAR_BLUE = "#427ABE"    # decrease (negative delta)
+_BAR_ORANGE = "#F0AB7E"  # increase (positive delta)
 
 # colourmaps
 _TOPOLOGY_CMAP = cm.coolwarm
@@ -171,8 +171,7 @@ def _format_value(value: float) -> str:
 
 
 def _generate_color_map(values: List) -> List[str]:
-    """*_generate_color_map()* build a vibrant colour palette for N distinct values using the same recipe as
-    `__OLD__/src/notebooks/src/display.py::_generate_color_map`:
+    """*_generate_color_map()* build a vibrant colour palette for N distinct values using the same recipe as `__OLD__/src/notebooks/src/display.py::_generate_color_map`:
 
         - n <= 12  -> `rainbow`   (high saturation, wide hue spread)
         - n <= 20  -> `Spectral`  (perceptually smoother)
@@ -262,7 +261,7 @@ def _build_topology_graph(rout: np.ndarray,
     return _graph
 
 
-def _draw_topology_axis(ax,
+def _draw_topology_axis(ax: plt.Axes,
                         graph: nx.DiGraph,
                         pos: dict,
                         nds: pd.DataFrame,
@@ -287,7 +286,10 @@ def _draw_topology_axis(ax,
     # colour scale; single plots default to the frame's own max.
     if "rho" in nds.columns:
         _rhos = nds["rho"].to_numpy(dtype=float)
-        _scale = rho_max if rho_max is not None else float(_rhos.max())
+        if rho_max is not None:
+            _scale = rho_max
+        else:
+            _scale = float(_rhos.max())
         _scale = max(_scale, 1e-9)
         _node_colors = [_TOPOLOGY_CMAP(_r / _scale) for _r in _rhos]
     else:
@@ -375,7 +377,7 @@ QN_GLOSSARY_DEFAULT = [
     "LEGEND",
     r"$\lambda$: Arrival rate (req/s)",
     r"$\mu$: Service rate (req/s)",
-    r"$\rho$: Utilization",
+    r"$\rho$: Utilisation",
     r"$L$: Avg number in system",
     r"$L_q$: Avg queue length",
     r"$W$: Avg time in system (s)",
@@ -383,12 +385,11 @@ QN_GLOSSARY_DEFAULT = [
 ]
 
 
-def _add_param_glossary(ax,
+def _add_param_glossary(ax: plt.Axes,
                         glossary: List[str],
                         *,
                         corner: str = "lower right") -> None:
-    """*_add_param_glossary()* overlay a caller-supplied parameter
-    glossary (LaTeX lines) in the chosen corner of a topology axis.
+    """*_add_param_glossary()* overlay a caller-supplied parameter glossary (LaTeX lines) in the chosen corner of a topology axis.
 
     Args:
         ax: matplotlib axis (graph subplot).
@@ -414,13 +415,11 @@ def _add_param_glossary(ax,
             bbox=_props)
 
 
-def _add_network_summary(ax,
+def _add_network_summary(ax: plt.Axes,
                          net: pd.Series,
                          *,
                          corner: str = "upper right") -> None:
-    """*_add_network_summary()* overlay the network-wide aggregate
-    metrics (avg_mu, avg_rho, L_net, Lq_net, W_net, Wq_net,
-    total_throughput) as a text box in the chosen corner.
+    """*_add_network_summary()* overlay the network-wide aggregate metrics (avg_mu, avg_rho, L_net, Lq_net, W_net, Wq_net, total_throughput) as a text box in the chosen corner.
 
     Args:
         ax: matplotlib axis (graph subplot).
@@ -456,9 +455,8 @@ def _add_network_summary(ax,
             bbox=_props)
 
 
-def _add_node_table(ax, nds: pd.DataFrame, nd_names: List[str]) -> None:
-    """*_add_node_table()* draw a per-node metrics table (name, lambda,
-    mu, rho, L, Lq, W, Wq) into a dedicated axis below the topology.
+def _add_node_table(ax: plt.Axes, nds: pd.DataFrame, nd_names: List[str]) -> None:
+    """*_add_node_table()* draw a per-node metrics table (name, lambda, mu, rho, L, Lq, W, Wq) into a dedicated axis below the topology.
 
     Args:
         ax: matplotlib axis reserved for the table (axis is hidden).
@@ -569,7 +567,7 @@ def plot_qn_topology(rout: np.ndarray,
                                 norm=plt.Normalize(vmin=0.0, vmax=_max_rho))
         _sm.set_array([])
         _cbar = _fig.colorbar(_sm, ax=_ax_graph, shrink=0.6, pad=0.02)
-        _cbar.set_label(r"Utilization $(\rho)$",
+        _cbar.set_label(r"Utilisation $(\rho)$",
                         color=_TEXT_BLACK, fontsize=14, fontweight="bold")
         _cbar.ax.tick_params(colors=_TEXT_BLACK)
 
@@ -585,9 +583,8 @@ def plot_qn_topology(rout: np.ndarray,
     # per-node metrics table at the bottom of the figure
     _add_node_table(_ax_table, nds, nd_names)
 
-    # graph axis title (large, bold; matches `Queue Network
-    # Visualization` from the old function but lets the caller override)
-    _ax_graph.set_title(title or "Queue Network Visualization",
+    # graph axis title (large, bold; matches `Queue Network Visualisation` from the old function but lets the caller override)
+    _ax_graph.set_title(title or "Queue Network Visualisation",
                         fontsize=24, fontweight="bold", color=_TEXT_BLACK,
                         va="center", ha="center", pad=20)
 
@@ -690,15 +687,16 @@ def plot_qn_topology_grid(routs: List[np.ndarray],
         if nets is not None:
             _add_network_summary(_ax, nets[_i].iloc[0], corner="upper right")
 
-    # shared rho colourbar anchored to the right of the grid; vmax
-    # matches the shared normalisation so the colourbar and the node
-    # colours tell the same story
-    _cbar_max = _shared_rho_max if _shared_rho_max is not None else 1.0
+    # shared rho colourbar anchored to the right of the grid; vmax matches the shared normalisation so the colourbar and the node colours tell the same story
+    if _shared_rho_max is not None:
+        _cbar_max = _shared_rho_max
+    else:
+        _cbar_max = 1.0
     _sm = cm.ScalarMappable(cmap=_TOPOLOGY_CMAP,
                             norm=plt.Normalize(vmin=0.0, vmax=_cbar_max))
     _sm.set_array([])
     _cbar = _fig.colorbar(_sm, ax=_axes, shrink=0.75, pad=0.02)
-    _cbar.set_label(r"Utilization $(\rho)$", **_LBL_STYLE)
+    _cbar.set_label(r"Utilisation $(\rho)$", **_LBL_STYLE)
 
     if title:
         _fig.suptitle(title, **_SUPTITLE_STYLE)
@@ -789,8 +787,10 @@ def plot_nd_heatmap(ndss: List[pd.DataFrame],
                 continue
             _row = {cname: _k_node}
             for _m in _metrics:
-                _row[_m] = (float(_row_df[_m].iloc[0])
-                            if _m in _row_df.columns else np.nan)
+                if _m in _row_df.columns:
+                    _row[_m] = float(_row_df[_m].iloc[0])
+                else:
+                    _row[_m] = np.nan
             _rows.append(_row)
 
         if not _rows:
@@ -929,7 +929,10 @@ def plot_nd_diffmap(deltas: pd.DataFrame,
             if _mask[_i, _j]:
                 continue
             _v = _matrix[_i, _j]
-            _text = f"{_v:.2f}" if abs(_v) >= 0.1 else f"{_v:.3f}"
+            if abs(_v) >= 0.1:
+                _text = f"{_v:.2f}"
+            else:
+                _text = f"{_v:.3f}"
             _ax.text(_j, _i, _text,
                      ha="center", va="center",
                      color=_TEXT_BLACK, fontweight="bold", fontsize=10)
@@ -981,21 +984,11 @@ def plot_nd_ci(nds: pd.DataFrame,
                file_path: Optional[str] = None,
                fname: Optional[str] = None,
                verbose: bool = False) -> Figure:
-    """*plot_nd_ci()* per-node mean with a confidence-interval band,
-    suitable for visualising the stochastic-method output where every
-    metric carries a `<metric>_std` companion from the replication
-    std-dev.
+    """*plot_nd_ci()* per-node mean with a confidence-interval band, suitable for visualising the stochastic-method output where every metric carries a `<metric>_std` companion from the replication std-dev.
 
-    When `reference` is supplied, its per-node value for the same
-    metric is overlaid as a second marker series; that makes the
-    plot a direct stochastic-vs-analytic cross-method check -- the
-    reference should fall INSIDE the stochastic error bars when the
-    two methods agree.
+    When `reference` is supplied, its per-node value for the same metric is overlaid as a second marker series; that makes the plot a direct stochastic-vs-analytic cross-method check; the reference should fall INSIDE the stochastic error bars when the two methods agree.
 
-    The CI half-width is `z * sigma / sqrt(reps)` when `reps` is
-    given (a proper CI on the mean), or `z * sigma` otherwise (a
-    "one-z-band" of rep-to-rep spread). `z` is pulled from
-    `_Z_SCORES[confidence]`.
+    The CI half-width is `z * sigma / sqrt(reps)` when `reps` is given (a proper CI on the mean), or `z * sigma` otherwise (a "one-z-band" of rep-to-rep spread). `z` is pulled from `_Z_SCORES[confidence]`.
 
     Args:
         nds (pd.DataFrame): stochastic per-node frame; must have a
@@ -1064,7 +1057,7 @@ def plot_nd_ci(nds: pd.DataFrame,
     _ax.errorbar(
         _x, _means, yerr=_halfwidth,
         fmt="o", capsize=5, capthick=1.5, elinewidth=1.5, markersize=8,
-        color=_BAR_GREEN, ecolor=_TEXT_BLACK,
+        color=_BAR_BLUE, ecolor=_TEXT_BLACK,
         label=f"{stochastic_name} mean  ({_band_label})",
     )
 
@@ -1081,7 +1074,7 @@ def plot_nd_ci(nds: pd.DataFrame,
         _ax.plot(
             _x, _ref_vals,
             linestyle="none", marker="x", markersize=10, markeredgewidth=2,
-            color=_BAR_RED,
+            color=_BAR_ORANGE,
             label=f"{reference_name} mean",
         )
 
@@ -1174,10 +1167,12 @@ def plot_net_bars(nets: List[pd.DataFrame],
 
     # draw bars + annotate each
     for _i, (_df, _name) in enumerate(zip(nets, names)):
-        _values = [
-            float(_df[_m].iloc[0]) if _m in _df.columns else np.nan
-            for _m in _metrics
-        ]
+        _values: List[float] = []
+        for _m in _metrics:
+            if _m in _df.columns:
+                _values.append(float(_df[_m].iloc[0]))
+            else:
+                _values.append(np.nan)
         _ax.bar(_positions[_i], _values,
                 width=_bar_w,
                 label=_name,
@@ -1190,8 +1185,12 @@ def plot_net_bars(nets: List[pd.DataFrame],
             if np.isnan(_v):
                 continue
             _text = _format_value(_v)
-            _y = _v * 1.05 if _v >= 0 else _v * 1.05
-            _va = "bottom" if _v >= 0 else "top"
+            # same offset on both sides of zero; the bar's orientation picks the va.
+            _y = _v * 1.05
+            if _v >= 0:
+                _va = "bottom"
+            else:
+                _va = "top"
             _ax.text(_positions[_i][_j], _y, _text,
                      ha="center", va=_va,
                      fontsize=10, rotation=90,
@@ -1231,7 +1230,7 @@ def plot_net_delta(deltas: pd.DataFrame,
                    verbose: bool = False) -> Figure:
     """*plot_net_delta()* percent-change bar chart for the network-wide deltas between two scenarios.
 
-    Colouring is semantic, not geometric: negative deltas (the metric decreased) are drawn green (improvement) and positive deltas are drawn red (degradation). The exception is `total_throughput` -- more throughput is better, so its sign rule is flipped.
+    Colouring is neutral and sign-only: negative deltas (the metric decreased) are drawn pastel blue, positive deltas (the metric increased) are drawn pastel orange. Whether a decrease / increase is "good" or "bad" is a domain concern; the caller interprets the colours in context (e.g. for `total_throughput`, an increase is desirable; for `W_net`, a decrease is desirable).
 
     Args:
         deltas (pd.DataFrame): single-row frame with one column per metric; values are fractional deltas (e.g. `0.05` = +5%).
@@ -1252,12 +1251,13 @@ def plot_net_delta(deltas: pd.DataFrame,
     # pull the delta values as percentages
     _values = [float(deltas[_m].iloc[0]) * 100 for _m in _metrics]
 
-    # uniform colour rule (matches `__OLD__/src/view/plots.py`):
-    # negative delta (below the zero baseline) -> improvement -> green;
-    # positive delta -> degradation -> red. Purely sign-based, no
-    # per-metric special cases, so the caller-supplied metric order
-    # does not change the colouring.
-    _colors = [_BAR_GREEN if _v < 0 else _BAR_RED for _v in _values]
+    # uniform sign-only colour rule: negative delta (below the zero baseline) -> decrease -> pastel blue; positive delta -> increase -> pastel orange. No per-metric special cases, so the caller-supplied metric order does not change the colouring; domain interpretation (good / bad) is left to the caller.
+    _colors: List[str] = []
+    for _v in _values:
+        if _v < 0:
+            _colors.append(_BAR_BLUE)
+        else:
+            _colors.append(_BAR_ORANGE)
 
     _fig, _ax = plt.subplots(figsize=(12, 7), facecolor="white")
     _ax.set_facecolor("white")
@@ -1267,11 +1267,18 @@ def plot_net_delta(deltas: pd.DataFrame,
 
     # annotate each bar with its percent value
     for _b, _v in zip(_bars, _values):
-        _y = (_b.get_height() / 2) if abs(_b.get_height()) >= 1 else _b.get_height()
+        if abs(_b.get_height()) >= 1:
+            _y = _b.get_height() / 2
+        else:
+            _y = _b.get_height()
+        if _v >= 0:
+            _va = "bottom"
+        else:
+            _va = "top"
         _ax.text(_b.get_x() + _b.get_width() / 2.0, _y,
                  f"{_v:.2f}%",
                  ha="center",
-                 va="bottom" if _v >= 0 else "top",
+                 va=_va,
                  fontsize=11, fontweight="light", color=_TEXT_BLACK)
 
     # cosmetics: zero baseline, ticks, labels, grid, legend
@@ -1284,10 +1291,10 @@ def plot_net_delta(deltas: pd.DataFrame,
     _ax.grid(**_GRID_STYLE)
 
     _legend = [
-        plt.Rectangle((0, 0), 1, 1, facecolor=_BAR_GREEN, alpha=0.85,
-                      label="Improvement"),
-        plt.Rectangle((0, 0), 1, 1, facecolor=_BAR_RED, alpha=0.85,
-                      label="Degradation"),
+        plt.Rectangle((0, 0), 1, 1, facecolor=_BAR_BLUE, alpha=0.85,
+                      label="Decrease"),
+        plt.Rectangle((0, 0), 1, 1, facecolor=_BAR_ORANGE, alpha=0.85,
+                      label="Increase"),
     ]
     _ax.legend(handles=_legend, loc="best")
 
