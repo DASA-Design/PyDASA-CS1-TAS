@@ -32,6 +32,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_one_row_per_successful_call(self):
+        """*test_one_row_per_successful_call()* one log row appended per call with full LOG_COLUMNS coverage + HTTP 200 + monotonic timestamps."""
         _ctx = ServiceContext(spec=_spec())
 
         @logger(_ctx)
@@ -56,7 +57,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_local_success_not_contaminated_by_downstream(self):
-        """When the handler returns a DOWNSTREAM response (different service_name) with success=False, THIS context's row stays success=True (local Bernoulli didn't fire)."""
+        """*test_local_success_not_contaminated_by_downstream()* when the handler returns a DOWNSTREAM response (different `service_name`) with `success=False`, THIS context's row stays `success=True` (local Bernoulli didn't fire)."""
         _ctx = ServiceContext(spec=_spec(name="TAS_{2}"))
 
         @logger(_ctx)
@@ -72,6 +73,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_exception_recorded_as_failure_row(self):
+        """*test_exception_recorded_as_failure_row()* a handler that raises still appends one log row (success=False) before the exception propagates, so row counts match arrival counts."""
         _ctx = ServiceContext(spec=_spec())
 
         @logger(_ctx)

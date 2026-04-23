@@ -3,16 +3,9 @@
 Module services/instruments.py
 ==============================
 
-Aspect-oriented annotation that records one CSV row per invocation
-around a handler. Framework-agnostic: works on any async coroutine
-with signature `(req: ServiceRequest) -> ServiceResponse`. The
-decorator tracks timestamps and outcome; it does not admit, queue,
-or gate concurrency.
+Aspect-oriented annotation that records one CSV row per invocation around a handler. Framework-agnostic: works on any async coroutine with signature `(req: ServiceRequest) -> ServiceResponse`. The decorator tracks timestamps and outcome; it does not admit, queue, or gate concurrency.
 
-Queue behaviour emerges from FastAPI and asyncio running requests
-concurrently. We capture only the observable side (receipt, start,
-end, outcome) so downstream methods can derive rho, L, and W from
-the recorded rows.
+Queue behaviour emerges from FastAPI and asyncio running requests concurrently. We capture only the observable side (receipt, start, end, outcome) so downstream methods can derive rho, L, and W from the recorded rows.
 """
 # native python modules
 from __future__ import annotations
@@ -34,16 +27,9 @@ HandlerFn = Callable[[ServiceRequest], Awaitable[ServiceResponse]]
 def logger(ctx: ServiceContext) -> Callable[[HandlerFn], HandlerFn]:
     """*@logger(ctx)* decorator: append one row to `ctx.log` around each call.
 
-    Writes per-invocation rows in the frozen `LOG_COLUMNS` shape. The
-    wrapped handler's return value passes through unchanged; its
-    `success` flag is recorded as the local outcome ONLY when the
-    response's `service_name` matches this context. When it does not
-    match, the response came from a downstream, so this row records
-    local success (eps did not fire here) regardless of the rolled-up
-    downstream value.
+    Writes per-invocation rows in the frozen `LOG_COLUMNS` shape. The wrapped handler's return value passes through unchanged; its `success` flag is recorded as the local outcome ONLY when the response's `service_name` matches this context. When it does not match, the response came from a downstream, so this row records local success (eps did not fire here) regardless of the rolled-up downstream value.
 
-    If the handler raises, a failure row is appended before the
-    exception propagates so row counts match arrival counts.
+    If the handler raises, a failure row is appended before the exception propagates so row counts match arrival counts.
 
     Args:
         ctx (ServiceContext): per-service state carrying `spec`, `log`, and `rng`.
@@ -80,9 +66,10 @@ def logger(ctx: ServiceContext) -> Callable[[HandlerFn], HandlerFn]:
             _end_ts = time.time()
 
             # local outcome only; downstream success does not apply here
-            _local_success = (bool(_resp.success)
-                              if _resp.service_name == ctx.spec.name
-                              else True)
+            if _resp.service_name == ctx.spec.name:
+                _local_success = bool(_resp.success)
+            else:
+                _local_success = True
 
             ctx.log.append({
                 "request_id": req.request_id,
