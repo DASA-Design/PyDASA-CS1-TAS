@@ -43,17 +43,17 @@ def analyse_symbolic(engine: AnalysisEngine,
     Returns:
         dict[str, dict[str, float]]: nested `{SEN_{coeff}: {var: sensitivity_value}}` over every coefficient in `engine.coefficients` (raw Pi and derived). Non-numeric entries are filtered out.
     """
-    # spin up the pydasa workflow and attach the same variables/coefficients
-    _sen = SensitivityAnalysis(idx,
-                               fwk,
-                               schema,
-                               name,
-                               cat)
+    # spin up the pydasa workflow and attach the same variables/coefficients (pass by keyword — dataclass field order differs from our arg order)
+    _sen = SensitivityAnalysis(_idx=idx,
+                               _fwk=fwk,
+                               _schema=schema,
+                               _name=name,
+                               _cat=cat)
     _sen.variables = engine.variables
     _sen.coefficients = engine.coefficients
 
     # run the symbolic pass at the requested evaluation point
-    _raw = _sen.analyze_symbolic(val_type)
+    _raw = _sen.analyze_symbolic(val_type=val_type)
 
     # reshape: keep only numeric leaves, drop sympy residues
     _out: dict[str, dict[str, float]] = {}

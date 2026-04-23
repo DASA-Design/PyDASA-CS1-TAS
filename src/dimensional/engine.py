@@ -43,12 +43,12 @@ def build_engine(artifact_key: str,
     # wrap each param dict into a pydasa Variable
     _vars = {_s: Variable(**_p) for _s, _p in artifact_vars.items()}
 
-    # spin up the engine with the schema and descriptive metadata
-    _eng = AnalysisEngine(idx,
-                          fwk,
-                          schema,
-                          f"TAS {artifact_key} dimensional analysis",
-                          f"Dimensional analysis for artifact {artifact_key} (M/M/c/K queueing node).")
+    # spin up the engine with the schema and descriptive metadata (pydasa field order is SymBasis/IdxBasis/Foundation/WorkflowBase — positional args would misalign, so pass by keyword)
+    _eng = AnalysisEngine(_idx=idx,
+                          _fwk=fwk,
+                          _schema=schema,
+                          _name=f"TAS {artifact_key} dimensional analysis",
+                          description=f"Dimensional analysis for artifact {artifact_key} (M/M/c/K queueing node).")
 
     # attach variables; pydasa takes ownership from here
     _eng.variables = _vars
