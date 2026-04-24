@@ -126,7 +126,48 @@ class TestServiceContextRng:
 
     def test_log_buffer_starts_empty(self):
         _ctx = SvcCtx(spec=_spec())
-        assert _ctx.log == []
+        assert len(_ctx.log) == 0
+        assert _ctx.dropped_count == 0
+
+
+class TestServiceContextLogBuffer:
+    """**TestServiceContextLogBuffer** P1.1+P1.2 contract for the bounded log deque, drop counter, and drain helper."""
+
+    def _row(self) -> dict:
+        return {_c: 0 for _c in LOG_COLUMNS}
+
+    def test_record_row_appends_under_cap(self):
+        """*test_record_row_appends_under_cap()* `record_row` appends without counting drops while the deque is below `log_maxlen`."""
+        _ctx = SvcCtx(spec=_spec())
+        _ctx.log_maxlen = 8
+        _ctx.log = type(_ctx.log)(maxlen=8)
+        for _ in range(5):
+            _ctx.record_row(self._row())
+        assert len(_ctx.log) == 5
+        assert _ctx.dropped_count == 0
+
+    def test_record_row_counts_drops_at_cap(self):
+        """*test_record_row_counts_drops_at_cap()* once the deque is full, every additional `record_row` increments `dropped_count` (oldest row evicted per `deque(maxlen=...)` semantics)."""
+        _ctx = SvcCtx(spec=_spec())
+        _ctx.log_maxlen = 4
+        _ctx.log = type(_ctx.log)(maxlen=4)
+        for _ in range(10):
+            _ctx.record_row(self._row())
+        assert len(_ctx.log) == 4
+        assert _ctx.dropped_count == 6
+
+    def test_drain_swaps_buffer_and_returns_snapshot(self):
+        """*test_drain_swaps_buffer_and_returns_snapshot()* `drain()` returns the buffered rows and resets the deque to empty (same `maxlen`)."""
+        _ctx = SvcCtx(spec=_spec())
+        _ctx.log_maxlen = 16
+        _ctx.log = type(_ctx.log)(maxlen=16)
+        for _i in range(7):
+            _ctx.record_row({**self._row(), "kind": str(_i)})
+        _snapshot = _ctx.drain()
+        assert len(_snapshot) == 7
+        assert [_r["kind"] for _r in _snapshot] == [str(_i) for _i in range(7)]
+        assert len(_ctx.log) == 0
+        assert _ctx.log.maxlen == 16
 
 
 # ---- LOG_COLUMNS frozen schema -----------------------------------------

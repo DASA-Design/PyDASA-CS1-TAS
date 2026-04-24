@@ -21,9 +21,10 @@ import asyncio
 import csv
 import random
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, TYPE_CHECKING
 
 # web stack
 import httpx
@@ -164,14 +165,33 @@ LOG_COLUMNS = (
 class SvcCtx:
     """**SvcCtx** mutable per-service state.
 
-    Carries the spec (so rows carry `service_name`), a log list (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), the bound request handler (set by `mount_atomic_svc` after the handler is built, so composite callers can dispatch siblings in-process), and an asyncio.Semaphore initialised with `spec.c` permits so the `@logger` decorator can gate concurrent admission and measure real Wq / rho instead of asyncio's natural concurrency.
+    Carries the spec (so rows carry `service_name`), a bounded log buffer (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), the bound request handler (set by `mount_atomic_svc` after the handler is built, so composite callers can dispatch siblings in-process), and an asyncio.Semaphore initialised with `spec.c` permits so the `@logger` decorator can gate concurrent admission and measure real Wq / rho instead of asyncio's natural concurrency.
+
+    The log is a `collections.deque` with `maxlen=LOG_BUFFER_MAXLEN`; any append past that cap silently drops the OLDEST row (deque semantics) and increments `dropped_count`. A healthy run asserts `dropped_count == 0` at shutdown; a non-zero value signals the buffer was sized too small for the workload and measurements are incomplete.
     """
 
     # immutable per-service knobs
     spec: SvcSpec
 
-    # CSV rows buffered until flush
-    log: List[Dict[str, Any]] = field(default_factory=list)
+    # CSV rows buffered until flush -- bounded deque to prevent unbounded
+    # memory growth on long or high-rate runs. `maxlen` is a soft cap:
+    # overflow increments `dropped_count`, which must be zero at end of
+    # run (checked by the launcher). dict shape is preserved so every
+    # downstream reader (`_build_svc_df_from_logs`, the schema tests)
+    # stays unchanged.
+    log: Deque[Dict[str, Any]] = field(init=False)
+
+    # count of rows silently dropped because the log deque was full.
+    # zero on a well-sized run; non-zero means the run needs a larger
+    # buffer OR the load was higher than the calibration assumed.
+    dropped_count: int = field(default=0, init=False)
+
+    # bound on the log deque's length. Sized for ~500 krequests per
+    # service across the full replicate window at the target rates in
+    # `data/config/method/experiment.json`. A single run at 345 req/s
+    # for 60 s x 4 hops produces ~82 k rows per service; the 500 k cap
+    # leaves ~6x headroom.
+    log_maxlen: int = field(default=500_000)
 
     # per-service RNG seeded from spec.seed
     rng: random.Random = field(init=False)
@@ -189,10 +209,38 @@ class SvcCtx:
             self.rng = random.Random(self.spec.seed)
         else:
             self.rng = random.Random()
+        self.log = deque(maxlen=int(self.log_maxlen))
         # Semaphore must be created in an asyncio context, but since dataclass
         # init runs synchronously, allocate it here -- safe because the
         # launcher mounts services inside the running event loop
         self.sem = asyncio.Semaphore(max(int(self.spec.c), 1))
+
+    def record_row(self, row: Dict[str, Any]) -> None:
+        """*record_row()* append a log row; count a drop if the deque was already full.
+
+        Called from `@logger` instead of `self.log.append(...)` so the
+        overflow path is observable. `deque(maxlen=...)` silently drops the
+        left-most element on append when full; we detect the drop by
+        checking `len(self.log) == self.log.maxlen` before the append.
+
+        Args:
+            row (Dict[str, Any]): one CSV row in the `LOG_COLUMNS` shape.
+        """
+        if len(self.log) == self.log.maxlen:
+            self.dropped_count += 1
+        self.log.append(row)
+
+    def drain(self) -> List[Dict[str, Any]]:
+        """*drain()* swap the current log buffer for a fresh empty one and return the old contents.
+
+        Cheap O(1) rebind so a producer appending during the swap cannot race the consumer. Used by `ExperimentLauncher.drain_all()` between probe steps; `flush_log` still reads `self.log` directly for the final disk write at replicate end.
+
+        Returns:
+            List[Dict[str, Any]]: every row buffered since the previous drain (or construction); the deque is reset to empty with the same `maxlen`.
+        """
+        _snapshot = list(self.log)
+        self.log = deque(maxlen=int(self.log_maxlen))
+        return _snapshot
 
     @property
     def c_in_use(self) -> int:

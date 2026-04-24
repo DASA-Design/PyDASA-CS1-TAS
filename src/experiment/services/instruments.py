@@ -36,6 +36,14 @@ _c_used_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
     "c_used_at_admit", default=None)
 
 
+# unit-conversion factor: 1 second = 1_000_000_000 nanoseconds. The hot
+# path stamps timestamps as `perf_counter_ns` (int ns) for monotonic,
+# non-accumulating precision; we divide by this factor to expose float
+# seconds in the CSV row so every downstream reader
+# (`_build_svc_df_from_logs`, schema tests) stays unchanged.
+_NS_TO_S: float = 1_000_000_000.0
+
+
 def mark_admit_time(c_used: int) -> None:
     """*mark_admit_time()* publish post-admission timestamp + in-flight count.
 
@@ -43,12 +51,14 @@ def mark_admit_time(c_used: int) -> None:
     `@logger` reads both back when writing the row so `start_ts` reflects
     when the request actually started service (not just when it arrived)
     and `c_used_at_start` reflects admitted concurrency, not asyncio's
-    natural concurrency.
+    natural concurrency. Timestamp stored as `perf_counter_ns` (int ns)
+    to avoid the precision drift of accumulating float seconds across
+    long runs.
 
     Args:
         c_used (int): in-flight count after this request acquired its permit.
     """
-    _admit_var.set(time.perf_counter())
+    _admit_var.set(time.perf_counter_ns())
     _c_used_var.set(int(c_used))
 
 
@@ -73,36 +83,40 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
             # (composite handlers cannot be gated here without deadlocking
             # the downstream dispatch chain). Atomic handlers publish a
             # post-admit timestamp via `mark_admit_time()`; if absent
-            # (composite path), Wq reads 0 -- correct for an un-gated node
-            _recv_ts = time.perf_counter()
+            # (composite path), Wq reads 0 -- correct for an un-gated node.
+            # Integer-nanosecond stamps in the hot path (monotonic, no
+            # accumulating float drift); converted to float seconds only
+            # when populating the dict row so the CSV schema is unchanged.
+            _recv_ns = time.perf_counter_ns()
             _admit_var.set(None)
             _c_used_var.set(None)
 
             try:
                 _resp = await handler(req)
             except Exception as _exc:
-                _end_ts = time.perf_counter()
-                _start_ts = _admit_var.get() or _recv_ts
+                _end_ns = time.perf_counter_ns()
+                _start_ns = _admit_var.get() or _recv_ns
                 _c_used_at_start = _c_used_var.get()
                 if _c_used_at_start is None:
                     _c_used_at_start = ctx.c_in_use
                 _status = getattr(_exc, "status_code", 500)
-                ctx.log.append({
+                _row_fail = {
                     "request_id": req.request_id,
                     "service_name": ctx.spec.name,
                     "kind": req.kind,
-                    "recv_ts": _recv_ts,
-                    "start_ts": _start_ts,
-                    "end_ts": _end_ts,
+                    "recv_ts": _recv_ns / _NS_TO_S,
+                    "start_ts": _start_ns / _NS_TO_S,
+                    "end_ts": _end_ns / _NS_TO_S,
                     "c_used_at_start": int(_c_used_at_start),
                     "success": False,
                     "status_code": int(_status),
                     "size_bytes": req.size_bytes,
-                })
+                }
+                ctx.record_row(_row_fail)
                 raise
 
-            _end_ts = time.perf_counter()
-            _start_ts = _admit_var.get() or _recv_ts
+            _end_ns = time.perf_counter_ns()
+            _start_ns = _admit_var.get() or _recv_ns
             _c_used_at_start = _c_used_var.get()
             if _c_used_at_start is None:
                 _c_used_at_start = ctx.c_in_use
@@ -113,18 +127,19 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
             else:
                 _local_success = True
 
-            ctx.log.append({
+            _row_ok = {
                 "request_id": req.request_id,
                 "service_name": ctx.spec.name,
                 "kind": req.kind,
-                "recv_ts": _recv_ts,
-                "start_ts": _start_ts,
-                "end_ts": _end_ts,
+                "recv_ts": _recv_ns / _NS_TO_S,
+                "start_ts": _start_ns / _NS_TO_S,
+                "end_ts": _end_ns / _NS_TO_S,
                 "c_used_at_start": int(_c_used_at_start),
                 "success": _local_success,
                 "status_code": 200,
                 "size_bytes": req.size_bytes,
-            })
+            }
+            ctx.record_row(_row_ok)
             return _resp
         return _wrapped
     return _decorator

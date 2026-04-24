@@ -44,11 +44,93 @@ from src.experiment.client import ClientSimulator
 from src.experiment.client import build_ramp_cfg
 from src.experiment.launcher import ExperimentLauncher
 from src.experiment.services import derive_seed
-from src.io import NetCfg, load_method_cfg, load_profile
+from src.io import (NetCfg, calibration_age_hours, calibration_band_us,
+                    calibration_floor_us, load_latest_calibration,
+                    load_method_cfg, load_profile)
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
+
+# Hours after which a calibration envelope is considered stale (warning
+# only; still proceeds). Anything below this threshold is accepted
+# without comment; older runs get a printed warning so the reporting
+# path keeps using the number but the operator knows it may drift.
+_CALIB_STALE_HOURS: float = 24.0
+
+
+def _resolve_baseline(*,
+                      skip: bool,
+                      verbose: bool = True) -> Optional[Dict[str, Any]]:
+    """*_resolve_baseline()* load the most recent calibration for this host.
+
+    Enforces the pre-run gate planned for the experiment method: every run must reference a noise-floor calibration from the host it is running on, so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
+
+    Args:
+        skip (bool): if True, bypass the gate entirely and return `None`. A loud warning is printed so downstream consumers know reported numbers are un-adjusted.
+        verbose (bool): when False, suppress the stale / skip warnings (used by tests and non-interactive callers).
+
+    Returns:
+        Optional[Dict[str, Any]]: parsed calibration envelope, or `None` when skipped.
+
+    Raises:
+        RuntimeError: when `skip` is False and no calibration file exists for the current host under `data/results/experiment/calibration/`.
+    """
+    if skip:
+        if verbose:
+            print("WARNING: --skip-calibration set; experiment results will "
+                  "NOT be adjusted against a host noise floor. Raw latencies "
+                  "include host overhead and are NOT directly comparable to "
+                  "other runs.")
+        return None
+    _env = load_latest_calibration()
+    if _env is None:
+        raise RuntimeError(
+            "No calibration envelope found for this host under "
+            "data/results/experiment/calibration/. Run "
+            "`python src/scripts/calibration.py` before the experiment, "
+            "or pass skip_calibration=True (CLI: --skip-calibration) to "
+            "bypass the gate with a warning.")
+    _age = calibration_age_hours(_env)
+    if verbose and _age > _CALIB_STALE_HOURS:
+        print(f"WARNING: calibration is {_age:.1f} h old "
+              f"(stale threshold = {_CALIB_STALE_HOURS:.0f} h). "
+              "Consider re-running `python src/scripts/calibration.py` "
+              "if background load / thermals on this host may have changed.")
+    return _env
+
+
+def _build_baseline_block(envelope: Optional[Dict[str, Any]]
+                          ) -> Dict[str, Any]:
+    """*_build_baseline_block()* summarise a calibration envelope for the result envelope.
+
+    Stored alongside every experiment run so downstream reporting can apply the `reported = measured - loopback_median +/- jitter_p99` convention without re-reading the calibration JSON.
+
+    Args:
+        envelope (Optional[Dict[str, Any]]): calibration envelope, or `None` when the gate was skipped.
+
+    Returns:
+        Dict[str, Any]: summary block with `baseline_ref`, `loopback_median_us`, `jitter_p99_us`, `age_hours`, `applied`.
+    """
+    if envelope is None:
+        return {
+            "baseline_ref": None,
+            "loopback_median_us": 0.0,
+            "jitter_p99_us": 0.0,
+            "age_hours": None,
+            "applied": False,
+        }
+    _ref = envelope.get("output_path")
+    _floor = calibration_floor_us(envelope)
+    _band = calibration_band_us(envelope)
+    _age = calibration_age_hours(envelope)
+    return {
+        "baseline_ref": _ref,
+        "loopback_median_us": _floor,
+        "jitter_p99_us": _band,
+        "age_hours": _age,
+        "applied": True,
+    }
 
 
 @contextlib.contextmanager
@@ -283,6 +365,9 @@ async def _run_async(cfg: NetCfg,
 
             _ramp_out = await _sim.run_ramp()
             _counts = _lnc.flush_logs(log_dir)
+            # P1.2: surface any log-buffer overflow so a non-zero count
+            # can fail loudly at the top-level envelope layer.
+            _drops = _lnc.collect_drop_counts()
 
     # FR-3.5: if the ramp was driven from a rho_grid, thread the per-point metadata back into each probe record so downstream analysis knows which rho-target each probe was anchored to
     if _rho_grid_meta:
@@ -299,6 +384,7 @@ async def _run_async(cfg: NetCfg,
         "client_effective_rate": _ramp_out.get("client_effective_rate", 0.0),
         "duration_s": _duration,
         "service_log_counts": _counts,
+        "log_drop_counts": _drops,
     }
 
     return _ans
@@ -308,8 +394,12 @@ def run(adp: Optional[str] = None,
         prf: Optional[str] = None,
         scn: Optional[str] = None,
         wrt: bool = True,
-        method_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        method_cfg: Optional[Dict[str, Any]] = None,
+        skip_calibration: bool = False,
+        verbose: bool = True) -> Dict[str, Any]:
     """*run()* execute the architectural experiment for one (profile, scenario) pair.
+
+    Enforces the per-host calibration gate: a noise-floor calibration for the current host must exist under `data/results/experiment/calibration/` before the run starts, or `skip_calibration=True` must be set to bypass with a warning. The resolved baseline is attached to the result envelope as the `baseline` block so downstream reporting can apply the `reported = measured - loopback_median +/- jitter_p99` convention.
 
     Args:
         adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`.
@@ -317,10 +407,18 @@ def run(adp: Optional[str] = None,
         scn (Optional[str]): explicit scenario name.
         wrt (bool): if True, write artifacts under `data/results/experiment/<scenario>/`. Defaults to True.
         method_cfg (Optional[Dict[str, Any]]): inline config override; used by `_QUICK_CFG` tests to skip the JSON read.
+        skip_calibration (bool): when True, bypass the calibration gate; a warning is printed and `baseline.applied` is False on the result.
+        verbose (bool): when False, suppress the calibration stale / skip warnings; metric output is unaffected.
 
     Returns:
-        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `paths`.
+        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `baseline`, `paths`.
+
+    Raises:
+        RuntimeError: when `skip_calibration` is False and no calibration exists for the current host.
     """
+    _baseline_env = _resolve_baseline(skip=skip_calibration, verbose=verbose)
+    _baseline_block = _build_baseline_block(_baseline_env)
+
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
     if method_cfg is not None:
         _mcfg = method_cfg
@@ -377,6 +475,7 @@ def run(adp: Optional[str] = None,
             "stopped_reason": _run_out["stopped_reason"],
             "client_effective_rate": _run_out.get(
                 "client_effective_rate", 0.0),
+            "log_drop_counts": _run_out.get("log_drop_counts", {}),
             "log_dir": _rep_log_dir,
         })
 
@@ -392,7 +491,8 @@ def run(adp: Optional[str] = None,
         }
         _paths = _write_results(_cfg, _mcfg, _first["nodes"],
                                 _first["network"], _first["requirements"],
-                                _run_out_first)
+                                _run_out_first,
+                                baseline=_baseline_block)
 
     _ans = {
         "config": _cfg,
@@ -404,9 +504,20 @@ def run(adp: Optional[str] = None,
         "saturation_rate": _first["saturation_rate"],
         "stopped_reason": _first["stopped_reason"],
         "client_effective_rate": _first.get("client_effective_rate", 0.0),
+        "log_drop_counts": _first.get("log_drop_counts", {}),
         "replicates": _replicates,
+        "baseline": _baseline_block,
         "paths": _paths,
     }
+
+    # P1.2 invariant: a healthy run never overflows the per-service
+    # log buffer. A non-zero count means observations were lost; warn
+    # so the operator notices, and surface the counts on the envelope.
+    if verbose and _ans["log_drop_counts"]:
+        print(f"WARNING: per-service log buffer overflowed: "
+              f"{_ans['log_drop_counts']}. Raise `SvcCtx.log_maxlen` "
+              "or shorten the probe window.")
+
     return _ans
 
 
@@ -415,7 +526,8 @@ def _write_results(cfg: NetCfg,
                    nds: pd.DataFrame,
                    net: pd.DataFrame,
                    req: dict,
-                   run_out: Dict[str, Any]) -> Dict[str, str]:
+                   run_out: Dict[str, Any],
+                   baseline: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """*_write_results()* serialise the experiment outputs to the scenario-scoped directory.
 
     Args:
@@ -425,6 +537,7 @@ def _write_results(cfg: NetCfg,
         net (pd.DataFrame): network aggregate (one row).
         req (dict): R1 / R2 / R3 verdict dict.
         run_out (Dict[str, Any]): async runtime output (probes, saturation, counts).
+        baseline (Optional[Dict[str, Any]]): calibration summary block produced by `_build_baseline_block`; written into the per-run JSON so the file is self-describing and the `reported = measured - loopback_median +/- jitter_p99` convention is reproducible after the fact.
 
     Returns:
         Dict[str, str]: on-disk paths keyed by `profile` and `requirements`, relative to the repo root.
@@ -444,6 +557,11 @@ def _write_results(cfg: NetCfg,
         "label": cfg.label,
         "method": "experiment",
         "method_config": method_cfg,
+        "baseline": baseline or {"applied": False,
+                                 "baseline_ref": None,
+                                 "loopback_median_us": 0.0,
+                                 "jitter_p99_us": 0.0,
+                                 "age_hours": None},
         "network": net.iloc[0].to_dict(),
         "nodes": nds.to_dict(orient="records"),
         "probes": _probes_out,
@@ -489,13 +607,19 @@ def main() -> None:
     _parser.add_argument("--no-write",
                          action="store_true",
                          help="skip writing result files",)
+    _parser.add_argument("--skip-calibration",
+                         action="store_true",
+                         help=("bypass the pre-run calibration gate; "
+                               "a warning is printed and the baseline "
+                               "is NOT subtracted from reported latencies"),)
 
     _args = _parser.parse_args()
 
     _result = run(adp=_args.adaptation,
                   prf=_args.profile,
                   scn=_args.scenario,
-                  wrt=not _args.no_write,)
+                  wrt=not _args.no_write,
+                  skip_calibration=_args.skip_calibration,)
 
     _cfg = _result["config"]
     _net = _result["network"].iloc[0]
@@ -503,6 +627,18 @@ def main() -> None:
 
     print(f"profile={_cfg.profile}  scenario={_cfg.scenario}")
     print(f"label: {_cfg.label}")
+    _base = _result.get("baseline", {})
+    if _base.get("applied"):
+        _floor_ms = float(_base["loopback_median_us"]) / 1000.0
+        _band_ms = float(_base["jitter_p99_us"]) / 1000.0
+        _age = _base.get("age_hours")
+        print(f"baseline: loopback_median={_floor_ms:.3f}ms  "
+              f"jitter_p99={_band_ms:.3f}ms  "
+              f"age={_age:.1f}h  "
+              f"ref={_base.get('baseline_ref')}")
+        print("reported = measured - loopback_median +/- jitter_p99")
+    else:
+        print("baseline: NOT APPLIED (--skip-calibration)")
     print(f"  nodes={int(_net['nodes'])}  "
           f"avg_rho={_net['avg_rho']:.4f}  "
           f"max_rho={_net['max_rho']:.4f}  "

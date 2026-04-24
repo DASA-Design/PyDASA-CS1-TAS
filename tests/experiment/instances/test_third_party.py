@@ -119,7 +119,7 @@ class TestAppStructure:
         _app, _spec = _app_terminal
         _ctx = _app.state.ctx
         assert _ctx.spec is _spec
-        assert _ctx.log == []
+        assert len(_ctx.log) == 0
 
 
 class TestTerminalService:

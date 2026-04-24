@@ -69,13 +69,15 @@ _QUICK_CFG = {
 @pytest.fixture(scope="module")
 def _result_baseline():
     """*_result_baseline()* module-scoped baseline run; cached so every test reuses the same experiment."""
-    return run_experiment(adp="baseline", wrt=False, method_cfg=_QUICK_CFG)
+    return run_experiment(adp="baseline", wrt=False, method_cfg=_QUICK_CFG,
+                           skip_calibration=True, verbose=False)
 
 
 @pytest.fixture(scope="module")
 def _result_s1():
     """*_result_s1()* module-scoped s1 (Retry) run."""
-    return run_experiment(adp="s1", wrt=False, method_cfg=_QUICK_CFG)
+    return run_experiment(adp="s1", wrt=False, method_cfg=_QUICK_CFG,
+                          skip_calibration=True, verbose=False)
 
 
 class TestExperimentEndToEnd:
@@ -140,7 +142,8 @@ class TestRhoGridPath:
             "rho_grid": [0.20],
             "cascade": {"mode": "rolling", "threshold": 0.5, "window": 50},
         }
-        return run_experiment(adp="baseline", wrt=False, method_cfg=_cfg)
+        return run_experiment(adp="baseline", wrt=False, method_cfg=_cfg,
+                              skip_calibration=True, verbose=False)
 
     def test_probe_has_rho_target_metadata(self, _rho_result):
         """*test_probe_has_rho_target_metadata()* every probe carries `rho_target`, `lambda_z_inverted`, and `bottleneck_artifact_idx` when the rho-grid path is used."""
@@ -195,9 +198,11 @@ class TestSeededReproducibility:
     def test_request_ids_match_across_runs(self):
         """*test_request_ids_match_across_runs()* `request_id` is derived from the client's seeded RNG, not an unseeded `uuid.uuid4()`."""
         _res_a = run_experiment(adp="baseline", wrt=False,
-                                method_cfg=_QUICK_CFG)
+                                method_cfg=_QUICK_CFG,
+                                skip_calibration=True, verbose=False)
         _res_b = run_experiment(adp="baseline", wrt=False,
-                                method_cfg=_QUICK_CFG)
+                                method_cfg=_QUICK_CFG,
+                                skip_calibration=True, verbose=False)
         _ids_a = [_r.request_id
                   for _p in _res_a["probes"]
                   for _r in _p["records"]]
@@ -216,7 +221,8 @@ class TestReplicates:
         """*_result_r2()* module-scoped baseline run with `replications=2`."""
         _cfg = dict(_QUICK_CFG)
         _cfg["replications"] = 2
-        return run_experiment(adp="baseline", wrt=False, method_cfg=_cfg)
+        return run_experiment(adp="baseline", wrt=False, method_cfg=_cfg,
+                              skip_calibration=True, verbose=False)
 
     def test_replicates_list_has_two_entries(self, _result_r2):
         """*test_replicates_list_has_two_entries()* envelope exposes exactly two replicate payloads."""
@@ -258,7 +264,8 @@ class TestResultEnvelope:
         monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")
 
         _result = run_experiment(adp="baseline", wrt=True,
-                                 method_cfg=_QUICK_CFG)
+                                 method_cfg=_QUICK_CFG,
+                                 skip_calibration=True, verbose=False)
         assert "profile" in _result["paths"]
 
         _path = tmp_path / "experiment" / "baseline" / "dflt.json"
@@ -271,3 +278,64 @@ class TestResultEnvelope:
         # per-probe `records` are stripped before persistence (not JSON-safe)
         for _p in _doc["probes"]:
             assert "records" not in _p
+
+
+class TestCalibrationGate:
+    """**TestCalibrationGate** `run()` refuses to start without a calibration for the current host unless `skip_calibration=True` is explicitly set, and the resolved calibration is surfaced on the result envelope."""
+
+    def test_missing_calibration_raises_runtime_error(self, tmp_path,
+                                                      monkeypatch):
+        """*test_missing_calibration_raises_runtime_error()* pointing the loader at an empty directory and calling `run()` without the skip flag raises `RuntimeError` with a clear pointer to `src/scripts/calibration.py`."""
+        from src.io import calibration as _cal
+        monkeypatch.setattr(_cal, "_CALIB_DIR", tmp_path / "calibration")
+        with pytest.raises(RuntimeError,
+                           match="No calibration envelope found"):
+            run_experiment(adp="baseline", wrt=False,
+                           method_cfg=_QUICK_CFG, verbose=False)
+
+    def test_skip_flag_bypasses_gate_and_marks_baseline_not_applied(
+            self, tmp_path, monkeypatch):
+        """*test_skip_flag_bypasses_gate_and_marks_baseline_not_applied()* `skip_calibration=True` runs even with no calibration on disk; the result envelope's `baseline` block is present with `applied=False` and zeroed floor/band."""
+        from src.io import calibration as _cal
+        monkeypatch.setattr(_cal, "_CALIB_DIR", tmp_path / "calibration")
+        _res = run_experiment(adp="baseline", wrt=False,
+                              method_cfg=_QUICK_CFG,
+                              skip_calibration=True, verbose=False)
+        assert "baseline" in _res
+        _base = _res["baseline"]
+        assert _base["applied"] is False
+        assert _base["baseline_ref"] is None
+        assert _base["loopback_median_us"] == 0.0
+        assert _base["jitter_p99_us"] == 0.0
+
+    def test_present_calibration_attaches_baseline_block(self, tmp_path,
+                                                         monkeypatch):
+        """*test_present_calibration_attaches_baseline_block()* when a fresh calibration exists for the current host, `run()` attaches a populated `baseline` block (`applied=True`, real floor / band values, pointer to the JSON)."""
+        import json as _json
+        import socket
+        from datetime import datetime
+        from src.io import calibration as _cal
+        _dir = tmp_path / "calibration"
+        _dir.mkdir()
+        monkeypatch.setattr(_cal, "_CALIB_DIR", _dir)
+        _host = socket.gethostname().replace(" ", "-")
+        _env = {
+            "host_profile": {"hostname": _host},
+            "timer": {"min_ns": 100},
+            "jitter": {"p99_us": 1300.0},
+            "loopback": {"median_us": 2050.0},
+            "handler_scaling": {},
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        _path = _dir / f"{_host}_testfixture.json"
+        with _path.open("w", encoding="utf-8") as _fh:
+            _json.dump(_env, _fh)
+
+        _res = run_experiment(adp="baseline", wrt=False,
+                              method_cfg=_QUICK_CFG, verbose=False)
+        _base = _res["baseline"]
+        assert _base["applied"] is True
+        assert _base["loopback_median_us"] == pytest.approx(2050.0)
+        assert _base["jitter_p99_us"] == pytest.approx(1300.0)
+        assert _base["baseline_ref"] is not None
+        assert _base["baseline_ref"].endswith(_path.name)

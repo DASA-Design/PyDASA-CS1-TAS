@@ -255,6 +255,35 @@ class ExperimentLauncher:
         if self._transport is not None:
             await self._transport.aclose()
 
+    def collect_drop_counts(self) -> Dict[str, int]:
+        """*collect_drop_counts()* report the bounded-deque overflow count per service.
+
+        `SvcCtx.dropped_count` increments any time `@logger` appends to a full log buffer (the oldest row is silently evicted per `deque(maxlen=...)` semantics). A healthy run returns `{}`; a non-zero entry means the buffer was sized too small for the workload and some observations were lost.
+
+        Returns:
+            Dict[str, int]: `{service_name: dropped_count}` for every service with a non-zero drop count; empty when every buffer stayed within its cap.
+        """
+        _drops: Dict[str, int] = {}
+        _seen: set = set()
+        for _name in self.specs:
+            _app = self.apps.get(_name)
+            if _app is None:
+                continue
+            _components = getattr(_app.state, "tas_components", None)
+            if _components is not None and _name in _components:
+                _ctx = _components[_name]
+            else:
+                _ctx = getattr(_app.state, "ctx", None)
+                if _ctx is None:
+                    continue
+            if id(_ctx) in _seen:
+                continue
+            _seen.add(id(_ctx))
+            _n = int(getattr(_ctx, "dropped_count", 0))
+            if _n > 0:
+                _drops[_name] = _n
+        return _drops
+
     def flush_logs(self,
                    output_dir: Path,
                    *,
