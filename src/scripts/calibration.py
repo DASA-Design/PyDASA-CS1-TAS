@@ -102,9 +102,42 @@ _DEFAULT_HTTPX_TIMEOUT_S = float(_CALIB_CFG.get("httpx_timeout_s", 0))
 _DEFAULT_SKIP_JITTER = bool(_CALIB_CFG.get("skip_jitter", False))
 _DEFAULT_SKIP_LOOPBACK = bool(_CALIB_CFG.get("skip_loopback", False))
 
+# Rate-sweep (opt-in) parameters. Each trial is a full experiment-method
+# run, so the sweep is intentionally gated behind `skip_rate_sweep=True`
+# to keep the host-floor calibration fast; users flip the config key or
+# pass `--rate-sweep` on the CLI to opt in.
+_DEFAULT_SKIP_RATE_SWEEP = bool(_CALIB_CFG.get("skip_rate_sweep", True))
+_RATE_SWEEP_CFG: Dict[str, Any] = _CALIB_CFG.get("rate_sweep", {})
+_DEFAULT_RATE_SWEEP_ADAPTATION = str(
+    _RATE_SWEEP_CFG.get("adaptation", "baseline"))
+_DEFAULT_RATE_SWEEP_RATES: Tuple[float, ...] = tuple(
+    float(_r) for _r in _RATE_SWEEP_CFG.get("rates", ()))
+_DEFAULT_RATE_SWEEP_TRIALS = int(_RATE_SWEEP_CFG.get("trials_per_rate", 5))
+_DEFAULT_RATE_SWEEP_MIN_SAMPLES = int(
+    _RATE_SWEEP_CFG.get("min_samples_per_kind", 32))
+_DEFAULT_RATE_SWEEP_PROBE_S = float(
+    _RATE_SWEEP_CFG.get("max_probe_window_s", 4.0))
+_DEFAULT_RATE_SWEEP_CASCADE_MODE = str(
+    _RATE_SWEEP_CFG.get("cascade_mode", "rolling"))
+_DEFAULT_RATE_SWEEP_CASCADE_THRESHOLD = float(
+    _RATE_SWEEP_CFG.get("cascade_threshold", 0.10))
+_DEFAULT_RATE_SWEEP_CASCADE_WINDOW = int(
+    _RATE_SWEEP_CFG.get("cascade_window", 50))
+_DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT = float(
+    _RATE_SWEEP_CFG.get("target_loss_pct", 2.0))
+_DEFAULT_RATE_SWEEP_ENTRY_SERVICE = str(
+    _RATE_SWEEP_CFG.get("entry_service", "TAS_{1}"))
+
 # sleep() target for the jitter probe, in nanoseconds. Read directly
 # from the config in the same unit (ns) used internally by the hot path.
 _JITTER_TARGET_NS = int(_CALIB_CFG.get("jitter_target_ns", 1_000_000))
+
+# tick granularity used by `ClientSimulator._probe_at_rate`'s auto-batch
+# formula. Reported at rate-sweep banner time so the operator can see
+# the expected batch size at each target rate. Kept local (not imported
+# from `src.experiment.client`) so the rate sweep remains independent
+# of the experiment-module import chain.
+_TARGET_TICK_S: float = 0.020
 
 
 def _banner(msg: str) -> None:
@@ -169,11 +202,8 @@ def snapshot_host_profile() -> Dict[str, Any]:
             _stat = _MEMSTAT()
             _stat.dwLength = ctypes.sizeof(_MEMSTAT)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_stat))
-            _mem_gb = float(_stat.ullTotalPhys) / (1024 ** 3)
-        elif hasattr(os, "sysconf"):
-            _pages = os.sysconf("SC_PHYS_PAGES")
-            _page_size = os.sysconf("SC_PAGE_SIZE")
-            _mem_gb = float(_pages * _page_size) / (1024 ** 3)
+            _total_phys = float(_stat.ullTotalPhys)
+            _mem_gb = _total_phys / (1024 ** 3)
     except Exception:
         _mem_gb = None
 
@@ -184,7 +214,7 @@ def snapshot_host_profile() -> Dict[str, Any]:
     _cpu_count = os.cpu_count()
     _cpu_machine = platform.machine()
     _cpu_processor = platform.processor()
-    return {
+    _profile = {
         "hostname": _hostname,
         "os": _os,
         "python": _py_ver,
@@ -194,6 +224,7 @@ def snapshot_host_profile() -> Dict[str, Any]:
         "cpu_processor": _cpu_processor,
         "ram_total_gb": _mem_gb,
     }
+    return _profile
 
 
 def measure_timer(samples: int) -> Dict[str, float]:
@@ -226,13 +257,14 @@ def measure_timer(samples: int) -> Dict[str, float]:
     _mean = float(_arr.mean())
     _std = float(_arr.std())
     _zero_frac = float(_zero / samples)
-    return {
+    _result = {
         "min_ns": _min,
         "median_ns": _median,
         "mean_ns": _mean,
         "std_ns": _std,
         "zero_frac": _zero_frac,
     }
+    return _result
 
 
 def measure_jitter(samples: int) -> Dict[str, float]:
@@ -259,13 +291,14 @@ def measure_jitter(samples: int) -> Dict[str, float]:
     _p50 = float(np.percentile(_us, 50))
     _p99 = float(np.percentile(_us, 99))
     _max = float(_us.max())
-    return {
+    _result = {
         "mean_us": _mean,
         "std_us": _std,
         "p50_us": _p50,
         "p99_us": _p99,
         "max_us": _max,
     }
+    return _result
 
 
 def _build_ping_app() -> FastAPI:
@@ -324,7 +357,8 @@ class _UvicornThread(threading.Thread):
             except Exception:
                 pass
             time.sleep(0.05)
-        raise RuntimeError(f"uvicorn did not become ready within {timeout_s} s")
+            _msg = f"uvicorn did not become ready within {timeout_s} s"
+        raise RuntimeError(_msg)
 
     def shutdown(self) -> None:
         """*shutdown()* tell uvicorn to exit; joins the thread."""
@@ -369,7 +403,7 @@ async def measure_loopback(port: int,
     _p99 = float(np.percentile(_us, 99))
     _std = float(_us.std())
     _n = int(samples)
-    return {
+    _result = {
         "min_us": _min,
         "median_us": _median,
         "p95_us": _p95,
@@ -377,6 +411,7 @@ async def measure_loopback(port: int,
         "std_us": _std,
         "samples": _n,
     }
+    return _result
 
 
 async def _run_concurrent_worker(client: httpx.AsyncClient,
@@ -456,14 +491,7 @@ async def measure_handler_scaling(port: int,
             for _lst in _lists:
                 _all.extend(_lst)
             _arr = np.asarray(_all, dtype=np.int64)
-            # Uniform sample size per level so statistics are comparable.
-            # At high concurrency the per_worker=1 floor forces total to
-            # equal the concurrency level (e.g. c=10000 -> 10000 samples);
-            # trim to samples_per_level after gathering so every level
-            # contributes the same number of observations while still
-            # exercising the requested concurrency in flight. Only trims
-            # when per_worker was auto-derived; explicit per_worker keeps
-            # the full count.
+            # trim to samples_per_level so every level is comparable.
             if per_worker is None:
                 _cap = int(samples_per_level)
                 if _arr.size > _cap:
@@ -589,6 +617,367 @@ def _parse_concurrency(arg: str) -> Tuple[int, ...]:
     return tuple(_out)
 
 
+def _parse_rates(arg: str) -> Tuple[float, ...]:
+    """*_parse_rates()* parse a comma-separated target-rate list.
+
+    Args:
+        arg (str): comma-separated rates in req/s, e.g. `"100,200,345"`.
+
+    Returns:
+        tuple[float, ...]: parsed rates; empty fragments are dropped.
+    """
+    _out: List[float] = []
+    for _raw in arg.split(","):
+        _token = _raw.strip()
+        if not _token:
+            continue
+        _out.append(float(_token))
+    return tuple(_out)
+
+
+def _batch_size_for(rate: float) -> int:
+    """*_batch_size_for()* mirror the auto-batch derivation in `ClientSimulator._probe_at_rate`.
+
+    Reports the expected K at each target rate in the rate-sweep banner so the operator can correlate any loss with batch behaviour.
+
+    Args:
+        rate (float): target rate in req/s.
+
+    Returns:
+        int: K = round(TARGET_TICK_S / interarrival), clamped to >= 1.
+    """
+    if rate <= 0:
+        return 1
+    _interarrival = 1.0 / rate
+    _k = int(round(_TARGET_TICK_S / _interarrival))
+    return max(1, _k)
+
+
+def _read_lambda_z_at(adaptation: str,
+                      entry_service: str = "TAS_{1}") -> float:
+    """*_read_lambda_z_at()* read the seeded external arrival rate at `entry_service`.
+
+    Lazy-imports `src.io.load_profile` so `calibration.py` stays light at module-load time; the import cost is paid once on the first rate-sweep call.
+
+    Args:
+        adaptation (str): adaptation stem (`baseline` / `s1` / `s2` / `aggregate`).
+        entry_service (str): artifact key to read from.
+
+    Returns:
+        float: seeded lambda_z at `entry_service`, or 0.0 when the key is absent.
+
+    Raises:
+        KeyError: when `entry_service` is not present in the profile.
+    """
+    from src.io import load_profile
+    _cfg = load_profile(adaptation=adaptation)
+    for _a in _cfg.artifacts:
+        if _a.key == entry_service:
+            return float(_a.lambda_z)
+    raise KeyError(
+        f"entry artifact {entry_service!r} not in adaptation {adaptation!r}")
+
+
+def _run_single_rate_probe(rate: float,
+                           adaptation: str,
+                           min_samples: int,
+                           max_probe_s: float,
+                           cascade_mode: str,
+                           cascade_threshold: float,
+                           cascade_window: int) -> Dict[str, Any]:
+    """*_run_single_rate_probe()* one trial at `rate` against `adaptation`.
+
+    Lazy-imports `src.methods.experiment.run` + `src.io.load_method_cfg` so the rate-sweep path only pays the experiment-module import cost when the operator opts in; the module-top import surface stays light.
+
+    `skip_calibration=True` is forced on the inner call so the sweep does not recurse through its own calibration gate; `verbose=False` suppresses the gate's warning so per-trial output stays readable.
+
+    Args:
+        rate (float): single target rate (req/s).
+        adaptation (str): adaptation stem.
+        min_samples (int): `min_samples_per_kind` per probe (>= 32 for CLT).
+        max_probe_s (float): probe wall-clock cap in seconds.
+        cascade_mode (str): cascade detector mode (e.g. `"rolling"`).
+        cascade_threshold (float): cascade threshold (fraction).
+        cascade_window (int): cascade detector window size.
+
+    Returns:
+        dict: result envelope from `experiment.run`.
+    """
+    from src.io import load_method_cfg
+    from src.methods.experiment import run as _experiment_run
+    _mcfg = load_method_cfg("experiment")
+    _mcfg["ramp"] = {
+        "min_samples_per_kind": int(min_samples),
+        "max_probe_window_s": float(max_probe_s),
+        "rates": [float(rate)],
+        "cascade": {"mode": str(cascade_mode),
+                    "threshold": float(cascade_threshold),
+                    "window": int(cascade_window)},
+    }
+    return _experiment_run(
+        adp=adaptation,
+        wrt=False,
+        method_cfg=_mcfg,
+        skip_calibration=True,
+        verbose=False,
+    )
+
+
+def _summarise_rate_trial(rate: float,
+                          result: Dict[str, Any],
+                          entry_service: str) -> Dict[str, float]:
+    """*_summarise_rate_trial()* extract headline rate metrics from one experiment run envelope.
+
+    Args:
+        rate (float): target rate driven in this trial.
+        result (dict): `experiment.run` envelope (contains `client_effective_rate` + `nodes`).
+        entry_service (str): artifact key whose operational `lambda` we want (typically `TAS_{1}`).
+
+    Returns:
+        dict: target / effective / entry_lambda / gap / loss_pct.
+    """
+    _eff = float(result.get("client_effective_rate", 0.0))
+    _nds = result["nodes"]
+    _row = _nds.loc[_nds["key"] == entry_service]
+    if _row.empty:
+        _entry_lam = 0.0
+    else:
+        _entry_lam = float(_row.iloc[0]["lambda"])
+    _target = float(rate)
+    _gap = _target - _eff
+    if rate > 0:
+        _loss = _gap / rate * 100.0
+    else:
+        _loss = 0.0
+    _summary = {
+        "target": _target,
+        "effective": _eff,
+        "entry_lambda": _entry_lam,
+        "gap": _gap,
+        "loss_pct": _loss,
+    }
+    return _summary
+
+
+def _aggregate_rate_trials(trials: List[Dict[str, float]]
+                           ) -> Dict[str, float]:
+    """*_aggregate_rate_trials()* summarise N per-trial records at one target rate.
+
+    Args:
+        trials (List[Dict]): per-trial summaries from `_summarise_rate_trial`.
+
+    Returns:
+        dict: target / mean / lo / hi / mean_loss_pct / mean_entry_lambda / n.
+    """
+    _effs: List[float] = []
+    _lams: List[float] = []
+    for _t in trials:
+        _effs.append(float(_t["effective"]))
+        _lams.append(float(_t["entry_lambda"]))
+    _n = len(_effs)
+    if _n == 0:
+        _empty = {"target": 0.0, "mean": 0.0, "lo": 0.0, "hi": 0.0,
+                  "mean_loss_pct": 0.0, "mean_entry_lambda": 0.0, "n": 0}
+        return _empty
+    _mean = sum(_effs) / _n
+    _lo = min(_effs)
+    _hi = max(_effs)
+    _mean_lam = sum(_lams) / _n
+    _target = float(trials[0]["target"])
+    if _target > 0:
+        _mean_loss = (_target - _mean) / _target * 100.0
+    else:
+        _mean_loss = 0.0
+    _agg = {
+        "target": _target,
+        "mean": _mean,
+        "lo": _lo,
+        "hi": _hi,
+        "mean_loss_pct": _mean_loss,
+        "mean_entry_lambda": _mean_lam,
+        "n": _n,
+    }
+    return _agg
+
+
+def _print_rate_header(rate: float) -> None:
+    """*_print_rate_header()* one-line banner per rate (target, interarrival, K)."""
+    _interarrival_ms = 1000.0 / rate
+    _k = _batch_size_for(rate)
+    print(f"--- target rate {rate:>6.1f} req/s  "
+          f"(interarrival {_interarrival_ms:.2f} ms, K={_k}) ---",
+          flush=True)
+
+
+def _print_rate_trial_row(trial_idx: int,
+                          summary: Dict[str, float]) -> None:
+    """*_print_rate_trial_row()* one-line per-trial output."""
+    _eff = summary["effective"]
+    _lam = summary["entry_lambda"]
+    _gap = summary["gap"]
+    _loss = summary["loss_pct"]
+    print(f"  trial{trial_idx}: effective={_eff:>7.2f}  "
+          f"entry.lambda={_lam:>7.2f}  "
+          f"gap={_gap:>+7.2f}  loss={_loss:>+6.2f}%",
+          flush=True)
+
+
+def _print_rate_aggregate(agg: Dict[str, float]) -> None:
+    """*_print_rate_aggregate()* one-line aggregate across all trials at a rate."""
+    _mean = agg["mean"]
+    _lo = agg["lo"]
+    _hi = agg["hi"]
+    _loss = agg["mean_loss_pct"]
+    print(f"  >>> mean={_mean:>7.2f}  "
+          f"range=[{_lo:>6.2f}, {_hi:>6.2f}]  "
+          f"mean_loss={_loss:>+6.2f}%",
+          flush=True)
+
+
+def _find_highest_sustainable_rate(aggregates: Dict[float, Dict[str, float]],
+                                   threshold_pct: float
+                                   ) -> Optional[float]:
+    """*_find_highest_sustainable_rate()* highest rate whose mean_loss_pct is at or below `threshold_pct`.
+
+    Walks the aggregates in ascending rate order; returns the last rate that cleared the bar. Returns `None` when no rate cleared the bar.
+
+    Args:
+        aggregates (Dict[float, Dict]): per-rate aggregate from `_aggregate_rate_trials`.
+        threshold_pct (float): maximum allowed mean loss in percent.
+
+    Returns:
+        Optional[float]: the highest passing rate, or `None`.
+    """
+    _sorted = sorted(aggregates.items(), key=lambda _kv: _kv[0])
+    _best: Optional[float] = None
+    for _rate, _agg in _sorted:
+        _loss = abs(float(_agg.get("mean_loss_pct", 0.0)))
+        if _loss <= threshold_pct:
+            _best = _rate
+    return _best
+
+
+def run_rate_sweep(*,
+                   rates: Tuple[float, ...] = _DEFAULT_RATE_SWEEP_RATES,
+                   adaptation: str = _DEFAULT_RATE_SWEEP_ADAPTATION,
+                   trials_per_rate: int = _DEFAULT_RATE_SWEEP_TRIALS,
+                   min_samples: int = _DEFAULT_RATE_SWEEP_MIN_SAMPLES,
+                   max_probe_s: float = _DEFAULT_RATE_SWEEP_PROBE_S,
+                   cascade_mode: str = _DEFAULT_RATE_SWEEP_CASCADE_MODE,
+                   cascade_threshold: float = _DEFAULT_RATE_SWEEP_CASCADE_THRESHOLD,
+                   cascade_window: int = _DEFAULT_RATE_SWEEP_CASCADE_WINDOW,
+                   target_loss_pct: float = _DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT,
+                   entry_service: str = _DEFAULT_RATE_SWEEP_ENTRY_SERVICE,
+                   with_lambda_z: bool = False,
+                   calibrate: bool = False,
+                   verbose: bool = True) -> Dict[str, Any]:
+    """*run_rate_sweep()* drive the experiment mesh at N target rates, `trials_per_rate` trials each.
+
+    Each trial is a full `experiment.run(adp=...)` call with an inline ramp config built from the arguments; the experiment's calibration gate is bypassed (`skip_calibration=True`) so the sweep never recurses through its own calibration loader. Results land under the calibration envelope's `rate_sweep` key so the run gate has both host-floor AND rate-saturation characterization in one file.
+
+    When `calibrate=True`, additionally reports the highest rate whose mean loss is at or below `target_loss_pct` across all trials; use this to pick a notebook ramp rate the prototype can sustain.
+
+    When `with_lambda_z=True`, the sweep appends the seeded `lambda_z` at `entry_service` (e.g. `TAS_{1}`) to the rate list so the analytic operating point is included.
+
+    Args:
+        rates (tuple[float, ...]): target rates (req/s) to drive.
+        adaptation (str): adaptation stem.
+        trials_per_rate (int): trials per rate for aggregation.
+        min_samples (int): per-probe `min_samples_per_kind`.
+        max_probe_s (float): probe wall-clock cap (seconds).
+        cascade_mode (str): cascade detector mode.
+        cascade_threshold (float): cascade threshold (fraction).
+        cascade_window (int): cascade detector window.
+        target_loss_pct (float): pass bar for the `calibrate` result.
+        entry_service (str): artifact key for seeded `lambda_z` + per-trial `entry_lambda`.
+        with_lambda_z (bool): when True, inject the seeded `lambda_z` at `entry_service` into the rate list.
+        calibrate (bool): when True, include the highest-sustainable-rate finding in the result.
+        verbose (bool): when True, print per-trial + per-rate output; False stays silent.
+
+    Returns:
+        dict: `{adaptation, rates, trials_per_rate, aggregates, per_trial, target_loss_pct, calibrated_rate (if calibrate), lambda_z_at_entry (if with_lambda_z), started_at, elapsed_s}`.
+    """
+    _t0 = time.perf_counter()
+    _rates_list: List[float] = []
+    for _r in rates:
+        _rates_list.append(float(_r))
+
+    if with_lambda_z:
+        _lz = _read_lambda_z_at(adaptation, entry_service)
+        if _lz > 0.0 and _lz not in _rates_list:
+            _rates_list.append(_lz)
+        _rates_list = sorted(set(_rates_list))
+    else:
+        _lz = 0.0
+
+    _aggregates: Dict[float, Dict[str, float]] = {}
+    _per_trial: Dict[float, List[Dict[str, float]]] = {}
+
+    for _rate in _rates_list:
+        if verbose:
+            print()
+            _print_rate_header(_rate)
+        _trials: List[Dict[str, float]] = []
+        for _i in range(int(trials_per_rate)):
+            _res = _run_single_rate_probe(
+                rate=_rate,
+                adaptation=adaptation,
+                min_samples=min_samples,
+                max_probe_s=max_probe_s,
+                cascade_mode=cascade_mode,
+                cascade_threshold=cascade_threshold,
+                cascade_window=cascade_window,
+            )
+            _summary = _summarise_rate_trial(_rate, _res, entry_service)
+            _trials.append(_summary)
+            if verbose:
+                _print_rate_trial_row(_i, _summary)
+            # release the experiment envelope early so the next trial
+            # does not stack its allocations on top of stale ones.
+            del _res
+            gc.collect()
+        _agg = _aggregate_rate_trials(_trials)
+        _aggregates[_rate] = _agg
+        _per_trial[_rate] = _trials
+        if verbose:
+            _print_rate_aggregate(_agg)
+
+    _t_end = time.perf_counter()
+    _elapsed = round(_t_end - _t0, 3)
+
+    _aggregates_json: Dict[str, Dict[str, float]] = {}
+    for _rate_key, _agg_val in _aggregates.items():
+        _aggregates_json[str(_rate_key)] = _agg_val
+    _per_trial_json: Dict[str, List[Dict[str, float]]] = {}
+    for _rate_key, _trials_val in _per_trial.items():
+        _per_trial_json[str(_rate_key)] = _trials_val
+
+    _cascade_block = {"mode": str(cascade_mode),
+                      "threshold": float(cascade_threshold),
+                      "window": int(cascade_window)}
+
+    _ans: Dict[str, Any] = {
+        "adaptation": str(adaptation),
+        "rates": _rates_list,
+        "trials_per_rate": int(trials_per_rate),
+        "min_samples_per_kind": int(min_samples),
+        "max_probe_window_s": float(max_probe_s),
+        "cascade": _cascade_block,
+        "entry_service": str(entry_service),
+        "target_loss_pct": float(target_loss_pct),
+        "aggregates": _aggregates_json,
+        "per_trial": _per_trial_json,
+        "elapsed_s": _elapsed,
+    }
+    if with_lambda_z:
+        _ans["lambda_z_at_entry"] = float(_lz)
+    if calibrate:
+        _ans["calibrated_rate"] = _find_highest_sustainable_rate(
+            _aggregates, float(target_loss_pct))
+
+    return _ans
+
+
 def _build_output_path(profile: Dict[str, Any], stamp: Optional[str] = None) -> Path:
     """*_build_output_path()* build the per-host calibration JSON path.
 
@@ -667,6 +1056,33 @@ def _print_summary(envelope: Dict[str, Any]) -> None:
                   f"p99={_s_p99:.1f}  "
                   f"samples={_s_n}")
 
+    _rs = envelope.get("rate_sweep")
+    if _rs:
+        _rs_adp = _rs.get("adaptation")
+        _rs_rates = _rs.get("rates", [])
+        _rs_trials = _rs.get("trials_per_rate")
+        _rs_target = _rs.get("target_loss_pct")
+        _rs_cal = _rs.get("calibrated_rate")
+        print(f"  rate sweep   : adp={_rs_adp!r}  "
+              f"rates={_rs_rates}  trials={_rs_trials}  "
+              f"target_loss<={_rs_target}%")
+        _aggs = _rs.get("aggregates", {})
+        _sorted_keys = sorted(_aggs.keys(), key=lambda _k: float(_k))
+        for _k in _sorted_keys:
+            _a = _aggs[_k]
+            _rate = float(_k)
+            _mean = float(_a.get("mean", 0.0))
+            _loss = float(_a.get("mean_loss_pct", 0.0))
+            _lam = float(_a.get("mean_entry_lambda", 0.0))
+            print(f"    rate={_rate:>6.1f}  effective_mean={_mean:>7.2f}  "
+                  f"mean_loss={_loss:>+6.2f}%  "
+                  f"entry.lambda={_lam:>7.2f}")
+        if _rs_cal is not None:
+            print(f"  highest sustainable rate (<= {_rs_target}% loss): "
+                  f"{float(_rs_cal):.1f} req/s")
+        else:
+            print(f"  no rate cleared the {_rs_target}% loss bar")
+
 
 async def _run_async_probes(*,
                             port: int,
@@ -736,12 +1152,25 @@ def run(*,
         ready_timeout_s: float = _DEFAULT_READY_TIMEOUT_S,
         skip_jitter: bool = _DEFAULT_SKIP_JITTER,
         skip_loopback: bool = _DEFAULT_SKIP_LOOPBACK,
+        skip_rate_sweep: bool = _DEFAULT_SKIP_RATE_SWEEP,
+        rate_sweep_rates: Tuple[float, ...] = _DEFAULT_RATE_SWEEP_RATES,
+        rate_sweep_adaptation: str = _DEFAULT_RATE_SWEEP_ADAPTATION,
+        rate_sweep_trials: int = _DEFAULT_RATE_SWEEP_TRIALS,
+        rate_sweep_min_samples: int = _DEFAULT_RATE_SWEEP_MIN_SAMPLES,
+        rate_sweep_max_probe_s: float = _DEFAULT_RATE_SWEEP_PROBE_S,
+        rate_sweep_cascade_mode: str = _DEFAULT_RATE_SWEEP_CASCADE_MODE,
+        rate_sweep_cascade_threshold: float = _DEFAULT_RATE_SWEEP_CASCADE_THRESHOLD,
+        rate_sweep_cascade_window: int = _DEFAULT_RATE_SWEEP_CASCADE_WINDOW,
+        rate_sweep_target_loss_pct: float = _DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT,
+        rate_sweep_entry_service: str = _DEFAULT_RATE_SWEEP_ENTRY_SERVICE,
+        rate_sweep_with_lambda_z: bool = False,
+        rate_sweep_calibrate: bool = True,
         write: bool = True,
         output: Optional[str] = None,
         verbose: bool = True) -> Dict[str, Any]:
     """*run()* collect the calibration envelope.
 
-    Runs the four probes (timer, jitter, loopback, handler scaling) under `_windows_timer_resolution(1)` and returns the full envelope. When `write=True`, the JSON is persisted under `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json` (or `output` when given) and the resolved path is recorded on the envelope as `output_path`.
+    Runs the four host-floor probes (timer, jitter, loopback, handler scaling) under `_windows_timer_resolution(1)`. When `skip_rate_sweep=False`, additionally runs `run_rate_sweep(...)` and merges the result under the envelope's `rate_sweep` key. When `write=True`, the JSON is persisted under `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json` (or `output` when given) and the resolved path is recorded on the envelope as `output_path`.
 
     Args:
         timer_samples (int): back-to-back `perf_counter_ns` reads for the timer probe.
@@ -755,12 +1184,25 @@ def run(*,
         ready_timeout_s (float): seconds to wait for uvicorn readiness.
         skip_jitter (bool): if True, skip the jitter probe.
         skip_loopback (bool): if True, skip both the loopback and handler-scaling probes.
+        skip_rate_sweep (bool): if True (default from config), skip the rate-saturation probe; set to False to opt in.
+        rate_sweep_rates (tuple[float, ...]): target rates (req/s) for the rate-sweep probe.
+        rate_sweep_adaptation (str): adaptation stem the rate sweep drives against.
+        rate_sweep_trials (int): trials per rate for rate-sweep aggregation.
+        rate_sweep_min_samples (int): `min_samples_per_kind` per rate-sweep probe.
+        rate_sweep_max_probe_s (float): rate-sweep probe wall-clock cap (seconds).
+        rate_sweep_cascade_mode (str): rate-sweep cascade detector mode.
+        rate_sweep_cascade_threshold (float): rate-sweep cascade threshold (fraction).
+        rate_sweep_cascade_window (int): rate-sweep cascade detector window.
+        rate_sweep_target_loss_pct (float): pass bar for the rate-sweep `calibrated_rate`.
+        rate_sweep_entry_service (str): rate-sweep entry artifact for seeded `lambda_z` + per-trial `entry_lambda`.
+        rate_sweep_with_lambda_z (bool): when True, inject the seeded `lambda_z` at `rate_sweep_entry_service` into the rate list.
+        rate_sweep_calibrate (bool): when True, compute the highest-sustainable rate at or below `rate_sweep_target_loss_pct`.
         write (bool): persist the envelope to JSON when True.
         output (Optional[str]): override path when `write=True`; defaults to the per-host path.
         verbose (bool): print phase markers to stdout when True.
 
     Returns:
-        dict: the envelope (`host_profile`, `args`, `timer`, `jitter`, `loopback`, `handler_scaling`, `timestamp`, `elapsed_s`, `output_path`).
+        dict: the envelope (`host_profile`, `args`, `timer`, `jitter`, `loopback`, `handler_scaling`, `rate_sweep` (optional), `timestamp`, `elapsed_s`, `output_path`).
     """
     _profile = snapshot_host_profile()
     _t0 = time.perf_counter()
@@ -787,6 +1229,7 @@ def run(*,
         "port": int(port),
         "skip_jitter": bool(skip_jitter),
         "skip_loopback": bool(skip_loopback),
+        "skip_rate_sweep": bool(skip_rate_sweep),
     }
     _envelope: Dict[str, Any] = {
         "host_profile": _profile,
@@ -834,6 +1277,37 @@ def run(*,
                 on_level_done=_on_level_done,
             )
             _envelope.update(_probes)
+
+    # P0.2: optional rate-saturation probe. Each trial is a full
+    # experiment-method run, so the sweep is opt-in (default
+    # `skip_rate_sweep=True` from config) to keep the standard
+    # host-floor calibration fast. Runs OUTSIDE the Windows timer
+    # context manager on purpose -- the experiment method manages
+    # its own timer boost per-replicate.
+    if skip_rate_sweep:
+        if verbose:
+            print()
+            print("  [5/5] rate sweep ... SKIPPED "
+                  "(opt in via skip_rate_sweep=False)", flush=True)
+    else:
+        if verbose:
+            print()
+            print("  [5/5] rate saturation sweep ...", flush=True)
+        _envelope["rate_sweep"] = run_rate_sweep(
+            rates=rate_sweep_rates,
+            adaptation=rate_sweep_adaptation,
+            trials_per_rate=rate_sweep_trials,
+            min_samples=rate_sweep_min_samples,
+            max_probe_s=rate_sweep_max_probe_s,
+            cascade_mode=rate_sweep_cascade_mode,
+            cascade_threshold=rate_sweep_cascade_threshold,
+            cascade_window=rate_sweep_cascade_window,
+            target_loss_pct=rate_sweep_target_loss_pct,
+            entry_service=rate_sweep_entry_service,
+            with_lambda_z=rate_sweep_with_lambda_z,
+            calibrate=rate_sweep_calibrate,
+            verbose=verbose,
+        )
 
     _t_end = time.perf_counter()
     _elapsed = _t_end - _t0
@@ -906,6 +1380,47 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help="run only the timer + jitter probes (no HTTP)")
     _p.add_argument("--skip-jitter", action="store_true",
                     help="run only the timer probe (fastest self-test)")
+
+    # -- rate-sweep flags (opt-in; adds ~N_rates * trials * probe_s to wall time) --
+    _default_rates_tokens: List[str] = []
+    for _r in _DEFAULT_RATE_SWEEP_RATES:
+        _default_rates_tokens.append(str(_r))
+    _default_rates_csv = ",".join(_default_rates_tokens)
+
+    if _DEFAULT_SKIP_RATE_SWEEP:
+        _default_rate_sweep_state = "OFF"
+    else:
+        _default_rate_sweep_state = "ON"
+    _p.add_argument("--rate-sweep", dest="rate_sweep", action="store_true",
+                    default=(not _DEFAULT_SKIP_RATE_SWEEP),
+                    help=("enable the rate-saturation probe; each target rate "
+                          "runs `--rate-sweep-trials` full experiment-method "
+                          "trials. Opt-in by default "
+                          f"(currently {_default_rate_sweep_state})"))
+    _p.add_argument("--no-rate-sweep", dest="rate_sweep",
+                    action="store_false",
+                    help="explicit opt-out of the rate-saturation probe")
+    _p.add_argument("--rate-sweep-rates", type=str, default=None,
+                    help=("comma-separated target rates in req/s for the "
+                          f"rate-saturation probe (default: {_default_rates_csv})"))
+    _p.add_argument("--rate-sweep-adp", type=str,
+                    default=_DEFAULT_RATE_SWEEP_ADAPTATION,
+                    choices=("baseline", "s1", "s2", "aggregate"),
+                    help=("adaptation driven by the rate-saturation probe "
+                          f"(default: {_DEFAULT_RATE_SWEEP_ADAPTATION})"))
+    _p.add_argument("--rate-sweep-trials", type=int,
+                    default=_DEFAULT_RATE_SWEEP_TRIALS,
+                    help=("trials per rate for rate-sweep aggregation "
+                          f"(default: {_DEFAULT_RATE_SWEEP_TRIALS})"))
+    _p.add_argument("--rate-sweep-target-loss", type=float,
+                    default=_DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT,
+                    help=("pass bar (percent) for the calibrated "
+                          "highest-sustainable rate "
+                          f"(default: {_DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT})"))
+    _p.add_argument("--rate-sweep-with-lambda-z", action="store_true",
+                    help=("inject the seeded lambda_z at the entry service "
+                          "into the rate-sweep rate list"))
+
     _p.add_argument("--output", type=str, default=None,
                     help=("override the output path; default is "
                           "data/results/experiment/calibration/<host>_<date>.json"))
@@ -924,6 +1439,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         _concurrency = _parse_concurrency(_args.concurrency)
     else:
         _concurrency = _DEFAULT_CONCURRENCY
+    if _args.rate_sweep_rates is not None:
+        _rate_sweep_rates = _parse_rates(_args.rate_sweep_rates)
+    else:
+        _rate_sweep_rates = _DEFAULT_RATE_SWEEP_RATES
 
     _hostname = socket.gethostname()
     _py_ver = platform.python_version()
@@ -932,6 +1451,13 @@ def main(argv: Optional[List[str]] = None) -> None:
           f"jitter_samples={_args.jitter_samples}  "
           f"loopback_samples={_args.loopback_samples}  "
           f"concurrency={_concurrency}")
+    if _args.rate_sweep:
+        print(f"  rate_sweep=ON  rates={list(_rate_sweep_rates)}  "
+              f"trials={_args.rate_sweep_trials}  "
+              f"adp={_args.rate_sweep_adp!r}  "
+              f"target_loss={_args.rate_sweep_target_loss}%")
+    else:
+        print("  rate_sweep=OFF (pass --rate-sweep to opt in)")
     print()
 
     _envelope = run(
@@ -946,6 +1472,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         ready_timeout_s=_args.ready_timeout_s,
         skip_jitter=_args.skip_jitter,
         skip_loopback=_args.skip_loopback,
+        skip_rate_sweep=(not _args.rate_sweep),
+        rate_sweep_rates=_rate_sweep_rates,
+        rate_sweep_adaptation=_args.rate_sweep_adp,
+        rate_sweep_trials=_args.rate_sweep_trials,
+        rate_sweep_target_loss_pct=_args.rate_sweep_target_loss,
+        rate_sweep_with_lambda_z=_args.rate_sweep_with_lambda_z,
         write=True,
         output=_args.output,
         verbose=True,

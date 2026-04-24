@@ -12,5 +12,18 @@
     "uvicorn_backlog": 16384,
     "httpx_timeout_s": 60.0,
     "skip_jitter": false,
-    "skip_loopback": false
+    "skip_loopback": false,
+    "skip_rate_sweep": true,
+    "rate_sweep": {
+        "adaptation": "baseline",
+        "rates": [100, 200, 300, 400, 500],
+        "trials_per_rate": 5,
+        "min_samples_per_kind": 32,
+        "max_probe_window_s": 4.0,
+        "cascade_mode": "rolling",
+        "cascade_threshold": 0.10,
+        "cascade_window": 50,
+        "target_loss_pct": 2.0,
+        "entry_service": "TAS_{1}"
+    }
 }

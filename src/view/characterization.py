@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Module calibration.py
-=====================
+Module view/characterization.py
+===============================
 
 Visualisation for the per-host noise-floor calibration envelope produced by `src.scripts.calibration.run` (the JSON under `data/results/experiment/calibration/`).
 
@@ -15,7 +15,7 @@ Shared text colour, save helper, and palette constants come from the existing vi
 # native python modules
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 # scientific stack
 import matplotlib.pyplot as plt
@@ -200,6 +200,102 @@ def _draw_scaling_axis(ax: plt.Axes,
 # ---------------------------------------------------------------------------
 # Public plotters
 # ---------------------------------------------------------------------------
+
+
+def plot_calib_rate_sweep(rate_sweep: Dict[str, Any],
+                          *,
+                          title: Optional[str] = None,
+                          file_path: Optional[str] = None,
+                          fname: Optional[str] = None,
+                          verbose: bool = False) -> Figure:
+    """*plot_calib_rate_sweep()* standalone plot of effective rate + mean loss vs target rate.
+
+    Two curves on one axis: the identity line `effective = target` (reference) and the measured effective-rate curve with min/max error bars across trials. A second y-axis carries the mean-loss percentage per rate. A horizontal dashed line marks the `target_loss_pct` bar; the `calibrated_rate` (highest passing rate) is annotated as a vertical marker.
+
+    Args:
+        rate_sweep (dict): `rate_sweep` block from the calibration envelope; shape `{"aggregates": {"<rate>": {...}}, "target_loss_pct": ..., "calibrated_rate": ...}`.
+        title (Optional[str]): axis title; defaults to `"Rate saturation (client effective vs target)"`.
+        file_path (Optional[str]): directory to save into.
+        fname (Optional[str]): filename stem or name (extension ignored); both PNG and SVG written.
+        verbose (bool): if True, prints one save-path message per format.
+
+    Returns:
+        Figure: the matplotlib figure.
+    """
+    _aggs = rate_sweep.get("aggregates", {})
+    _target_loss = float(rate_sweep.get("target_loss_pct", 0.0))
+    _calibrated = rate_sweep.get("calibrated_rate")
+
+    _pairs = []
+    for _k, _v in _aggs.items():
+        _pairs.append((float(_k), _v))
+    _pairs.sort(key=lambda _p: _p[0])
+    _xs = [_p[0] for _p in _pairs]
+    _means = [float(_p[1].get("mean", 0.0)) for _p in _pairs]
+    _los = [float(_p[1].get("lo", 0.0)) for _p in _pairs]
+    _his = [float(_p[1].get("hi", 0.0)) for _p in _pairs]
+    _losses = [float(_p[1].get("mean_loss_pct", 0.0)) for _p in _pairs]
+
+    _fig, _ax = plt.subplots(figsize=(9, 5.5), facecolor="white")
+
+    # identity reference line: `effective == target`
+    if _xs:
+        _lo_ref = min(_xs)
+        _hi_ref = max(_xs)
+        _ax.plot([_lo_ref, _hi_ref], [_lo_ref, _hi_ref],
+                 linestyle=":", color="#888888", linewidth=1.5,
+                 label="Identity (effective = target)")
+
+    # measured effective-rate curve with min/max as asymmetric error bars
+    _err_lo: List[float] = []
+    _err_hi: List[float] = []
+    for _i, _m in enumerate(_means):
+        _err_lo.append(max(_m - _los[_i], 0.0))
+        _err_hi.append(max(_his[_i] - _m, 0.0))
+    _c_mean, _, _ = _PCTL_GRADIENT
+    _ax.errorbar(_xs, _means, yerr=[_err_lo, _err_hi],
+                 marker="o", linewidth=2.0, color=_c_mean,
+                 ecolor=_c_mean, capsize=4, capthick=1.2,
+                 label="Measured effective (mean)")
+    for _x, _m in zip(_xs, _means):
+        _ax.annotate(f"{_m:.1f}",
+                     xy=(_x, _m), xytext=(6, 6),
+                     textcoords="offset points",
+                     fontsize=9, color=_TEXT_BLACK)
+
+    _ax.set_xlabel("Target rate [req/s]", **_LBL_STYLE)
+    _ax.set_ylabel("Effective rate [req/s]", **_LBL_STYLE)
+    _ax.grid(True, which="both", linestyle="--",
+             alpha=0.5, color="#555555")
+    _ax.legend(loc="upper left", framealpha=0.9)
+
+    # secondary axis: mean loss % per rate
+    _ax2 = _ax.twinx()
+    _ax2.plot(_xs, _losses, marker="s", linewidth=1.5,
+              color="#C9603C", label="Mean loss (%)")
+    _ax2.axhline(_target_loss, linestyle="--",
+                 color="#C9603C", linewidth=1.0, alpha=0.6)
+    _ax2.set_ylabel("Mean loss [%]", color="#C9603C", fontweight="bold")
+    _ax2.tick_params(axis="y", colors="#C9603C")
+    _ax2.annotate(f"target {_target_loss:.1f}%",
+                  xy=(max(_xs or [0.0]), _target_loss),
+                  xytext=(-6, 4), textcoords="offset points",
+                  ha="right", fontsize=9, color="#C9603C")
+
+    # calibrated-rate vertical marker
+    if _calibrated is not None:
+        _ax.axvline(float(_calibrated), linestyle="-",
+                    color=_TEXT_BLACK, linewidth=1.0, alpha=0.5)
+        _ax.annotate(f"calibrated = {float(_calibrated):.1f} req/s",
+                     xy=(float(_calibrated), max(_means or [0.0])),
+                     xytext=(6, -14), textcoords="offset points",
+                     fontsize=9, color=_TEXT_BLACK)
+
+    _ax.set_title(title or "Rate saturation (client effective vs target)",
+                  **_TITLE_STYLE)
+    _fig.tight_layout()
+    _save_figure(_fig, file_path, fname, verbose=verbose)
+    return _fig
 
 
 def plot_calib_scaling(handler: Dict[str, Dict[str, float]],

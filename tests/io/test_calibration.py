@@ -3,7 +3,7 @@
 Module tests/io/test_calibration.py
 ===================================
 
-Contract tests for the calibration-envelope loader and derivation helpers in `src.io.calibration`.
+Contract tests for the calibration-envelope loader and derivation helpers in `src.io.tooling`.
 
 **TestCalibrationLoader**
     - `test_returns_none_when_no_envelope_present()` find / load return `None` when the host has no calibration file on disk.
@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 # target under test
-from src.io import calibration as cal
+from src.io import tooling as cal
 
 
 def _make_envelope(*, loopback_median_us: float = 2048.1,
@@ -122,3 +122,45 @@ class TestCalibrationLoader:
 
         assert cal.calibration_age_hours({}) == float("inf")
         assert cal.calibration_age_hours({"timestamp": "not-a-date"}) == float("inf")
+
+
+class TestRateSweepAccessors:
+    """**TestRateSweepAccessors** contract for the two rate-sweep derivation helpers."""
+
+    def test_calibrated_rate_none_when_block_absent(self) -> None:
+        """*test_calibrated_rate_none_when_block_absent()* `None` when the envelope has no `rate_sweep` block (opted out of the sweep)."""
+        assert cal.rate_sweep_calibrated_rate({}) is None
+        assert cal.rate_sweep_calibrated_rate({"rate_sweep": None}) is None
+
+    def test_calibrated_rate_returns_float_when_present(self) -> None:
+        """*test_calibrated_rate_returns_float_when_present()* returns the recorded `calibrated_rate` as a float, or `None` when no rate cleared the bar."""
+        _env = {"rate_sweep": {"calibrated_rate": 275.0,
+                               "target_loss_pct": 2.0}}
+        assert cal.rate_sweep_calibrated_rate(_env) == pytest.approx(275.0)
+
+        _env_empty = {"rate_sweep": {"calibrated_rate": None,
+                                     "target_loss_pct": 2.0}}
+        assert cal.rate_sweep_calibrated_rate(_env_empty) is None
+
+    def test_loss_at_target_rate_reads_aggregate(self) -> None:
+        """*test_loss_at_target_rate_reads_aggregate()* accessor reads the `mean_loss_pct` for a specific target rate from the aggregates dict."""
+        _env = {"rate_sweep": {
+            "aggregates": {
+                "100.0": {"mean_loss_pct": 0.8},
+                "200.0": {"mean_loss_pct": 1.2},
+                "300.0": {"mean_loss_pct": 4.4},
+            },
+        }}
+        assert cal.rate_sweep_loss_at(_env, 100.0) == pytest.approx(0.8)
+        assert cal.rate_sweep_loss_at(_env, 200.0) == pytest.approx(1.2)
+        assert cal.rate_sweep_loss_at(_env, 999.0) is None
+
+        # unstringified int key ("100" instead of "100.0") falls back cleanly
+        _env_int = {"rate_sweep": {"aggregates": {
+            "100": {"mean_loss_pct": 0.5},
+        }}}
+        assert cal.rate_sweep_loss_at(_env_int, 100.0) == pytest.approx(0.5)
+
+        # block absent -> None without raising
+        assert cal.rate_sweep_loss_at({}, 100.0) is None
+        assert cal.rate_sweep_loss_at({"rate_sweep": {}}, 100.0) is None

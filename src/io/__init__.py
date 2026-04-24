@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Profile / scenario / method / reference / calibration config loaders."""
 
-from src.io.calibration import (
+from src.io.tooling import (
     calibration_age_hours,
     calibration_band_us,
     calibration_floor_us,
     find_latest_calibration,
     load_latest_calibration,
+    rate_sweep_calibrated_rate,
+    rate_sweep_loss_at,
 )
 from src.io.config import (
     ArtifactSpec,
@@ -27,4 +29,6 @@ __all__ = [
     "load_method_cfg",
     "load_profile",
     "load_reference",
+    "rate_sweep_calibrated_rate",
+    "rate_sweep_loss_at",
 ]

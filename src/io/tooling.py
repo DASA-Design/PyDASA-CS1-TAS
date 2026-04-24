@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Module io/calibration.py
-========================
+Module io/tooling.py
+====================
 
 Loader + small derivation helpers for the per-host noise-floor calibration JSON produced by `src.scripts.calibration.run`.
 
@@ -24,8 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-_CALIB_DIR = (Path(__file__).resolve().parents[2]
-              / "data" / "results" / "experiment" / "calibration")
+_CALIB_DIR = (Path(__file__).resolve().parents[2] / "data" / "results" / "experiment" / "calibration")
 
 
 def find_latest_calibration(host: Optional[str] = None) -> Optional[Path]:
@@ -109,6 +108,59 @@ def calibration_band_us(envelope: Dict[str, Any]) -> float:
     if not isinstance(_jitter, dict):
         return 0.0
     return float(_jitter.get("p99_us", 0.0))
+
+
+def rate_sweep_calibrated_rate(envelope: Dict[str, Any]) -> Optional[float]:
+    """*rate_sweep_calibrated_rate()* highest sustainable rate from the rate-sweep block.
+
+    Returns the `calibrated_rate` recorded by the rate-saturation probe (the highest rate whose mean loss was at or below `target_loss_pct`), or `None` when the block is absent (no rate sweep was run) or when no rate cleared the bar.
+
+    Args:
+        envelope (Dict[str, Any]): calibration envelope from `load_latest_calibration`.
+
+    Returns:
+        Optional[float]: highest sustainable rate in req/s, or `None`.
+    """
+    _rs = envelope.get("rate_sweep")
+    if not isinstance(_rs, dict):
+        return None
+    _cal = _rs.get("calibrated_rate")
+    if _cal is None:
+        return None
+    return float(_cal)
+
+
+def rate_sweep_loss_at(envelope: Dict[str, Any],
+                       target_rate: float) -> Optional[float]:
+    """*rate_sweep_loss_at()* mean loss percentage at a specific target rate.
+
+    Looks up the aggregate for `target_rate` in the envelope's rate-sweep block and returns its `mean_loss_pct`. Returns `None` when the rate was not measured or when the block is absent.
+
+    Args:
+        envelope (Dict[str, Any]): calibration envelope from `load_latest_calibration`.
+        target_rate (float): target rate in req/s.
+
+    Returns:
+        Optional[float]: mean loss percent at `target_rate`, or `None`.
+    """
+    _rs = envelope.get("rate_sweep")
+    if not isinstance(_rs, dict):
+        return None
+    _aggs = _rs.get("aggregates")
+    if not isinstance(_aggs, dict):
+        return None
+    _key = str(target_rate)
+    _agg = _aggs.get(_key)
+    if _agg is None:
+        # fallback for int-valued keys (e.g. "100" vs "100.0")
+        _rate_float = float(target_rate)
+        _rate_int = int(_rate_float)
+        _key_int = str(_rate_int)
+        _agg = _aggs.get(_key_int)
+    if _agg is None:
+        return None
+    _loss = _agg.get("mean_loss_pct", 0.0)
+    return float(_loss)
 
 
 def calibration_age_hours(envelope: Dict[str, Any]) -> float:

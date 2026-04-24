@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Plotting helpers (one module per diagram family)."""
 
-from src.view.calibration import (
+from src.view.characterization import (
     plot_calib_dashboard,
+    plot_calib_rate_sweep,
     plot_calib_scaling,
 )
 from src.view.dc_charts import (
@@ -30,6 +31,7 @@ __all__ = [
     "QN_GLOSSARY_DEFAULT",
     "plot_arts_distributions",
     "plot_calib_dashboard",
+    "plot_calib_rate_sweep",
     "plot_calib_scaling",
     "plot_dim_topology",
     "plot_nd_ci",

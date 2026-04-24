@@ -70,7 +70,7 @@ _QUICK_CFG = {
 def _result_baseline():
     """*_result_baseline()* module-scoped baseline run; cached so every test reuses the same experiment."""
     return run_experiment(adp="baseline", wrt=False, method_cfg=_QUICK_CFG,
-                           skip_calibration=True, verbose=False)
+                          skip_calibration=True, verbose=False)
 
 
 @pytest.fixture(scope="module")
@@ -263,9 +263,11 @@ class TestResultEnvelope:
         monkeypatch.setattr(_mod, "_ROOT", tmp_path)
         monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")
 
-        _result = run_experiment(adp="baseline", wrt=True,
+        _result = run_experiment(adp="baseline",
+                                 wrt=True,
                                  method_cfg=_QUICK_CFG,
-                                 skip_calibration=True, verbose=False)
+                                 skip_calibration=True,
+                                 verbose=False)
         assert "profile" in _result["paths"]
 
         _path = tmp_path / "experiment" / "baseline" / "dflt.json"
@@ -283,10 +285,11 @@ class TestResultEnvelope:
 class TestCalibrationGate:
     """**TestCalibrationGate** `run()` refuses to start without a calibration for the current host unless `skip_calibration=True` is explicitly set, and the resolved calibration is surfaced on the result envelope."""
 
-    def test_missing_calibration_raises_runtime_error(self, tmp_path,
+    def test_missing_calibration_raises_runtime_error(self,
+                                                      tmp_path,
                                                       monkeypatch):
         """*test_missing_calibration_raises_runtime_error()* pointing the loader at an empty directory and calling `run()` without the skip flag raises `RuntimeError` with a clear pointer to `src/scripts/calibration.py`."""
-        from src.io import calibration as _cal
+        from src.io import tooling as _cal
         monkeypatch.setattr(_cal, "_CALIB_DIR", tmp_path / "calibration")
         with pytest.raises(RuntimeError,
                            match="No calibration envelope found"):
@@ -296,7 +299,7 @@ class TestCalibrationGate:
     def test_skip_flag_bypasses_gate_and_marks_baseline_not_applied(
             self, tmp_path, monkeypatch):
         """*test_skip_flag_bypasses_gate_and_marks_baseline_not_applied()* `skip_calibration=True` runs even with no calibration on disk; the result envelope's `baseline` block is present with `applied=False` and zeroed floor/band."""
-        from src.io import calibration as _cal
+        from src.io import tooling as _cal
         monkeypatch.setattr(_cal, "_CALIB_DIR", tmp_path / "calibration")
         _res = run_experiment(adp="baseline", wrt=False,
                               method_cfg=_QUICK_CFG,
@@ -308,13 +311,14 @@ class TestCalibrationGate:
         assert _base["loopback_median_us"] == 0.0
         assert _base["jitter_p99_us"] == 0.0
 
-    def test_present_calibration_attaches_baseline_block(self, tmp_path,
+    def test_present_calibration_attaches_baseline_block(self,
+                                                         tmp_path,
                                                          monkeypatch):
         """*test_present_calibration_attaches_baseline_block()* when a fresh calibration exists for the current host, `run()` attaches a populated `baseline` block (`applied=True`, real floor / band values, pointer to the JSON)."""
         import json as _json
         import socket
         from datetime import datetime
-        from src.io import calibration as _cal
+        from src.io import tooling as _cal
         _dir = tmp_path / "calibration"
         _dir.mkdir()
         monkeypatch.setattr(_cal, "_CALIB_DIR", _dir)
@@ -331,8 +335,10 @@ class TestCalibrationGate:
         with _path.open("w", encoding="utf-8") as _fh:
             _json.dump(_env, _fh)
 
-        _res = run_experiment(adp="baseline", wrt=False,
-                              method_cfg=_QUICK_CFG, verbose=False)
+        _res = run_experiment(adp="baseline",
+                              wrt=False,
+                              method_cfg=_QUICK_CFG,
+                              verbose=False)
         _base = _res["baseline"]
         assert _base["applied"] is True
         assert _base["loopback_median_us"] == pytest.approx(2050.0)
