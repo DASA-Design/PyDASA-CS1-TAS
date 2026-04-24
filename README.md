@@ -59,7 +59,7 @@ Full setup and the 20-run matrix in [notes/quickstart.md](notes/quickstart.md).
 Before every `experiment` run, characterise the host noise floor:
 
 ```bash
-python src/scripts/calibration.py
+python -m src.methods.calibration
 ```
 
 Output lands at `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`. The envelope has four blocks — read them as follows.
@@ -69,7 +69,7 @@ Output lands at `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.js
 | `timer` | Back-to-back `perf_counter_ns` reads | `min_ns` is the finest tick the host can resolve. On Windows you want `< 1000 ns` after `timeBeginPeriod(1)`; `15600 ns` means the timer fix did not take. |
 | `jitter` | Accuracy of `time.sleep(0.001)` | `p99_us` is the worst-case OS preemption. Any inter-arrival coarser than `p99_us` can be resolved cleanly; finer cannot. At 400 req/s inter-arrival is 2500 μs — `p99_us` should stay well below that. |
 | `loopback` | RTT of `GET /ping` with zero service logic | `median_us` is the irreducible floor on this host. Any experiment latency measured below this value is an instrument error, not a real service. |
-| `handler_scaling` | Loopback at concurrency 1 / 10 / 50 / 100 | Median / p99 at each level. Growing gap between c=1 and c=10 tells you how much the FastAPI event loop queues when in-flight requests stack up — often the real cause of degradation at high rates. |
+| `handler_scaling` | Loopback at `n_con_usr` (concurrent-user load) 1 / 10 / 50 / 100 / … against a single-worker `c_srv=1` service | Median / p99 at each level. Growing gap between `n_con_usr=1` and `n_con_usr=10` tells you how much the FastAPI event loop queues when in-flight requests stack up — often the real cause of degradation at high rates. |
 
 Apply the baseline to every measured experiment latency:
 
@@ -78,6 +78,30 @@ reported = measured_us − loopback.median_us  ± jitter.p99_us
 ```
 
 Subtract the loopback median (host overhead), report the jitter p99 as the uncertainty band. This is what turns a raw timing into a defensible number.
+
+### Visual examples (this repo's reference host)
+
+`00-calibration.ipynb` (or the CLI script) emits two figures alongside the JSON envelope, both saved as PNG + SVG under `data/img/experiment/calibration/`.
+
+**Calibration dashboard.** Single-figure summary card for an appendix or methodology section. Top-left bars are the timer-resolution distribution; top-right is the scheduling jitter; bottom-left is the idle loopback latency; bottom-right is the empty-handler scaling line plot. The suptitle carries the host identity, timestamp, and the `reported = measured - loopback_median ± jitter_p99` formula so the figure stands on its own.
+
+![Calibration dashboard](data/img/experiment/calibration/dashboard.png)
+
+**Empty-handler scaling.** Standalone log-log line plot of median / p95 / p99 latency vs concurrency. The single figure that makes FastAPI / event-loop saturation legible: a flat-then-steep curve like the one below means the prototype's bottleneck is event-loop queueing at high in-flight counts, not the load generator or the logger.
+
+![Handler scaling curve](data/img/experiment/calibration/scaling.png)
+
+The figures above were produced on the project's reference host (Windows 11, 16-core, 64 GB RAM, no other workloads running). Headline numbers from this baseline:
+
+| Probe | Number | What it means |
+|---|---|---|
+| Timer min tick | **100 ns** | sub-microsecond clock floor; `timeBeginPeriod(1)` is effective |
+| Jitter p99 | **~1.36 ms** | worst-case OS preemption; safe inter-arrivals must be coarser than this |
+| Loopback median | **~1.29 ms** | irreducible HTTP-on-localhost overhead; subtract this from every measured latency |
+| Loopback p99 | **~2.21 ms** | tail of the irreducible overhead |
+| Handler scaling | **1.5 ms (`n_con_usr=1`) → ~30 s (`n_con_usr=10000`)** | log-log curve; the slope is the FastAPI / event-loop saturation signature |
+
+Your machine's absolute numbers will differ but should follow the same shape. Treat any obvious deviation (timer resolution above 1 μs, loopback median above ~5 ms, handler-scaling slope shallower than two decades from `n_con_usr=1` to `n_con_usr=10000`) as a signal that something on the host is interfering and worth investigating before drawing conclusions from the experiment results.
 
 Full plan, per-host checkpoints, and the four reference recipes live in [notes/calibration.md](notes/calibration.md).
 

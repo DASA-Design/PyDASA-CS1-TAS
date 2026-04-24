@@ -88,14 +88,14 @@ def _resolve_baseline(*,
         raise RuntimeError(
             "No calibration envelope found for this host under "
             "data/results/experiment/calibration/. Run "
-            "`python src/scripts/calibration.py` before the experiment, "
+            "`python -m src.methods.calibration` before the experiment, "
             "or pass skip_calibration=True (CLI: --skip-calibration) to "
             "bypass the gate with a warning.")
     _age = calibration_age_hours(_env)
     if verbose and _age > _CALIB_STALE_HOURS:
         print(f"WARNING: calibration is {_age:.1f} h old "
               f"(stale threshold = {_CALIB_STALE_HOURS:.0f} h). "
-              "Consider re-running `python src/scripts/calibration.py` "
+              "Consider re-running `python -m src.methods.calibration` "
               "if background load / thermals on this host may have changed.")
     return _env
 

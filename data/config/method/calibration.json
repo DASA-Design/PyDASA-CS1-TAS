@@ -4,7 +4,7 @@
     "jitter_target_ns": 1000000,
     "loopback_samples": 5000,
     "loopback_warmup": 500,
-    "concurrency": [1, 10, 50, 100, 200, 500, 1000, 5000, 8000, 10000],
+    "n_con_usr": [1, 10, 50, 100, 200, 500, 1000, 5000, 8000, 10000],
     "per_worker": null,
     "samples_per_level": 500,
     "port": 8765,

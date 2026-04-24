@@ -61,7 +61,7 @@ class SvcSpec:
     # Bernoulli business-failure probability per completion
     epsilon: float
 
-    # declared concurrency ceiling (not enforced as a semaphore here)
+    # service-side parallel handlers (M/M/c/K); alias `c_srv` below; wire-key stays `c` to mirror profile JSONs
     c: int
 
     # declared system capacity (not enforced as a counter here)
@@ -80,6 +80,17 @@ class SvcSpec:
     def buffer_budget_bytes(self) -> int:
         """Declared memory budget in bytes; 0 when undeclared."""
         return int(self.mem_per_buffer)
+
+    @property
+    def c_srv(self) -> int:
+        """*c_srv* alias for `c` that reads as "service-side parallel handlers".
+
+        Exists so downstream prose / plots can distinguish service-side
+        `c_srv` from client-side `n_con_usr` (concurrent-user load) without
+        renaming the wire-schema field `c` that profile JSONs + PyDASA
+        already depend on. No new semantics; identical value.
+        """
+        return int(self.c)
 
 
 def derive_seed(root_seed: int, service_name: str) -> int:
@@ -142,11 +153,7 @@ class SvcResp(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Frozen per-invocation CSV schema. Every component logs one row per
-# invocation into `app.state.<context>.log` through the @instrumented
-# decorator. Downstream re-estimators depend on this order; any change
-# is a breaking change.
-
+# frozen CSV schema; column order is a breaking-change contract for downstream re-estimators
 LOG_COLUMNS = (
     "request_id", "service_name", "kind",
     "recv_ts", "start_ts", "end_ts",
@@ -157,8 +164,7 @@ LOG_COLUMNS = (
 
 
 # ---------------------------------------------------------------------------
-# Minimal per-service state; just what the annotation needs to write
-# one CSV row per invocation. No counters, no semaphores, no in_system.
+# minimal per-service state; just what @logger needs to record one CSV row per invocation
 
 
 @dataclass
@@ -173,32 +179,19 @@ class SvcCtx:
     # immutable per-service knobs
     spec: SvcSpec
 
-    # CSV rows buffered until flush -- bounded deque to prevent unbounded
-    # memory growth on long or high-rate runs. `maxlen` is a soft cap:
-    # overflow increments `dropped_count`, which must be zero at end of
-    # run (checked by the launcher). dict shape is preserved so every
-    # downstream reader (`_build_svc_df_from_logs`, the schema tests)
-    # stays unchanged.
+    # bounded CSV row buffer; overflow increments `dropped_count` (must be 0 at shutdown)
     log: Deque[Dict[str, Any]] = field(init=False)
 
-    # count of rows silently dropped because the log deque was full.
-    # zero on a well-sized run; non-zero means the run needs a larger
-    # buffer OR the load was higher than the calibration assumed.
+    # non-zero means the log buffer was sized too small or load exceeded calibration
     dropped_count: int = field(default=0, init=False)
 
-    # bound on the log deque's length. Sized for ~500 krequests per
-    # service across the full replicate window at the target rates in
-    # `data/config/method/experiment.json`. A single run at 345 req/s
-    # for 60 s x 4 hops produces ~82 k rows per service; the 500 k cap
-    # leaves ~6x headroom.
+    # deque cap; 500k leaves ~6x headroom over a 345 req/s x 60 s x 4-hop run
     log_maxlen: int = field(default=500_000)
 
     # per-service RNG seeded from spec.seed
     rng: random.Random = field(init=False)
 
-    # admission semaphore: spec.c permits gate concurrent handler execution
-    # so wait-for-permit time is measurable as Wq and the simultaneous
-    # in-service count is measurable as c_used_at_start
+    # spec.c permits; gates concurrent handler execution so Wq + c_used_at_start are measurable
     sem: asyncio.Semaphore = field(init=False)
 
     # bound request handler; set by mount_atomic_svc after build
@@ -210,9 +203,7 @@ class SvcCtx:
         else:
             self.rng = random.Random()
         self.log = deque(maxlen=int(self.log_maxlen))
-        # Semaphore must be created in an asyncio context, but since dataclass
-        # init runs synchronously, allocate it here -- safe because the
-        # launcher mounts services inside the running event loop
+        # safe to allocate here: the launcher mounts services inside the running event loop
         self.sem = asyncio.Semaphore(max(int(self.spec.c), 1))
 
     def record_row(self, row: Dict[str, Any]) -> None:
@@ -324,9 +315,7 @@ def make_base_app(title: str,
     return _app
 
 
-# External-forward callback shape: used when a service's routing row
-# picks a target that isn't local (for the composite service, "local"
-# means a sibling member; for atomic, all targets are external).
+# callback shape for non-local routing targets (siblings are "local" on composite; all targets are external on atomic)
 ExtFwdFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 

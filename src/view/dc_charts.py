@@ -3,10 +3,7 @@
 Module dc_charts.py
 ===================
 
-Dimensionless-coefficient charts for the CS-01 TAS case study. Sibling
-module to `src.view.qn_diagram` -- that one renders queue-network state
-(topology, rho/L/W heatmaps, per-metric bars); this one renders the
-coefficient cloud (theta, sigma, eta, phi) across a configuration sweep.
+Dimensionless-coefficient charts for the CS-01 TAS case study. Sibling module to `src.view.qn_diagram`; the latter renders queue-network state (topology, rho/L/W heatmaps, per-metric bars), this one renders the coefficient cloud (theta, sigma, eta, phi) across a configuration sweep.
 
 Five plotters, ported from `__OLD__/src/notebooks/src/display.py`:
 
@@ -21,8 +18,7 @@ from `src.view.qn_diagram` so saving + palette stay identical. Every text
 element uses `_TEXT_BLACK = "#010101"` (never pure black) so SVG output is
 visible under dark-theme viewers.
 
-# TODO: phase 3b.2 populates the five plotter bodies; this scaffold carries
-# the shared constants + helpers + `NotImplementedError` stubs.
+# TODO (phase 3b.2): populate the remaining plotter bodies; scaffold carries shared constants + helpers + stubs.
 """
 # native python modules
 from __future__ import annotations
@@ -36,15 +32,12 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
-# local modules (reused across the view family so the save routine and the
-# palette generator stay identical; the `_` prefix in `qn_diagram` is the
-# project's module-private marker, not a strict private import guard)
+# shared view helpers (save + palette kept identical across qn_diagram + dc_charts)
 from src.view.qn_diagram import _TEXT_BLACK, _generate_color_map, _save_figure
 
 
 # ---------------------------------------------------------------------------
-# rcParams: ensure every text element in this module honours _TEXT_BLACK and
-# every saved figure has a white background regardless of the caller's theme
+# rcParams: near-black text + white canvas so SVG survives dark-theme previews
 # ---------------------------------------------------------------------------
 
 plt.rcParams.update({
@@ -72,8 +65,7 @@ _GRID_STY_2D = dict(alpha=0.5,
                     linestyle="--")
 
 
-# 3D grid style: applied by `_style_3d_panes` directly (matplotlib does not
-# expose grid kwargs on the 3D axes constructor path)
+# 3D grid style; applied by `_style_3d_panes` (matplotlib 3D axes has no grid kwargs)
 _GRID_STY_3D = dict(alpha=0.5,
                     color=_TEXT_BLACK,
                     linewidth=0.8)
@@ -91,8 +83,7 @@ _TITLE_STYLE = dict(fontsize=14, fontweight="bold", pad=20)
 _TICK_STYLE = dict(colors=_TEXT_BLACK, which="both", labelsize=11)
 
 
-# 3D tick / label variants -- "GRID" inside a 3x3 meta-grid (smaller font),
-# "SINGLE" for a standalone figure (larger font)
+# 3D tick / label variants; "GRID" for 3x3 meta-grids (smaller), "SINGLE" for standalone figures (larger)
 _TICK_STY_3D_GRID = dict(colors=_TEXT_BLACK, which="both", labelsize=10, pad=8)
 _TICK_STY_3D_SINGLE = dict(colors=_TEXT_BLACK, which="both", labelsize=11, pad=10)
 
@@ -192,11 +183,13 @@ def _apply_sci_format(ax: Any,
         axes_list (Optional[List[str]]): which axes to format. Defaults to `["x", "y"]`; pass `["x", "y", "z"]` for 3D.
         sig (int): significant figures passed through to `_sci_tick_fmt`. Defaults to `2`.
     """
-    # default axes list covers 2D plots; 3D callers pass ["x", "y", "z"]
-    _axes = axes_list if axes_list is not None else ["x", "y"]
+    # 2D default; 3D callers pass ["x", "y", "z"]
+    if axes_list is not None:
+        _axes = axes_list
+    else:
+        _axes = ["x", "y"]
 
-    # one formatter per axis; the lambda snapshots `sig` via default arg so
-    # callers in a loop do not all share the last-seen value
+    # lambda snapshots `sig` via default arg so loop callers don't share the last value
     for _axis_name in _axes:
         _fmt = FuncFormatter(lambda x, _, s=sig: _sci_tick_fmt(x, s))
         getattr(ax, f"{_axis_name}axis").set_major_formatter(_fmt)
@@ -213,8 +206,11 @@ def _apply_logscale(ax: Any,
         logscale (Union[bool, List[bool]]): `True` to log every axis in `axes_list`; a list of bools to set each axis independently. Extra entries beyond `len(axes_list)` are ignored.
         axes_list (Optional[List[str]]): which axes to consider. Defaults to `["x", "y"]`; pass `["x", "y", "z"]` for 3D.
     """
-    # default axes list covers 2D plots; 3D callers pass ["x", "y", "z"]
-    _axes = axes_list if axes_list is not None else ["x", "y"]
+    # 2D default; 3D callers pass ["x", "y", "z"]
+    if axes_list is not None:
+        _axes = axes_list
+    else:
+        _axes = ["x", "y"]
 
     # normalise the bool / list input to a parallel list of flags
     if isinstance(logscale, bool):
@@ -325,8 +321,7 @@ _YOLY_PANELS = [
 
 
 # ---------------------------------------------------------------------------
-# Public plotters: `plot_yoly_chart` done in Phase 3b.2; the other four still
-# `NotImplementedError` stubs until their turns in the Phase 3b.2 sub-sequence
+# public plotters; `plot_yoly_chart` is done, the other four stay NotImplementedError stubs
 # ---------------------------------------------------------------------------
 
 
@@ -362,18 +357,19 @@ def _panel_single_mode(ax: Any,
     _uniq_mu = np.unique(_mu)
     _uniq_K = np.unique(_K)
 
-    # qn_diagram helper returns a List aligned with input order; wrap to a
-    # dict so the scatter loop can .get(c_val, default) cleanly
+    # wrap qn_diagram's list return as a dict for .get(c_val, default) lookups
     _sorted_c = _uniq_c.tolist()
     _cmap = dict(zip(_sorted_c, _generate_color_map(_sorted_c)))
     _mmap = _generate_marker_map(_uniq_mu.tolist())
 
     # y-range scaled offset for K-endpoint annotations
-    _y_range = float(_y.max() - _y.min()) if len(_y) > 0 else 1.0
+    if len(_y) > 0:
+        _y_range = float(_y.max() - _y.min())
+    else:
+        _y_range = 1.0
     _y_off = _y_range * 0.04
 
-    # track which (c, mu) combos have a legend entry yet and which K values
-    # have been annotated so we only label each once per panel
+    # track which (c, mu) combos + K values have been labelled to avoid duplicates
     _seen_combos: set = set()
     _seen_K: set = set()
 
@@ -453,15 +449,27 @@ def _panel_multi_path(ax: Any,
 
         # path legend label carries the (c, mu) summary for the path
         _params = _get_path_params(coeff_data, _tag)
-        _path_lbl = f"{_name} ({_params})" if _params else _name
+        if _params:
+            _path_lbl = f"{_name} ({_params})"
+        else:
+            _path_lbl = _name
 
         # y-range scaled offset for K-endpoint annotations
-        _y_range = float(_y.max() - _y.min()) if len(_y) > 0 else 1.0
+        if len(_y) > 0:
+            _y_range = float(_y.max() - _y.min())
+        else:
+            _y_range = 1.0
         _y_off = _y_range * 0.04
 
         # split the path into K slices so we can annotate endpoints
-        _uniq_K = np.unique(_K) if len(_K) > 0 else np.array([])
-        _K_ends = ({_uniq_K[0], _uniq_K[-1]} if len(_uniq_K) > 0 else set())
+        if len(_K) > 0:
+            _uniq_K = np.unique(_K)
+        else:
+            _uniq_K = np.array([])
+        if len(_uniq_K) > 0:
+            _K_ends = {_uniq_K[0], _uniq_K[-1]}
+        else:
+            _K_ends = set()
         _first_slice = True
 
         if len(_uniq_K) > 0:
@@ -471,7 +479,10 @@ def _panel_multi_path(ax: Any,
                     continue
 
                 # legend label only on the first slice so the entry is unique
-                _label = _path_lbl if _first_slice else None
+                if _first_slice:
+                    _label = _path_lbl
+                else:
+                    _label = None
                 _first_slice = False
 
                 ax.scatter(_x[_mask], _y[_mask],
@@ -507,8 +518,7 @@ def _panel_multi_path(ax: Any,
 
 
 def _resolve_groups(paths: Optional[Dict[str, str]],
-                    scenarios: Optional[Dict[str, str]]
-                    ) -> tuple[Optional[Dict[str, str]], str]:
+                    scenarios: Optional[Dict[str, str]]) -> tuple[Optional[Dict[str, str]], str]:
     """*_resolve_groups()* chooses between the `paths=` (PACS idiom) and `scenarios=` (TAS idiom) kwargs.
 
     Both kwargs drive the same plotter behaviour (one colour + marker per
@@ -526,7 +536,7 @@ def _resolve_groups(paths: Optional[Dict[str, str]],
         ValueError: If both kwargs are non-None.
 
     Returns:
-        tuple[Optional[Dict[str, str]], str]: `(groups, legend_title)` -- `groups` is the chosen dict (or None for single-mode) and `legend_title` is the label to use on the panel legend.
+        tuple[Optional[Dict[str, str]], str]: `(groups, legend_title)`; `groups` is the chosen dict (or None for single-mode) and `legend_title` is the label to use on the panel legend.
     """
     # mutual exclusion: only one vocabulary at a time
     if paths is not None and scenarios is not None:
@@ -590,9 +600,7 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
     _gs = _fig.add_gridspec(2, 2, hspace=0.25, wspace=0.25)
     _axes = [_fig.add_subplot(_gs[_i, _j]) for _i in range(2) for _j in range(2)]
 
-    # populate every panel via the matching mode; the helpers attach
-    # `label=...` to scatter calls so handles can be lifted later for a
-    # single figure-level legend (no per-panel legend overlay)
+    # populate each panel; scatter `label=...` is lifted into one figure-level legend later
     _legend_axes: Optional[Any] = None
     for _idx, (_panel_title, _x_key, _y_key) in enumerate(_YOLY_PANELS):
         _ax = _axes[_idx]
@@ -613,11 +621,15 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.tick_params(**_TICK_STYLE)
         for _spine in _ax.spines.values():
             _spine.set_edgecolor(_TEXT_BLACK)
-        # sigma clusters tightly around 1.0 (Little's-law identity); bump
-        # precision on whichever axis carries it so adjacent ticks do not
-        # all collapse to the same "1.0e+00" string
-        _x_axes = ["x"] if _x_key != "sigma" else []
-        _y_axes = ["y"] if _y_key != "sigma" else []
+        # sigma clusters at 1.0 (Little's-law identity); bump precision so ticks don't collapse to "1.0e+00"
+        if _x_key != "sigma":
+            _x_axes = ["x"]
+        else:
+            _x_axes = []
+        if _y_key != "sigma":
+            _y_axes = ["y"]
+        else:
+            _y_axes = []
         if _x_axes or _y_axes:
             _apply_sci_format(_ax, axes_list=_x_axes + _y_axes)
         _sigma_axes = [_n for _n, _k in (("x", _x_key), ("y", _y_key))
@@ -631,10 +643,7 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.set_ylabel(_lbl_map[_y_key], **_LBL_STY_2D_SINGLE)
         _ax.set_title(_panel_title, fontsize=17, pad=-10, **_LBL_STYLE)
 
-    # ONE figure-level legend parked BELOW the panel grid so the panels can
-    # use the full figure width. The wider sigma ticks (sig=4) need that
-    # extra horizontal room. Pairs with `subplots_adjust(bottom=0.10)` which
-    # reserves the [0, 0.10] vertical strip for the legend.
+    # one figure-level legend along the bottom strip reserved by subplots_adjust
     if _legend_axes is not None:
         _handles, _labels = _legend_axes.get_legend_handles_labels()
         _fig.subplots_adjust(bottom=0.10, right=0.97)
@@ -684,7 +693,10 @@ def _panel_3d_single(ax: Any, coeff_data: Dict[str, Any]) -> bool:
     _mmap = _generate_marker_map(_uniq_mu.tolist())
 
     # z-range scaled offset for K-endpoint annotations (eta axis)
-    _z_range = float(_eta.max() - _eta.min()) if len(_eta) > 0 else 1.0
+    if len(_eta) > 0:
+        _z_range = float(_eta.max() - _eta.min())
+    else:
+        _z_range = 1.0
     _z_off = _z_range * 0.05
 
     _seen_combos: set = set()
@@ -757,7 +769,10 @@ def _panel_3d_groups(ax: Any,
     for _tag in groups.values():
         _eta_arr = coeff_data.get(f"\\eta_{{{_tag}}}", [])
         _all_eta.extend(np.asarray(_eta_arr, dtype=float).tolist())
-    _z_range = (max(_all_eta) - min(_all_eta)) if len(_all_eta) > 1 else 1.0
+    if len(_all_eta) > 1:
+        _z_range = max(_all_eta) - min(_all_eta)
+    else:
+        _z_range = 1.0
     _z_off = _z_range * 0.05
 
     for _name, _tag in groups.items():
@@ -771,10 +786,19 @@ def _panel_3d_groups(ax: Any,
 
         # legend label carries the (c, mu) summary for the group
         _params = _get_path_params(coeff_data, _tag)
-        _group_lbl = f"{_name} ({_params})" if _params else _name
+        if _params:
+            _group_lbl = f"{_name} ({_params})"
+        else:
+            _group_lbl = _name
 
-        _uniq_K = np.unique(_K) if len(_K) > 0 else np.array([])
-        _K_ends = ({_uniq_K[0], _uniq_K[-1]} if len(_uniq_K) > 0 else set())
+        if len(_K) > 0:
+            _uniq_K = np.unique(_K)
+        else:
+            _uniq_K = np.array([])
+        if len(_uniq_K) > 0:
+            _K_ends = {_uniq_K[0], _uniq_K[-1]}
+        else:
+            _K_ends = set()
         _first_slice = True
 
         if len(_uniq_K) > 0:
@@ -783,7 +807,10 @@ def _panel_3d_groups(ax: Any,
                 if not np.any(_mask):
                     continue
 
-                _label = _group_lbl if _first_slice else None
+                if _first_slice:
+                    _label = _group_lbl
+                else:
+                    _label = None
                 _first_slice = False
 
                 ax.scatter(_theta[_mask], _sigma[_mask], _eta[_mask],
@@ -884,8 +911,7 @@ def plot_system_behaviour(coeff_data: Dict[str, Any],
     _style_3d_panes(_ax)
     _ax.grid(True, **_GRID_STY_3D)
     _apply_sci_format(_ax, axes_list=["x", "z"])
-    # sigma clusters tightly around 1.0 (Little's-law identity); bump precision
-    # so adjacent ticks do not all collapse to the same "1.0e+00" string
+    # sigma clusters at 1.0 (Little's-law); bump precision so ticks don't collapse to "1.0e+00"
     _apply_sci_format(_ax, axes_list=["y"], sig=4)
     for _axis_name in ("x", "y", "z"):
         _ax.tick_params(axis=_axis_name, **_TICK_STY_3D_SINGLE)
@@ -919,8 +945,7 @@ def _short_coef_name(full_sym: str) -> Optional[str]:
     Returns:
         Optional[str]: short coefficient name, or `None` if unmatched.
     """
-    # match on `\<short>` rather than bare `<short>` so we don't confuse
-    # `\eta` with the trailing `eta` in `\theta`
+    # match `\<short>` (not bare) so `\eta` doesn't collide with the trailing `eta` in `\theta`
     for _short in ("theta", "sigma", "eta", "phi"):
         if f"\\{_short}" in full_sym:
             return _short
@@ -994,8 +1019,7 @@ def plot_arts_distributions(coeff_data: Dict[str, Dict[str, Any]],
     _n_rows, _n_cols, _last_row_idx, _n_last_row = _grid_layout(_n_nodes)
 
     _fig = plt.figure(figsize=(26, 26), facecolor="white")
-    # extra hspace on the outer grid leaves room for the per-cell header
-    # anchored above each cell via `get_position()` later
+    # outer-grid hspace leaves room for per-cell headers anchored via `get_position()` later
     _fig.subplots_adjust(top=0.93, bottom=0.04, left=0.06, right=0.97,
                          hspace=0.55, wspace=0.30)
     _gs_main = _fig.add_gridspec(_n_rows, _n_cols,
@@ -1023,8 +1047,7 @@ def plot_arts_distributions(coeff_data: Dict[str, Dict[str, Any]],
                                                           hspace=0.45,
                                                           wspace=0.45)
 
-        # per-node header anchored to the actual gridspec cell top so it
-        # never overlaps the inner subgrid's title row
+        # anchor header to the gridspec cell top so it never overlaps the inner subgrid title
         _cell_pos = _gs_main[_nd_row, _nd_col].get_position(_fig)
         _title_x = (_cell_pos.x0 + _cell_pos.x1) / 2.0
         _title_y = _cell_pos.y1 + 0.008
@@ -1201,8 +1224,7 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
                          hspace=0.15, wspace=0.10)
     _gs_main = _fig.add_gridspec(_n_rows, _n_cols, figure=_fig)
 
-    # walk every node and populate one 3D cell; track the first axes that
-    # produced legend handles so a single figure-level legend can lift them
+    # populate one 3D cell per node; remember the first labelled axes for the figure legend
     _legend_axes: Optional[Any] = None
     for _nd_idx, _node in enumerate(_node_keys):
         _nd_row, _nd_col = _node_grid_pos(_nd_idx, _n_rows, _n_cols,
@@ -1220,9 +1242,7 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
             try:
                 _has_legend = _panel_3d_single(_ax, _node_block)
             except KeyError:
-                # node block missing one of the canonical sweep keys; render
-                # an empty cell with the header still in place so the grid
-                # stays visually balanced
+                # missing canonical sweep key; leave cell empty but keep header for layout balance
                 _has_legend = False
 
         if _has_legend and _legend_axes is None:
@@ -1239,8 +1259,7 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
         _style_3d_panes(_ax)
         _ax.grid(True, **_GRID_STY_3D)
         _apply_sci_format(_ax, axes_list=["x", "z"])
-        # sigma clusters tightly around 1.0 (Little's-law identity); bump
-        # precision so adjacent ticks do not all collapse to "1.0e+00"
+        # sigma clusters at 1.0 (Little's-law); bump precision so ticks don't collapse to "1.0e+00"
         _apply_sci_format(_ax, axes_list=["y"], sig=4)
         for _axis_name in ("x", "y", "z"):
             _ax.tick_params(axis=_axis_name, **_TICK_STY_3D_GRID)
@@ -1249,8 +1268,7 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
         _ax.set_title(_node_header(_node, _name_map),
                       fontsize=19, pad=10, **_LBL_STYLE)
 
-    # ONE figure-level legend along the bottom; reserves a strip via
-    # subplots_adjust(bottom=...) so the per-cell 3D axes are not clipped
+    # one figure-level legend along the bottom strip (reserved by subplots_adjust)
     if _legend_axes is not None:
         _handles, _labels = _legend_axes.get_legend_handles_labels()
         _fig.legend(_handles, _labels,
@@ -1330,8 +1348,7 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
                          hspace=0.35, wspace=0.30)
     _gs_main = _fig.add_gridspec(_n_rows, _n_cols, figure=_fig)
 
-    # walk every node and populate its 2x2 inner subgrid; one figure-level
-    # legend is added at the end from the first cell that produced labels
+    # populate each node's 2x2 subgrid; lift labels from the first labelled cell for one figure legend
     _legend_axes: Optional[Any] = None
     for _nd_idx, _node in enumerate(_node_keys):
         _nd_row, _nd_col = _node_grid_pos(_nd_idx, _n_rows, _n_cols,
@@ -1368,11 +1385,15 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
             _ax.tick_params(**_TICK_STYLE)
             for _spine in _ax.spines.values():
                 _spine.set_edgecolor(_TEXT_BLACK)
-            # sigma clusters tightly around 1.0 (Little's-law identity); bump
-            # precision on whichever axis carries it so adjacent ticks do not
-            # all collapse to the same "1.0e+00" string
-            _x_axes = ["x"] if _x_key != "sigma" else []
-            _y_axes = ["y"] if _y_key != "sigma" else []
+            # sigma clusters at 1.0 (Little's-law identity); bump precision so ticks don't collapse to "1.0e+00"
+            if _x_key != "sigma":
+                _x_axes = ["x"]
+            else:
+                _x_axes = []
+            if _y_key != "sigma":
+                _y_axes = ["y"]
+            else:
+                _y_axes = []
             if _x_axes or _y_axes:
                 _apply_sci_format(_ax, axes_list=_x_axes + _y_axes)
             _sigma_axes = [_n for _n, _k in (("x", _x_key), ("y", _y_key))
@@ -1386,8 +1407,7 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
             _ax.set_ylabel(_lbl_map[_y_key], **_LBL_STY_2D_GRID)
             _ax.set_title(_panel_title, fontsize=13, **_LBL_STYLE)
 
-        # per-node header anchored to the actual gridspec cell top so it
-        # never overlaps the inner subgrid's title row
+        # anchor header to the gridspec cell top so it never overlaps the inner subgrid title
         _cell_pos = _gs_main[_nd_row, _nd_col].get_position(_fig)
         _title_x = (_cell_pos.x0 + _cell_pos.x1) / 2.0
         _title_y = _cell_pos.y1 + 0.012
@@ -1397,8 +1417,7 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
                   fontsize=17, fontweight="bold", color=_TEXT_BLACK,
                   transform=_fig.transFigure)
 
-    # ONE figure-level legend along the bottom; reserves a strip via
-    # subplots_adjust(bottom=...) so the panel grid is not clipped
+    # one figure-level legend along the bottom strip reserved by subplots_adjust
     if _legend_axes is not None:
         _handles, _labels = _legend_axes.get_legend_handles_labels()
         _fig.legend(_handles, _labels,

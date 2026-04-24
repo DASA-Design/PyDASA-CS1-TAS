@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-calibration.py
-==============
+Module methods/calibration.py
+=============================
 
-Per-host noise-floor characterization for the `experiment` method. Runs four baselines (timer resolution, scheduling jitter, loopback latency, empty-handler scaling) and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
+Per-host noise-floor characterisation method; sibling to `src.methods.analytic` / `stochastic` / `dimensional` / `experiment`, but its subject is the **host**, not the TAS architecture. Runs four baselines (timer resolution, scheduling jitter, loopback latency, empty-handler scaling over `n_con_usr`) and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
 
 Every `experiment` run should reference the latest calibration JSON by timestamp in its run envelope (`baseline_ref`) so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
 
@@ -15,21 +15,21 @@ Kept deliberately small and dependency-light:
 
 Run::
 
-    python src/scripts/calibration.py
-    python src/scripts/calibration.py --timer-samples 50000 --jitter-samples 2000
-    python src/scripts/calibration.py --loopback-samples 2000 --concurrency 1,10,50,100
-    python src/scripts/calibration.py --skip-loopback  # timer + jitter only
+    python -m src.methods.calibration
+    python -m src.methods.calibration --timer-samples 50000 --jitter-samples 2000
+    python -m src.methods.calibration --loopback-samples 2000 --n-con-usr 1,10,50,100
+    python -m src.methods.calibration --skip-loopback  # timer + jitter only
 
 Output JSON shape (truncated)::
 
     {
-      "host_profile": {"hostname": "...", "os": "...", "cpu_count": 8, ...},
-      "timer":   {"min_ns": 100, "median_ns": 100.0, "mean_ns": 112.4, "std_ns": 18.3},
-      "jitter":  {"mean_us": 480.1, "p99_us": 1250.2, "max_us": 2104.5, "std_us": 230.6},
-      "loopback":{"min_us": 180.0, "median_us": 240.0, "p95_us": 410.0, "p99_us": 640.0, "std_us": 95.1},
-      "handler_scaling": {"1": {...}, "10": {...}, "50": {...}, "100": {...}},
-      "timestamp": "2026-04-23T19:42:11",
-      "elapsed_s": 42.7
+        "host_profile": {"hostname": "...", "os": "...", "cpu_count": 8, ...},
+        "timer":   {"min_ns": 100, "median_ns": 100.0, "mean_ns": 112.4, "std_ns": 18.3},
+        "jitter":  {"mean_us": 480.1, "p99_us": 1250.2, "max_us": 2104.5, "std_us": 230.6},
+        "loopback":{"min_us": 180.0, "median_us": 240.0, "p95_us": 410.0, "p99_us": 640.0, "std_us": 95.1},
+        "handler_scaling": {"1": {...}, "10": {...}, "50": {...}, "100": {...}},
+        "timestamp": "2026-04-23T19:42:11",
+        "elapsed_s": 42.7
     }
 """
 # native python modules
@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import gc
 import json
 import os
 import platform
@@ -50,7 +51,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # scientific stack
-import gc
 import numpy as np
 
 # bring the repo root onto sys.path so ad-hoc script runs import cleanly
@@ -66,10 +66,7 @@ from fastapi import FastAPI  # noqa: E402
 _CALIB_DIR = _ROOT / "data" / "results" / "experiment" / "calibration"
 
 
-# All tunables live in `data/config/method/calibration.json`; this module
-# reads them once at import so every entry point (CLI, `run()`, notebook)
-# sees the same defaults. Fallbacks are preserved here only for the case
-# where the config file is missing or unreadable.
+# tunables from `data/config/method/calibration.json` (read once at import; fallbacks apply only when unreadable)
 def _load_cfg() -> Dict[str, Any]:
     """*_load_cfg()* read calibration defaults from the method-config JSON.
 
@@ -89,11 +86,9 @@ _DEFAULT_TIMER_SAMPLES = int(_CALIB_CFG.get("timer_samples", 0))
 _DEFAULT_JITTER_SAMPLES = int(_CALIB_CFG.get("jitter_samples", 0))
 _DEFAULT_LOOPBACK_SAMPLES = int(_CALIB_CFG.get("loopback_samples", 0))
 _DEFAULT_LOOPBACK_WARMUP = int(_CALIB_CFG.get("loopback_warmup", 0))
-_DEFAULT_CONCURRENCY = tuple(_CALIB_CFG.get("concurrency", ()))
-# Target sample count per concurrency level. `per_worker` is derived as
-# `max(1, samples_per_level // concurrency)` unless the caller overrides
-# it, and the aggregated latencies are trimmed to `samples_per_level` so
-# every level reports the same number of observations.
+# client-side load ladder; each entry is an in-flight-request count against the c_srv=1 calibration service
+_DEFAULT_N_CON_USR = tuple(_CALIB_CFG.get("n_con_usr", ()))
+# total samples per level; per_worker = max(1, samples_per_level // n_usr) unless overridden
 _DEFAULT_SAMPLES_PER_LEVEL = int(_CALIB_CFG.get("samples_per_level", 0))
 _DEFAULT_PORT = int(_CALIB_CFG.get("port", 8765))
 _DEFAULT_READY_TIMEOUT_S = float(_CALIB_CFG.get("ready_timeout_s", 5.0))
@@ -102,10 +97,7 @@ _DEFAULT_HTTPX_TIMEOUT_S = float(_CALIB_CFG.get("httpx_timeout_s", 0))
 _DEFAULT_SKIP_JITTER = bool(_CALIB_CFG.get("skip_jitter", False))
 _DEFAULT_SKIP_LOOPBACK = bool(_CALIB_CFG.get("skip_loopback", False))
 
-# Rate-sweep (opt-in) parameters. Each trial is a full experiment-method
-# run, so the sweep is intentionally gated behind `skip_rate_sweep=True`
-# to keep the host-floor calibration fast; users flip the config key or
-# pass `--rate-sweep` on the CLI to opt in.
+# rate-sweep: opt-in (each trial is a full experiment.run); enable via config or --rate-sweep
 _DEFAULT_SKIP_RATE_SWEEP = bool(_CALIB_CFG.get("skip_rate_sweep", True))
 _RATE_SWEEP_CFG: Dict[str, Any] = _CALIB_CFG.get("rate_sweep", {})
 _DEFAULT_RATE_SWEEP_ADAPTATION = str(
@@ -128,15 +120,10 @@ _DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT = float(
 _DEFAULT_RATE_SWEEP_ENTRY_SERVICE = str(
     _RATE_SWEEP_CFG.get("entry_service", "TAS_{1}"))
 
-# sleep() target for the jitter probe, in nanoseconds. Read directly
-# from the config in the same unit (ns) used internally by the hot path.
+# jitter-probe sleep target (ns); same unit as the hot path
 _JITTER_TARGET_NS = int(_CALIB_CFG.get("jitter_target_ns", 1_000_000))
 
-# tick granularity used by `ClientSimulator._probe_at_rate`'s auto-batch
-# formula. Reported at rate-sweep banner time so the operator can see
-# the expected batch size at each target rate. Kept local (not imported
-# from `src.experiment.client`) so the rate sweep remains independent
-# of the experiment-module import chain.
+# auto-batch tick (s); mirrors ClientSimulator._probe_at_rate, duplicated to keep experiment import out of the rate sweep
 _TARGET_TICK_S: float = 0.020
 
 
@@ -214,6 +201,7 @@ def snapshot_host_profile() -> Dict[str, Any]:
     _cpu_count = os.cpu_count()
     _cpu_machine = platform.machine()
     _cpu_processor = platform.processor()
+
     _profile = {
         "hostname": _hostname,
         "os": _os,
@@ -325,8 +313,7 @@ class _UvicornThread(threading.Thread):
     def __init__(self, app: FastAPI, port: int,
                  backlog: int = _DEFAULT_UVICORN_BACKLOG) -> None:
         super().__init__(daemon=True)
-        # large accept backlog so the high-concurrency levels (c=5000,
-        # c=10000) don't get refused at the kernel socket queue.
+        # large backlog so high n_con_usr levels aren't refused at the kernel socket queue
         _config = uvicorn.Config(app,
                                  host="127.0.0.1",
                                  port=int(port),
@@ -384,8 +371,7 @@ async def measure_loopback(port: int,
     _url = "/ping"
     _base = f"http://127.0.0.1:{port}"
     _rtts: List[int] = []
-    # loopback is serial so 1 keep-alive connection is enough; explicit
-    # Limits still documents intent and avoids accidental pool caps.
+    # serial loopback; cap the pool at 1 to avoid accidental concurrency
     _limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
     async with httpx.AsyncClient(base_url=_base, limits=_limits) as _client:
         for _ in range(int(warmup)):
@@ -428,53 +414,51 @@ async def _run_concurrent_worker(client: httpx.AsyncClient,
 
 
 async def measure_handler_scaling(port: int,
-                                  concurrency: Tuple[int, ...],
+                                  n_con_usr: Tuple[int, ...],
                                   warmup: int,
                                   per_worker: Optional[int] = None,
                                   samples_per_level: int = _DEFAULT_SAMPLES_PER_LEVEL,
                                   on_level_start: Optional[Any] = None,
                                   on_level_done: Optional[Any] = None) -> Dict[str, Dict[str, float]]:
-    """*measure_handler_scaling()* loopback latency at increasing concurrency levels.
+    """*measure_handler_scaling()* loopback latency at increasing concurrent-user load levels.
 
-    For each level `c`, launches `c` concurrent workers each doing a derived number of sequential requests, aggregates the latency distribution. Quantifies how the FastAPI / event-loop stack's response time grows as in-flight requests stack up on the empty handler.
+    For each `n_con_usr` (concurrent in-flight requests from the calibration client) in the ladder, launches `n_con_usr` concurrent workers each doing a derived number of sequential requests against the single-worker (`c_srv=1`) calibration service, aggregates the latency distribution. Quantifies how the FastAPI / event-loop stack's response time grows as in-flight user requests stack up on an empty handler.
 
-    When `per_worker` is not supplied, each level targets `samples_per_level` total samples and sets `per_worker = max(1, samples_per_level // c)`. This keeps per-level wall time bounded even at c = 10 000, where a naive fixed `per_worker=200` would issue 2 million requests for one level.
+    `n_con_usr` is the CLIENT-side concurrency knob; the SERVICE-side parallelism `c_srv` stays fixed at 1 (one uvicorn worker, one handler). The two must not be conflated.
+
+    When `per_worker` is not supplied, each level targets `samples_per_level` total samples and sets `per_worker = max(1, samples_per_level // n_usr)`. This keeps per-level wall time bounded even at `n_usr = 10_000`, where a naive fixed `per_worker=200` would issue 2 million requests for one level.
 
     Args:
         port (int): port the ping server is listening on.
-        concurrency (tuple[int, ...]): levels to test (e.g. 1, 10, 50, 100).
+        n_con_usr (tuple[int, ...]): concurrent-user load levels to test (e.g. 1, 10, 50, 100).
         warmup (int): discard-this-many requests (total, not per-worker) upfront.
         per_worker (Optional[int]): sequential requests per concurrent worker. When `None`, derived from `samples_per_level`.
         samples_per_level (int): target total samples per level when `per_worker` is derived; ignored when `per_worker` is given explicitly.
-        on_level_start (Optional[callable]): invoked with `(level, total_samples)` before each level starts.
-        on_level_done (Optional[callable]): invoked with `(level, stats_dict, elapsed_s)` after each level finishes.
+        on_level_start (Optional[callable]): invoked with `(n_con_usr, total_samples)` before each level starts.
+        on_level_done (Optional[callable]): invoked with `(n_con_usr, stats_dict, elapsed_s)` after each level finishes.
 
     Returns:
-        dict[str, dict]: `{"<c>": {min_us, median_us, p95_us, p99_us, std_us, samples}}`.
+        dict[str, dict]: `{"<n_con_usr>": {min_us, median_us, p95_us, p99_us, std_us, samples}}`.
     """
     _url = "/ping"
     _base = f"http://127.0.0.1:{port}"
     _result: Dict[str, Dict[str, float]] = {}
-    # raise httpx's connection pool cap (default 100) so the real
-    # concurrency matches the requested level; uvicorn answers over a
-    # single /ping route so keep-alive reuse is fine.
-    _max_c = 1
-    for _c_peek in concurrency:
-        if int(_c_peek) > _max_c:
-            _max_c = int(_c_peek)
-    _limits = httpx.Limits(max_connections=_max_c,
-                           max_keepalive_connections=_max_c)
-    # long connect + read timeouts because at c=5000-10000 the kernel
-    # connect queue drains slowly and per-request latency can be in the
-    # seconds; the default 5 s timeout trips before the measurement runs.
+    # lift httpx pool cap (default 100) to the max ladder level
+    _max_n_con = 1
+    for _n_con_peek in n_con_usr:
+        if int(_n_con_peek) > _max_n_con:
+            _max_n_con = int(_n_con_peek)
+    _limits = httpx.Limits(max_connections=_max_n_con,
+                           max_keepalive_connections=_max_n_con)
+    # high timeout; at n_con_usr>=5000 the kernel connect queue drains in seconds
     _timeout = httpx.Timeout(_DEFAULT_HTTPX_TIMEOUT_S)
     async with httpx.AsyncClient(base_url=_base,
                                  limits=_limits,
                                  timeout=_timeout) as _client:
         for _ in range(int(warmup)):
             await _client.get(_url)
-        for _c in concurrency:
-            _count = int(_c)
+        for _n_con in n_con_usr:
+            _count = int(_n_con)
             if per_worker is not None:
                 _reqs = int(per_worker)
             else:
@@ -516,9 +500,7 @@ async def measure_handler_scaling(port: int,
             if on_level_done is not None:
                 _elapsed = time.perf_counter() - _t0
                 on_level_done(_count, _stats, _elapsed)
-            # release per-level buffers (latency list, numpy arrays,
-            # task list) before moving on so the next high-concurrency
-            # level doesn't stack its allocations on top of stale ones.
+            # release per-level buffers before the next level allocates
             del _all, _arr, _us, _tasks, _lists
             gc.collect()
     return _result
@@ -527,7 +509,7 @@ async def measure_handler_scaling(port: int,
 def _run_probes_in_dedicated_loop(**kwargs: Any) -> Dict[str, Any]:
     """*_run_probes_in_dedicated_loop()* drive `_run_async_probes` on a fresh thread with its own event loop.
 
-    Jupyter (and any ipykernel-based host) installs `SelectorEventLoop` on Windows for tornado compatibility; `select()` on Windows caps at 512 file descriptors, which breaks the high-concurrency scaling probe (c=1000+ needs thousands of sockets). A fresh thread running `ProactorEventLoop` on Windows (IOCP) has no such cap.
+    Jupyter (and any ipykernel-based host) installs `SelectorEventLoop` on Windows for tornado compatibility; `select()` on Windows caps at 512 file descriptors, which breaks the high-load scaling probe (`n_con_usr >= 1000` needs thousands of sockets). A fresh thread running `ProactorEventLoop` on Windows (IOCP) has no such cap.
 
     On non-Windows platforms this still isolates the probes from any ambient loop and behaves identically.
 
@@ -565,10 +547,7 @@ def _run_probes_in_dedicated_loop(**kwargs: Any) -> Dict[str, Any]:
     if _err is not None:
         raise _err
     _out = _result_box[0]
-    # the worker thread owned the event loop, the uvicorn server, and
-    # the httpx client; now that the thread has joined, clear the local
-    # boxes + force a GC pass so none of the sockets / coroutine state
-    # lingers once the caller returns.
+    # drop thread-owned sockets / coroutine state before returning
     _result_box.clear()
     _error_box.clear()
     gc.collect()
@@ -599,11 +578,11 @@ def _print_level_done(level: int,
           flush=True)
 
 
-def _parse_concurrency(arg: str) -> Tuple[int, ...]:
-    """*_parse_concurrency()* parse a comma-separated concurrency list.
+def _parse_n_con_usr(arg: str) -> Tuple[int, ...]:
+    """*_parse_n_con_usr()* parse a comma-separated `n_con_usr` ladder.
 
     Args:
-        arg (str): comma-separated concurrency levels, e.g. `"1,10,50,100"`.
+        arg (str): comma-separated concurrent-user load levels, e.g. `"1,10,50,100"`.
 
     Returns:
         tuple[int, ...]: parsed levels; empty fragments are dropped.
@@ -873,7 +852,7 @@ def run_rate_sweep(*,
                    verbose: bool = True) -> Dict[str, Any]:
     """*run_rate_sweep()* drive the experiment mesh at N target rates, `trials_per_rate` trials each.
 
-    Each trial is a full `experiment.run(adp=...)` call with an inline ramp config built from the arguments; the experiment's calibration gate is bypassed (`skip_calibration=True`) so the sweep never recurses through its own calibration loader. Results land under the calibration envelope's `rate_sweep` key so the run gate has both host-floor AND rate-saturation characterization in one file.
+    Each trial is a full `experiment.run(adp=...)` call with an inline ramp config built from the arguments; the experiment's calibration gate is bypassed (`skip_calibration=True`) so the sweep never recurses through its own calibration loader. Results land under the calibration envelope's `rate_sweep` key so the run gate has both host-floor AND rate-saturation characterisation in one file.
 
     When `calibrate=True`, additionally reports the highest rate whose mean loss is at or below `target_loss_pct` across all trials; use this to pick a notebook ramp rate the prototype can sustain.
 
@@ -932,8 +911,7 @@ def run_rate_sweep(*,
             _trials.append(_summary)
             if verbose:
                 _print_rate_trial_row(_i, _summary)
-            # release the experiment envelope early so the next trial
-            # does not stack its allocations on top of stale ones.
+            # drop envelope before the next trial allocates
             del _res
             gc.collect()
         _agg = _aggregate_rate_trials(_trials)
@@ -1088,7 +1066,7 @@ async def _run_async_probes(*,
                             port: int,
                             loopback_samples: int,
                             loopback_warmup: int,
-                            concurrency: Tuple[int, ...],
+                            n_con_usr: Tuple[int, ...],
                             per_worker: Optional[int],
                             samples_per_level: int,
                             ready_timeout_s: float,
@@ -1101,7 +1079,7 @@ async def _run_async_probes(*,
         port (int): port the ping server binds to.
         loopback_samples (int): request count for the loopback probe.
         loopback_warmup (int): warmup GETs discarded upfront.
-        concurrency (tuple[int, ...]): levels for the handler-scaling probe.
+        n_con_usr (tuple[int, ...]): concurrent-user load levels for the handler-scaling probe.
         per_worker (int): requests per concurrent worker.
         ready_timeout_s (float): seconds to wait for uvicorn readiness.
         on_phase_start (Optional[callable]): called with the phase name (`"loopback"` or `"handler_scaling"`) just before each phase begins, so the caller can print a progress marker at the right moment.
@@ -1128,7 +1106,7 @@ async def _run_async_probes(*,
             on_phase_start("handler_scaling")
         _result["handler_scaling"] = await measure_handler_scaling(
             port=port,
-            concurrency=concurrency,
+            n_con_usr=n_con_usr,
             warmup=loopback_warmup,
             per_worker=per_worker,
             samples_per_level=samples_per_level,
@@ -1145,7 +1123,7 @@ def run(*,
         jitter_samples: int = _DEFAULT_JITTER_SAMPLES,
         loopback_samples: int = _DEFAULT_LOOPBACK_SAMPLES,
         loopback_warmup: int = _DEFAULT_LOOPBACK_WARMUP,
-        concurrency: Tuple[int, ...] = _DEFAULT_CONCURRENCY,
+        n_con_usr: Tuple[int, ...] = _DEFAULT_N_CON_USR,
         per_worker: Optional[int] = None,
         samples_per_level: int = _DEFAULT_SAMPLES_PER_LEVEL,
         port: int = _DEFAULT_PORT,
@@ -1177,9 +1155,9 @@ def run(*,
         jitter_samples (int): 1 ms sleep cycles for the jitter probe.
         loopback_samples (int): GET /ping samples for the loopback probe.
         loopback_warmup (int): warmup GETs discarded before the loopback probe.
-        concurrency (tuple[int, ...]): levels for the handler-scaling probe.
+        n_con_usr (tuple[int, ...]): concurrent-user load levels (in-flight requests) for the handler-scaling probe.
         per_worker (Optional[int]): sequential requests per concurrent worker; when `None`, derived from `samples_per_level`.
-        samples_per_level (int): target total samples per concurrency level when `per_worker` is derived.
+        samples_per_level (int): target total samples per `n_con_usr` level when `per_worker` is derived.
         port (int): loopback ping server port.
         ready_timeout_s (float): seconds to wait for uvicorn readiness.
         skip_jitter (bool): if True, skip the jitter probe.
@@ -1207,9 +1185,9 @@ def run(*,
     _profile = snapshot_host_profile()
     _t0 = time.perf_counter()
 
-    _concurrency_list: List[int] = []
-    for _c in concurrency:
-        _concurrency_list.append(int(_c))
+    _n_con_usr_list: List[int] = []
+    for _c in n_con_usr:
+        _n_con_usr_list.append(int(_c))
 
     _now = datetime.now()
     _timestamp = _now.isoformat(timespec="seconds")
@@ -1223,7 +1201,7 @@ def run(*,
         "jitter_samples": int(jitter_samples),
         "loopback_samples": int(loopback_samples),
         "loopback_warmup": int(loopback_warmup),
-        "concurrency": _concurrency_list,
+        "n_con_usr": _n_con_usr_list,
         "per_worker": _per_worker_record,
         "samples_per_level": int(samples_per_level),
         "port": int(port),
@@ -1268,7 +1246,7 @@ def run(*,
                 port=port,
                 loopback_samples=loopback_samples,
                 loopback_warmup=loopback_warmup,
-                concurrency=concurrency,
+                n_con_usr=n_con_usr,
                 per_worker=per_worker,
                 samples_per_level=samples_per_level,
                 ready_timeout_s=ready_timeout_s,
@@ -1278,12 +1256,7 @@ def run(*,
             )
             _envelope.update(_probes)
 
-    # P0.2: optional rate-saturation probe. Each trial is a full
-    # experiment-method run, so the sweep is opt-in (default
-    # `skip_rate_sweep=True` from config) to keep the standard
-    # host-floor calibration fast. Runs OUTSIDE the Windows timer
-    # context manager on purpose -- the experiment method manages
-    # its own timer boost per-replicate.
+    # P0.2 rate-saturation probe; opt-in, runs outside the Windows timer ctx (experiment.run owns its own timer boost)
     if skip_rate_sweep:
         if verbose:
             print()
@@ -1309,6 +1282,12 @@ def run(*,
             verbose=verbose,
         )
 
+    # Route-B dimensional card from measured handler_scaling + loopback; phi stays NaN when payload_size_bytes=0
+    if ("handler_scaling" in _envelope) and ("loopback" in _envelope):
+        _dim_card = derive_calib_coefs(_envelope, payload_size_bytes=0)
+        if _dim_card:
+            _envelope["dimensional_card"] = _dim_card
+
     _t_end = time.perf_counter()
     _elapsed = _t_end - _t0
     _envelope["elapsed_s"] = round(_elapsed, 3)
@@ -1321,8 +1300,7 @@ def run(*,
         _write_json(_out, _envelope)
         _envelope["output_path"] = str(_out)
 
-    # final sweep: the probe allocations are gone but interpreter-level
-    # caches (httpx module, uvicorn server class) may still hold cycles.
+    # final GC pass; httpx/uvicorn module caches may still hold cycles
     gc.collect()
     return _envelope
 
@@ -1331,7 +1309,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     """*_build_argparser()* CLI surface."""
     _p = argparse.ArgumentParser(
         prog="calibration",
-        description=("Per-host noise-floor characterization for the "
+        description=("Per-host noise-floor characterisation for the "
                      "experiment method. Produces one JSON envelope under "
                      "data/results/experiment/calibration/. Run BEFORE "
                      "every experiment sweep."))
@@ -1351,22 +1329,23 @@ def _build_argparser() -> argparse.ArgumentParser:
                     default=_DEFAULT_LOOPBACK_WARMUP,
                     help=("warmup GETs discarded before the loopback probe "
                           f"(default: {_DEFAULT_LOOPBACK_WARMUP})"))
-    _default_conc_tokens: List[str] = []
-    for _c in _DEFAULT_CONCURRENCY:
-        _default_conc_tokens.append(str(_c))
-    _default_conc_csv = ",".join(_default_conc_tokens)
+    _default_n_con_usr_tokens: List[str] = []
+    for _c in _DEFAULT_N_CON_USR:
+        _default_n_con_usr_tokens.append(str(_c))
+    _default_n_con_usr_csv = ",".join(_default_n_con_usr_tokens)
 
-    _p.add_argument("--concurrency", type=str, default=None,
-                    help=("comma-separated concurrency levels for the "
-                          "handler-scaling probe "
-                          f"(default: {_default_conc_csv})"))
+    _p.add_argument("--n-con-usr", type=str, default=None,
+                    help=("comma-separated concurrent-user load levels "
+                          "(in-flight requests) for the handler-scaling "
+                          "probe "
+                          f"(default: {_default_n_con_usr_csv})"))
     _p.add_argument("--per-worker", type=int, default=None,
                     help=("sequential requests per concurrent worker; "
                           "when omitted, derived from --samples-per-level "
                           "so total samples per level stay bounded"))
     _p.add_argument("--samples-per-level", type=int,
                     default=_DEFAULT_SAMPLES_PER_LEVEL,
-                    help=("target total samples per concurrency level "
+                    help=("target total samples per n_con_usr level "
                           "when --per-worker is derived "
                           f"(default: {_DEFAULT_SAMPLES_PER_LEVEL})"))
     _p.add_argument("--port", type=int, default=_DEFAULT_PORT,
@@ -1427,6 +1406,369 @@ def _build_argparser() -> argparse.ArgumentParser:
     return _p
 
 
+# Route-B dimensional card; shape matches src.view.dc_charts.plot_yoly_chart
+_CALIB_DIM_TAG = "CALIB"
+
+
+def _build_calib_observables(handler_scaling: Dict[str, Dict[str, float]],
+                             loopback: Dict[str, float],
+                             *,
+                             payload_size_bytes: int,
+                             uvicorn_backlog: int,
+                             c_srv: int,
+                             ) -> Dict[str, np.ndarray]:
+    """*_build_calib_observables()* extract per-`n_con_usr` measurement arrays from a calibration envelope.
+
+    Aggregates the measured response-time medians at each `n_con_usr` level into the operational quantities the M/M/c/K Variable schema expects (lambda, mu, c, K, L, Lq, W, Wq, M_act, M_buf, d, eps, chi). Each array has one entry per level, ordered by ascending `n_con_usr`. Used to populate `Variable._data` arrays so PyDASA's MonteCarloSimulation can evaluate coefficient expressions row-wise.
+
+    Args:
+        handler_scaling (Dict[str, Dict[str, float]]): envelope's `handler_scaling` block; keys are `n_con_usr` as strings, values hold `median_us` and distribution stats.
+        loopback (Dict[str, float]): envelope's `loopback` block; `median_us` supplies the idle-service reference.
+        payload_size_bytes (int): per-request body size in bytes; populates `M_act`, `M_buf`, `d`. When 0, the memory-usage coefficient `phi` reduces to a degenerate 0/0 and is post-processed to NaN.
+        uvicorn_backlog (int): system capacity `K`.
+        c_srv (int): service-side parallel-handler count (always 1 for the calibration service).
+
+    Returns:
+        Dict[str, np.ndarray]: arrays keyed by short symbolic name (`n`, `lam`, `mu`, `eps`, `chi`, `c`, `K`, `L`, `Lq`, `W`, `Wq`, `M_act`, `M_buf`, `d`); all share length N (number of `n_con_usr` levels).
+    """
+    _r_median_us = float(loopback.get("median_us", 0.0))
+    if _r_median_us <= 0.0:
+        _mu_scalar = 0.0
+    else:
+        _mu_scalar = 1e6 / _r_median_us
+    _k_capacity = int(uvicorn_backlog)
+
+    _levels: List[int] = []
+    for _k in handler_scaling.keys():
+        _levels.append(int(_k))
+    _levels.sort()
+
+    _n_arr: List[int] = []
+    _r_arr: List[float] = []
+    for _n in _levels:
+        _stats = handler_scaling.get(str(_n), {})
+        _median_us = float(_stats.get("median_us", 0.0))
+        _n_arr.append(int(_n))
+        _r_arr.append(_median_us * 1e-6)
+
+    _n_np = np.asarray(_n_arr, dtype=float)
+    _r_np = np.asarray(_r_arr, dtype=float)
+
+    # zero-latency rows -> NaN so downstream divisions stay finite
+    _r_safe = np.where(_r_np > 0.0, _r_np, np.nan)
+    _x = _n_np / _r_safe                              # X = n / R
+    _lam = _x                                         # steady state: lambda = X
+    _l_load = _n_np                                   # Little: L = X*R = n
+    _r_service = _r_median_us * 1e-6
+    _wq = np.maximum(_r_np - _r_service, 0.0)
+
+    _eps = np.zeros_like(_n_np, dtype=float)
+    _chi = _lam * (1.0 - _eps)
+    _c_np = np.full_like(_n_np, float(c_srv))
+    _k_np = np.full_like(_n_np, float(_k_capacity))
+    _mu_np = np.full_like(_n_np, float(_mu_scalar))
+
+    # memory side; d in kB. 0 means "degenerate phi" -> NaN row downstream
+    _d_kB = float(payload_size_bytes) / 1000.0
+    _m_act = _l_load * _d_kB
+    _m_buf = _k_np * _d_kB
+
+    _out: Dict[str, np.ndarray] = {
+        "n": _n_np,
+        "lam": _lam,
+        "mu": _mu_np,
+        "chi": _chi,
+        "c": _c_np,
+        "K": _k_np,
+        "L": _l_load,
+        "W": _r_np,
+        "Wq": _wq,
+        "M_act": _m_act,
+        "M_buf": _m_buf,
+    }
+    return _out
+
+
+# Variable schema for the calibration artifact. Trimmed to what the four
+# target coefficients (theta, sigma, eta, phi) reference. Memory variables use
+# `M_{a<tag>}` / `M_{b<tag>}` (a = active, b = buffer): sympy's parse_latex
+# treats multi-character roots (e.g. `MA_{X}`) as products of single letters
+# (`M*A`), which mangles aliases; keeping a single-letter root with the tag
+# folded into the subscript avoids that. q-suffixed forms (Lq, Wq) and the
+# nested-brace M_{act_{X}} layout are excluded for the same reason: their
+# coefficient expressions break sympy's LaTeX parser when MCS lambdifies them.
+_CALIB_VAR_SPECS: Tuple[Tuple[str, str, str, str, str, str], ...] = (
+    # (short_key, latex_template, dims, units, cat, dist_type)
+    ("lam", "\\lambda_{<TAG>}", "S*T^-1", "req/s", "IN", "uniform"),
+    ("mu", "\\mu_{<TAG>}", "S*T^-1", "req/s", "CTRL", "uniform"),
+    ("chi", "\\chi_{<TAG>}", "S*T^-1", "req/s", "CTRL", "uniform"),
+    ("c", "c_{<TAG>}", "S", "req", "IN", "uniform_int"),
+    ("K", "K_{<TAG>}", "S", "req", "CTRL", "uniform_int"),
+    ("L", "L_{<TAG>}", "S", "req", "CTRL", "uniform"),
+    ("W", "W_{<TAG>}", "T", "s", "OUT", "uniform"),
+    ("M_act", "M_{a<TAG>}", "D", "kB", "CTRL", "uniform"),
+    ("M_buf", "M_{b<TAG>}", "D", "kB", "CTRL", "uniform"),
+)
+
+
+def _calib_var_sym(short: str, tag: str) -> str:
+    """*_calib_var_sym()* render a calibration-variable LaTeX symbol from its short key.
+
+    Looks the short key up in `_CALIB_VAR_SPECS` and substitutes the tag into the per-variable LaTeX template (where `<TAG>` marks the subscript slot).
+
+    Args:
+        short (str): short key (`"lam"`, `"mu"`, `"M_act"`, ...).
+        tag (str): artifact subscript tag (e.g. `"CALIB"`).
+
+    Raises:
+        KeyError: when `short` is not in `_CALIB_VAR_SPECS`.
+
+    Returns:
+        str: full LaTeX symbol (e.g. `"\\lambda_{CALIB}"`, `"M_{aCALIB}"`).
+    """
+    for _spec in _CALIB_VAR_SPECS:
+        if _spec[0] == short:
+            return _spec[1].replace("<TAG>", tag)
+    raise KeyError(f"unknown calibration variable short key: {short!r}")
+
+
+def _build_calib_vars(observables: Dict[str, np.ndarray],
+                      *,
+                      tag: str) -> Dict[str, Dict[str, Any]]:
+    """*_build_calib_vars()* construct a per-artifact PACS Variable dict for the calibration data.
+
+    Each `_CALIB_VAR_SPECS` entry yields one Variable dict shaped to match `pydasa.elements.parameter.Variable.__init__`. The measured array from `observables` populates `_data`; `_setpoint` / `_min` / `_max` / `_mean` are derived as nan-aware reductions over that array so `Variable.calculate_setpoint()` works at deterministic values.
+
+    Args:
+        observables (Dict[str, np.ndarray]): output of `_build_calib_observables`.
+        tag (str): artifact subscript tag used in the LaTeX symbols.
+
+    Returns:
+        Dict[str, Dict[str, Any]]: PACS Variable-dict for the calibration artifact, ready to feed `src.dimensional.build_engine`.
+    """
+    _vars: Dict[str, Dict[str, Any]] = {}
+    for _idx, _spec in enumerate(_CALIB_VAR_SPECS, start=1):
+        _short, _template, _dims, _units, _cat, _dist = _spec
+        _arr = observables[_short]
+
+        if _arr.size > 0:
+            _finite = _arr[np.isfinite(_arr)]
+        else:
+            _finite = _arr
+        if _finite.size > 0:
+            _mn = float(np.min(_finite))
+            _mx = float(np.max(_finite))
+            _mean = float(np.mean(_finite))
+            _setp = float(np.median(_finite))
+        else:
+            _mn = 0.0
+            _mx = 0.0
+            _mean = 0.0
+            _setp = 0.0
+
+        _sym = _calib_var_sym(_short, tag)
+        _alias = _sym.replace("\\", "").replace("{", "").replace("}", "").replace(",", "").replace(" ", "_")
+
+        if _mx > _mn:
+            _params = {"low": _mn, "high": _mx}
+        else:
+            _params = {"low": _mn, "high": _mn + 1.0}
+
+        _vars[_sym] = {
+            "_sym": _sym,
+            "_fwk": "CUSTOM",
+            "_alias": _alias,
+            "_idx": _idx,
+            "_name": f"{tag} {_short}",
+            "description": f"Calibration {_short} per n_con_usr level",
+            "_cat": _cat,
+            "relevant": True,
+            "_dims": _dims,
+            "_units": _units,
+            "_std_units": _units,
+            "_setpoint": _setp,
+            "_min": _mn,
+            "_max": _mx,
+            "_mean": _mean,
+            "_dist_type": _dist,
+            "_dist_params": _params,
+            "_depends": [],
+            "_data": [float(_v) for _v in _arr.tolist()],
+        }
+    return _vars
+
+
+def _run_calib_pipeline(vars_block: Dict[str, Dict[str, Any]],
+                        *,
+                        n_levels: int,
+                        tag: str
+                        ) -> Dict[str, np.ndarray]:
+    """*_run_calib_pipeline()* drive PyDASA Variable -> Schema -> AnalysisEngine -> Coefficient(...) -> MonteCarloSimulation(DATA) and extract per-level coefficient arrays.
+
+    The calibration `_data` arrays live on the Variables. The engine instantiates them and runs Buckingham; the four target coefficients (theta, sigma, eta, phi) are then constructed as `pydasa.Coefficient` objects directly, with `_pi_expr` written in terms of the base CALIB variables (so we are robust to Pi-group ordering shifts vs the TAS profile). `MonteCarloSimulation.run_simulation(mode='DATA')` lambdifies each coefficient expression and evaluates it row-wise across the `_data` arrays.
+
+    Args:
+        vars_block (Dict[str, Dict[str, Any]]): PACS Variable dict produced by `_build_calib_vars`.
+        n_levels (int): number of measurement rows; matches the length of every `_data` array.
+        tag (str): artifact subscript tag (`"CALIB"`).
+
+    Returns:
+        Dict[str, np.ndarray]: coefficient arrays keyed by full LaTeX symbol (`\\theta_{<tag>}`, `\\sigma_{<tag>}`, `\\eta_{<tag>}`, `\\phi_{<tag>}`); one entry per level.
+    """
+    # PyDASA stack imported lazily so calibration's import surface stays light
+    from pydasa import Coefficient, MonteCarloSimulation  # noqa: WPS433
+    from src.dimensional import build_engine, build_schema  # noqa: WPS433
+    from src.io import load_method_cfg  # noqa: WPS433
+
+    _mcfg = load_method_cfg("dimensional")
+    _sch = build_schema(_mcfg["fdus"])
+    _eng = build_engine(tag, vars_block, _sch)
+    _eng.run_analysis()
+
+    # Resolve runtime variable symbols and build target-coefficient expressions
+    # against base variables (no Pi-group indices) so the pipeline is robust
+    # against Buckingham's ordering shifts on a different variable set.
+    _lam = _calib_var_sym("lam", tag)
+    _mu = _calib_var_sym("mu", tag)
+    _chi = _calib_var_sym("chi", tag)
+    _c = _calib_var_sym("c", tag)
+    _K = _calib_var_sym("K", tag)
+    _L = _calib_var_sym("L", tag)
+    _W = _calib_var_sym("W", tag)
+    _MA = _calib_var_sym("M_act", tag)
+    _MB = _calib_var_sym("M_buf", tag)
+
+    _coef_specs = (
+        ("\\theta", "Occupancy",
+         f"\\frac{{{_L}}}{{{_K}}}",
+         (_L, _K)),
+        ("\\sigma", "Stall",
+         f"\\frac{{{_lam}*{_W}}}{{{_L}}}",
+         (_lam, _W, _L)),
+        ("\\eta", "Effective-yield",
+         f"\\frac{{{_chi}*{_K}}}{{{_c}*{_mu}}}",
+         (_chi, _K, _c, _mu)),
+        ("\\phi", "Memory-usage",
+         f"\\frac{{{_MA}}}{{{_MB}}}",
+         (_MA, _MB)),
+    )
+
+    _der: Dict[str, Any] = {}
+    for _sym_pre, _name, _expr, _refs in _coef_specs:
+        _full = f"{_sym_pre}_{{{tag}}}"
+        _coeff = Coefficient(_sym=_full,
+                             _pi_expr=_expr,
+                             _fwk="CUSTOM",
+                             _variables=dict(_eng.variables),
+                             _name=f"{tag} {_name} coefficient",
+                             description=f"{_name} ({_full})")
+        # __post_init__ resets var_dims when _dim_col is empty; populate after
+        # construction so MonteCarloSimulation accepts the coefficient.
+        _coeff.var_dims = {_v: 0 for _v in _refs}
+        _der[_full] = _coeff
+
+    _mcs = MonteCarloSimulation(
+        _variables=_eng.variables,
+        _coefficients=_der,
+        _experiments=max(int(n_levels), 1),
+        _fwk="CUSTOM",
+        _cat="DATA",
+    )
+    _mcs.create_simulations()
+    # 0/0 in the phi expression when payload_size_bytes=0 surfaces as a
+    # RuntimeWarning from the lambdified function; the resulting NaNs are
+    # forced to NaN downstream regardless, so silence the noise.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        _mcs.run_simulation(iters=max(int(n_levels), 1), mode="DATA")
+
+    _out: Dict[str, np.ndarray] = {}
+    for _sym in _der.keys():
+        _blk = _mcs._results.get(_sym, {})
+        _arr = np.asarray(_blk.get("results", []), dtype=float)
+        _out[_sym] = _arr
+    return _out
+
+
+def derive_calib_coefs(envelope: Dict[str, Any],
+                       *,
+                       payload_size_bytes: int = 0,
+                       tag: str = _CALIB_DIM_TAG) -> Dict[str, Any]:
+    """*derive_calib_coefs()* public entry point: build the dimensional card from a calibration envelope using PyDASA.
+
+    Routes the measured `handler_scaling` + `loopback` arrays through the PyDASA pipeline (Variable dicts -> Schema -> AnalysisEngine -> derive_coefs -> MonteCarloSimulation in DATA mode) so theta / sigma / eta / phi are computed by PyDASA's symbolic evaluator, not by hand-rolled arithmetic. Coefficient symbols carry the `_{<tag>}` subscript (default `_{CALIB}`).
+
+    Route B semantics: coefficients are derived from measurements, not from an M/M/c/K prediction. Applies only when both `handler_scaling` and `loopback` are present in the envelope; returns an empty dict otherwise.
+
+    Args:
+        envelope (Dict[str, Any]): calibration envelope (e.g. from `run()` or `load_latest_calibration()`).
+        payload_size_bytes (int): body size per request for the phi coefficient; 0 marks phi as NaN to flag the degenerate 0/0 memory case.
+        tag (str): LaTeX-subscript tag used in output keys. Default `CALIB`.
+
+    Returns:
+        Dict[str, Any]: coefficient arrays (JSON-serialisable `List[float]`) keyed by LaTeX-subscripted symbol (`\\theta_{<tag>}`, `\\sigma_{<tag>}`, `\\eta_{<tag>}`, `\\phi_{<tag>}`, plus the input-side `c_{<tag>}`, `\\mu_{<tag>}`, `K_{<tag>}`, `\\lambda_{<tag>}`, `n_con_usr_{<tag>}`), and a `meta` sub-dict with provenance (`tag / mu_source / mu_req_per_s / c_srv / uvicorn_backlog / payload_size_bytes / n_con_usr / pipeline`). Empty dict when `handler_scaling` or `loopback` is missing.
+    """
+    _handler = envelope.get("handler_scaling")
+    _loop = envelope.get("loopback")
+    if not isinstance(_handler, dict) or not isinstance(_loop, dict):
+        return {}
+
+    _args_block = envelope.get("args") or {}
+    _backlog = int(_args_block.get("uvicorn_backlog",
+                                   _DEFAULT_UVICORN_BACKLOG))
+
+    _obs = _build_calib_observables(
+        handler_scaling=_handler,
+        loopback=_loop,
+        payload_size_bytes=payload_size_bytes,
+        uvicorn_backlog=_backlog,
+        c_srv=1,
+    )
+    _n_levels = int(_obs["n"].size)
+
+    if _n_levels == 0:
+        return {}
+
+    _vars_block = _build_calib_vars(_obs, tag=tag)
+    _coef_arrays = _run_calib_pipeline(_vars_block, n_levels=_n_levels, tag=tag)
+
+    # phi is degenerate (0/0) when no payload was supplied; force NaN so the dashboard skips the panel
+    _phi_key = f"\\phi_{{{tag}}}"
+    if int(payload_size_bytes) <= 0 and _phi_key in _coef_arrays:
+        _coef_arrays[_phi_key] = np.full(_n_levels, np.nan, dtype=float)
+
+    # carry the input-side context arrays alongside the coefficients so plot_yoly_chart panel labels stay honest
+    _context = {
+        f"c_{{{tag}}}": _obs["c"],
+        f"\\mu_{{{tag}}}": _obs["mu"],
+        f"K_{{{tag}}}": _obs["K"],
+        f"\\lambda_{{{tag}}}": _obs["lam"],
+        f"n_con_usr_{{{tag}}}": _obs["n"],
+    }
+
+    _coefs: Dict[str, Any] = {}
+    for _k, _v in _coef_arrays.items():
+        _coefs[_k] = [float(_x) for _x in np.asarray(_v, dtype=float).tolist()]
+    for _k, _v in _context.items():
+        _coefs[_k] = [float(_x) for _x in np.asarray(_v, dtype=float).tolist()]
+
+    if _obs["mu"].size > 0:
+        _mu_val = float(_obs["mu"][0])
+    else:
+        _mu_val = 0.0
+    _meta = {
+        "tag": str(tag),
+        "mu_source": "loopback.median_us",
+        "mu_req_per_s": _mu_val,
+        "c_srv": 1,
+        "uvicorn_backlog": _backlog,
+        "payload_size_bytes": int(payload_size_bytes),
+        "n_con_usr": [int(_n) for _n in _obs["n"].tolist()],
+        "pipeline": "pydasa.MonteCarloSimulation(mode=DATA)",
+    }
+    _coefs["meta"] = _meta
+    return _coefs
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     """*main()* CLI entry point; parses `argv` and delegates to `run()`.
 
@@ -1435,10 +1777,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     """
     _parser = _build_argparser()
     _args = _parser.parse_args(argv)
-    if _args.concurrency is not None:
-        _concurrency = _parse_concurrency(_args.concurrency)
+    if _args.n_con_usr is not None:
+        _n_con_usr = _parse_n_con_usr(_args.n_con_usr)
     else:
-        _concurrency = _DEFAULT_CONCURRENCY
+        _n_con_usr = _DEFAULT_N_CON_USR
     if _args.rate_sweep_rates is not None:
         _rate_sweep_rates = _parse_rates(_args.rate_sweep_rates)
     else:
@@ -1450,7 +1792,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     print(f"  timer_samples={_args.timer_samples}  "
           f"jitter_samples={_args.jitter_samples}  "
           f"loopback_samples={_args.loopback_samples}  "
-          f"concurrency={_concurrency}")
+          f"n_con_usr={_n_con_usr}")
     if _args.rate_sweep:
         print(f"  rate_sweep=ON  rates={list(_rate_sweep_rates)}  "
               f"trials={_args.rate_sweep_trials}  "
@@ -1465,7 +1807,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         jitter_samples=_args.jitter_samples,
         loopback_samples=_args.loopback_samples,
         loopback_warmup=_args.loopback_warmup,
-        concurrency=_concurrency,
+        n_con_usr=_n_con_usr,
         per_worker=_args.per_worker,
         samples_per_level=_args.samples_per_level,
         port=_args.port,

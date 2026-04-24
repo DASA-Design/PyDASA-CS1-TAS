@@ -3,7 +3,7 @@
 Module io/tooling.py
 ====================
 
-Loader + small derivation helpers for the per-host noise-floor calibration JSON produced by `src.scripts.calibration.run`.
+Loader + small derivation helpers for the per-host noise-floor calibration JSON produced by `src.methods.calibration.run`.
 
 Every `experiment` run is gated on having a recent calibration for the current host so measured latencies can be reported as `value - loopback_median +/- jitter_p99`. This module owns the filesystem lookup, timestamp parsing, and the two numeric accessors the reporting path needs.
 
@@ -13,6 +13,7 @@ Public API:
     - `calibration_floor_us(envelope)` -> loopback median in microseconds.
     - `calibration_band_us(envelope)` -> jitter p99 in microseconds.
     - `calibration_age_hours(envelope)` -> hours since the envelope was written.
+    - `load_dim_card(host, payload_size_bytes)` -> dimensional card dict for the latest envelope (lazy-derived if absent on disk), or None.
 """
 # native python modules
 from __future__ import annotations
@@ -44,8 +45,7 @@ def find_latest_calibration(host: Optional[str] = None) -> Optional[Path]:
         _host = socket.gethostname()
     else:
         _host = str(host)
-    # hostname is normalised the same way `src.scripts.calibration`
-    # builds its output path, so the match stays symmetric.
+    # normalise hostname to match the path `src.methods.calibration.run` writes
     _host_norm = _host.replace(" ", "-")
     _prefix = f"{_host_norm}_"
     _candidates: List[Path] = []
@@ -161,6 +161,37 @@ def rate_sweep_loss_at(envelope: Dict[str, Any],
         return None
     _loss = _agg.get("mean_loss_pct", 0.0)
     return float(_loss)
+
+
+def load_dim_card(host: Optional[str] = None,
+                  *,
+                  payload_size_bytes: int = 0) -> Optional[Dict[str, Any]]:
+    """*load_dim_card()* fetch the Route-B dimensional card from the latest calibration envelope for `host`.
+
+    When the envelope on disk already carries a `dimensional_card` block (the default once `src.methods.calibration.run` has been re-baked), it is returned verbatim. Otherwise the card is derived on the fly via `src.methods.calibration.derive_calib_coefs(envelope, payload_size_bytes)` so older envelopes without the block stay usable.
+
+    Args:
+        host (Optional[str]): hostname prefix; defaults to `socket.gethostname()`.
+        payload_size_bytes (int): per-request body size for the phi coefficient when the card has to be derived; ignored when a pre-baked block is on disk.
+
+    Returns:
+        Optional[Dict[str, Any]]: dim-card dict (LaTeX-subscripted coefficient arrays + `meta` provenance), or `None` when no calibration exists for the host or when neither a pre-baked block nor the source blocks (`handler_scaling` + `loopback`) are present.
+    """
+    _envelope = load_latest_calibration(host=host)
+    if _envelope is None:
+        return None
+
+    _card = _envelope.get("dimensional_card")
+    if isinstance(_card, dict) and _card:
+        return _card
+
+    # lazy import so this module's import surface stays light (calibration drags in fastapi/uvicorn/httpx)
+    from src.methods.calibration import derive_calib_coefs
+
+    _derived = derive_calib_coefs(_envelope, payload_size_bytes=payload_size_bytes)
+    if not _derived:
+        return None
+    return _derived
 
 
 def calibration_age_hours(envelope: Dict[str, Any]) -> float:

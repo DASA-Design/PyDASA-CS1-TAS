@@ -164,3 +164,44 @@ class TestRateSweepAccessors:
         # block absent -> None without raising
         assert cal.rate_sweep_loss_at({}, 100.0) is None
         assert cal.rate_sweep_loss_at({"rate_sweep": {}}, 100.0) is None
+
+
+class TestLoadDimCard:
+    """**TestLoadDimCard** contract for the dim-card loader: returns pre-baked block when present, else lazy-derives via `derive_calib_coefs`."""
+
+    def test_returns_none_when_no_envelope(self,
+                                           _isolated_calib_dir: Path) -> None:
+        """*test_returns_none_when_no_envelope()* host has no calibration on disk -> None."""
+        assert cal.load_dim_card() is None
+
+    def test_returns_prebaked_block_verbatim(self,
+                                             _isolated_calib_dir: Path) -> None:
+        """*test_returns_prebaked_block_verbatim()* envelope already has `dimensional_card` -> return it without redoing the derivation."""
+        _env = _make_envelope()
+        _env["dimensional_card"] = {"\\theta_{CALIB}": [1.0, 2.0],
+                                    "meta": {"tag": "CALIB", "marker": "prebaked"}}
+        _path = _isolated_calib_dir / f"{socket.gethostname()}_20260424_010101.json"
+        with _path.open("w", encoding="utf-8") as _fh:
+            json.dump(_env, _fh)
+
+        _card = cal.load_dim_card()
+        assert _card is not None
+        assert _card["meta"]["marker"] == "prebaked"
+
+    def test_lazy_derives_when_block_missing(self,
+                                             _isolated_calib_dir: Path) -> None:
+        """*test_lazy_derives_when_block_missing()* envelope without `dimensional_card` but with `handler_scaling` + `loopback` -> the loader derives it via `src.methods.calibration.derive_calib_coefs`."""
+        _env = _make_envelope(loopback_median_us=1000.0)
+        _env["handler_scaling"] = {
+            "1": {"median_us": 1500.0},
+            "10": {"median_us": 6000.0},
+        }
+        _env["args"] = {"uvicorn_backlog": 16384}
+        _path = _isolated_calib_dir / f"{socket.gethostname()}_20260424_020202.json"
+        with _path.open("w", encoding="utf-8") as _fh:
+            json.dump(_env, _fh)
+
+        _card = cal.load_dim_card()
+        assert _card is not None
+        assert "\\theta_{CALIB}" in _card
+        assert _card["meta"]["pipeline"].lower().startswith("pydasa")

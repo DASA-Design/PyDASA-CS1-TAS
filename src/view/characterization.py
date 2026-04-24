@@ -3,11 +3,11 @@
 Module view/characterization.py
 ===============================
 
-Visualisation for the per-host noise-floor calibration envelope produced by `src.scripts.calibration.run` (the JSON under `data/results/experiment/calibration/`).
+Visualisation for the per-host noise-floor calibration envelope produced by `src.methods.calibration.run` (the JSON under `data/results/experiment/calibration/`).
 
 Two plotters. Required inputs are positional, everything else keyword-only after `*,`; both return the `matplotlib.figure.Figure` and persist to disk when both `file_path` and `fname` are supplied.
 
-    - `plot_calib_scaling(handler)` standalone line plot of the empty-handler latency at increasing concurrency levels; the single figure that makes the FastAPI / event-loop saturation story legible.
+    - `plot_calib_scaling(handler)` standalone line plot of the empty-handler latency at increasing concurrent-user load levels (`n_con_usr`); the single figure that makes the FastAPI / event-loop saturation story legible.
     - `plot_calib_dashboard(envelope)` 2x2 summary card combining the timer / jitter / loopback headline bars with the handler-scaling line chart; self-contained figure suitable for inclusion in a report appendix.
 
 Shared text colour, save helper, and palette constants come from the existing view-package helpers so every plotter renders consistently (near-black `#010101` text, PNG + SVG saved in one call).
@@ -30,9 +30,7 @@ from src.view.qn_diagram import (
 )
 
 
-# full-name glossary for acronym-heavy axis labels and legend entries;
-# every plot in this module uses these strings so the meaning of
-# `mean`, `p50`, `p99`, `max`, `std` is explicit on the figure itself.
+# glossary expansions for the acronym stats; every plotter uses these so figures are self-explanatory
 _STAT_NAMES = {
     "min": "Minimum",
     "mean": "Mean",
@@ -44,16 +42,12 @@ _STAT_NAMES = {
     "std": "Standard deviation",
 }
 
-# Neutral ordinal palette. Calibration stats are percentiles (ordered by
-# rank), not signed deltas, so a single neutral blue is used for all bar
-# panels and a sequential Blues gradient encodes rank on the percentile
-# lines (light = low percentile, dark = high percentile).
-_NEUTRAL_BAR = "#5B8DC9"
-_PCTL_GRADIENT = (cm.Blues(0.45), cm.Blues(0.70), cm.Blues(0.92))
+# neutral ordinal palette; percentile rank, not signed delta, so sequential-not-diverging
+_NEUTRAL_BAR = "#7E5BC9"
+_PCTL_GRADIENT = (cm.Purples(0.45), cm.Purples(0.70), cm.Purples(0.92))
 
 
-# rcParams: near-black text on a white background so SVG output survives
-# dark-theme previews.
+# near-black text on white so SVG survives dark-theme previews
 plt.rcParams.update({
     "figure.facecolor": "white",
     "axes.facecolor": "white",
@@ -83,14 +77,15 @@ _SUPTITLE_STYLE = dict(fontsize=15, fontweight="bold", color=_TEXT_BLACK)
 # ---------------------------------------------------------------------------
 
 
-def _sort_concurrency_items(handler: Dict[str, Dict[str, float]]):
-    """*_sort_concurrency_items()* iterate `(int(level), stats)` pairs sorted by concurrency level.
+def _sort_n_con_usr_items(handler: Dict[str, Dict[str, float]]
+                          ) -> List[tuple]:
+    """*_sort_n_con_usr_items()* iterate `(int(n_con_usr), stats)` pairs sorted by concurrent-user load.
 
     Args:
         handler (dict): the `handler_scaling` block of a calibration envelope.
 
     Returns:
-        list[tuple[int, dict]]: `[(c_int, stats_dict), ...]` sorted ascending by `c_int`.
+        list[tuple[int, dict]]: `[(n_con_usr, stats_dict), ...]` sorted ascending by `n_con_usr`.
     """
     _pairs = []
     for _k, _stats in handler.items():
@@ -131,9 +126,7 @@ def _draw_stat_bars(ax: plt.Axes,
             _v = float("nan")
         _vals.append(_v)
 
-    # single neutral blue for every bar; these stats are ordered
-    # percentiles, not signed deltas, so a sign-coded palette does not
-    # apply.
+    # single neutral fill; ordered percentiles don't carry a sign
     ax.barh(_ys, _vals, color=_NEUTRAL_BAR,
             edgecolor=_TEXT_BLACK, linewidth=0.6)
     ax.set_yticks(_ys)
@@ -143,8 +136,7 @@ def _draw_stat_bars(ax: plt.Axes,
     ax.set_title(title, **_TITLE_STYLE)
     ax.grid(True, axis="x", linestyle="--", alpha=0.5, color="#555555")
 
-    # annotate each bar with its value; placed at 1 % of axis width inside
-    # the bar so dark bars still show the annotation clearly.
+    # annotate each bar; offset inside so the label stays legible on dark bars
     for _y, _v in zip(_ys, _vals):
         if not np.isfinite(_v):
             continue
@@ -156,21 +148,20 @@ def _draw_scaling_axis(ax: plt.Axes,
                        handler: Dict[str, Dict[str, float]],
                        *,
                        log_y: bool = True) -> None:
-    """*_draw_scaling_axis()* plot median / p95 / p99 latency vs concurrency on one axis.
+    """*_draw_scaling_axis()* plot median / p95 / p99 latency vs `n_con_usr` on one axis.
 
     Args:
         ax: matplotlib axis to draw into.
         handler (dict): `handler_scaling` block from the calibration envelope.
         log_y (bool): log-scale y-axis; recommended because latencies span several decades.
     """
-    _pairs = _sort_concurrency_items(handler)
+    _pairs = _sort_n_con_usr_items(handler)
     _xs = [_c for _c, _ in _pairs]
     _median = [float(_s.get("median_us", np.nan)) for _, _s in _pairs]
     _p95 = [float(_s.get("p95_us", np.nan)) for _, _s in _pairs]
     _p99 = [float(_s.get("p99_us", np.nan)) for _, _s in _pairs]
 
-    # sequential Blues gradient: light = low percentile (p50), dark =
-    # high percentile (p99). Encodes rank without implying sign.
+    # sequential gradient: light = p50, dark = p99 (rank without sign)
     _c_median, _c_p95, _c_p99 = _PCTL_GRADIENT
     ax.plot(_xs, _median, marker="o", linewidth=2.0, color=_c_median,
             label=_STAT_NAMES["median"])
@@ -179,7 +170,8 @@ def _draw_scaling_axis(ax: plt.Axes,
     ax.plot(_xs, _p99, marker="^", linewidth=2.0, color=_c_p99,
             label=_STAT_NAMES["p99"])
 
-    ax.set_xlabel("Concurrency (in-flight requests)", **_LBL_STYLE)
+    ax.set_xlabel("n_con_usr (concurrent users, in-flight requests)",
+                  **_LBL_STYLE)
     ax.set_ylabel("Latency [microseconds]", **_LBL_STYLE)
     ax.set_xscale("log")
     if log_y:
@@ -187,8 +179,7 @@ def _draw_scaling_axis(ax: plt.Axes,
     ax.grid(True, which="both", linestyle="--", alpha=0.5, color="#555555")
     ax.legend(loc="upper left", framealpha=0.9)
 
-    # annotate every point with its median value so the magnitude reads
-    # without having to map back to the log-scale axis.
+    # annotate each point so the magnitude is readable off the log-scale axis
     for _x, _m in zip(_xs, _median):
         if not np.isfinite(_m):
             continue
@@ -304,9 +295,9 @@ def plot_calib_scaling(handler: Dict[str, Dict[str, float]],
                        file_path: Optional[str] = None,
                        fname: Optional[str] = None,
                        verbose: bool = False) -> Figure:
-    """*plot_calib_scaling()* standalone line plot of empty-handler latency vs concurrency.
+    """*plot_calib_scaling()* standalone line plot of empty-handler latency vs `n_con_usr`.
 
-    Three lines per figure: Median (50th percentile), 95th percentile, 99th percentile. x-axis is the concurrency level (in-flight requests); y-axis is latency in microseconds on a log scale (latencies span several decades between c=1 and c=100). Each median point is annotated with its numeric value. This is the single-figure summary that makes the FastAPI / event-loop queueing saturation visible at a glance.
+    Three lines per figure: Median (50th percentile), 95th percentile, 99th percentile. x-axis is the `n_con_usr` level (concurrent users / in-flight requests against a single-worker `c_srv=1` service); y-axis is latency in microseconds on a log scale (latencies span several decades between `n_con_usr=1` and `n_con_usr=10000`). Each median point is annotated with its numeric value. This is the single-figure summary that makes the FastAPI / event-loop queueing saturation visible at a glance.
 
     Args:
         handler (dict): `handler_scaling` block from the calibration envelope; shape `{"<c>": {"median_us": ..., "p95_us": ..., "p99_us": ..., ...}, ...}`.
@@ -409,8 +400,7 @@ def plot_calib_dashboard(envelope: Dict[str, Any],
                          ha="center", va="center", fontsize=14,
                          color=_TEXT_BLACK)
 
-    # suptitle: host identity + timestamp + how to apply the baseline.
-    # This is what turns the figure into a self-contained artefact.
+    # suptitle carries host + timestamp + apply-formula so the figure stands alone
     _hp = envelope.get("host_profile", {})
     _host = _hp.get("hostname", "unknown")
     _ts = envelope.get("timestamp", "")

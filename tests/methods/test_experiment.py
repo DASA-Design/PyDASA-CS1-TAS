@@ -22,9 +22,7 @@ import pytest
 from src.methods.experiment import run as run_experiment
 
 
-# abbreviated config for tests: one low rate, cascade disabled by a loose
-# threshold so a noisy probe does not trip it. Must still respect the
-# client-side CLT floor (min_samples_per_kind >= 32).
+# abbreviated test config: one low rate, loose cascade, CLT floor min_samples_per_kind>=32
 _QUICK_CFG = {
     "base_port": 18000,
     "host": "127.0.0.1",
@@ -86,7 +84,9 @@ class TestExperimentEndToEnd:
     @pytest.fixture(params=["baseline", "s1"])
     def _result(self, request, _result_baseline, _result_s1):
         """*_result()* parametrised indirection so each test body stays fixture-free; returns the right per-adaptation result."""
-        return _result_baseline if request.param == "baseline" else _result_s1
+        if request.param == "baseline":
+            return _result_baseline
+        return _result_s1
 
     def test_runs_and_produces_thirteen_nodes(self, _result):
         """*test_runs_and_produces_thirteen_nodes()* every adaptation returns a 13-node frame."""
@@ -288,7 +288,7 @@ class TestCalibrationGate:
     def test_missing_calibration_raises_runtime_error(self,
                                                       tmp_path,
                                                       monkeypatch):
-        """*test_missing_calibration_raises_runtime_error()* pointing the loader at an empty directory and calling `run()` without the skip flag raises `RuntimeError` with a clear pointer to `src/scripts/calibration.py`."""
+        """*test_missing_calibration_raises_runtime_error()* pointing the loader at an empty directory and calling `run()` without the skip flag raises `RuntimeError` with a clear pointer to `src/methods/calibration.py`."""
         from src.io import tooling as _cal
         monkeypatch.setattr(_cal, "_CALIB_DIR", tmp_path / "calibration")
         with pytest.raises(RuntimeError,
