@@ -54,6 +54,33 @@ jupyter lab
 
 Full setup and the 20-run matrix in [notes/quickstart.md](notes/quickstart.md).
 
+## Calibration (experiment method)
+
+Before every `experiment` run, characterise the host noise floor:
+
+```bash
+python src/scripts/calibration.py
+```
+
+Output lands at `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`. The envelope has four blocks — read them as follows.
+
+| Block | What it measures | Read it as |
+|---|---|---|
+| `timer` | Back-to-back `perf_counter_ns` reads | `min_ns` is the finest tick the host can resolve. On Windows you want `< 1000 ns` after `timeBeginPeriod(1)`; `15600 ns` means the timer fix did not take. |
+| `jitter` | Accuracy of `time.sleep(0.001)` | `p99_us` is the worst-case OS preemption. Any inter-arrival coarser than `p99_us` can be resolved cleanly; finer cannot. At 400 req/s inter-arrival is 2500 μs — `p99_us` should stay well below that. |
+| `loopback` | RTT of `GET /ping` with zero service logic | `median_us` is the irreducible floor on this host. Any experiment latency measured below this value is an instrument error, not a real service. |
+| `handler_scaling` | Loopback at concurrency 1 / 10 / 50 / 100 | Median / p99 at each level. Growing gap between c=1 and c=10 tells you how much the FastAPI event loop queues when in-flight requests stack up — often the real cause of degradation at high rates. |
+
+Apply the baseline to every measured experiment latency:
+
+```
+reported = measured_us − loopback.median_us  ± jitter.p99_us
+```
+
+Subtract the loopback median (host overhead), report the jitter p99 as the uncertainty band. This is what turns a raw timing into a defensible number.
+
+Full plan, per-host checkpoints, and the four reference recipes live in [notes/calibration.md](notes/calibration.md).
+
 ## Repository layout
 
 ```
