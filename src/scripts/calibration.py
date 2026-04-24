@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # scientific stack
-import nest_asyncio
+import gc
 import numpy as np
 
 # bring the repo root onto sys.path so ad-hoc script runs import cleanly
@@ -63,23 +63,48 @@ import httpx  # noqa: E402
 import uvicorn  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 
-
-# allow `asyncio.run` inside an already-running event loop (e.g. a Jupyter
-# kernel); no-op outside one.
-nest_asyncio.apply()
-
-
 _CALIB_DIR = _ROOT / "data" / "results" / "experiment" / "calibration"
 
-_DEFAULT_TIMER_SAMPLES = 100_000
-_DEFAULT_JITTER_SAMPLES = 5_000
-_DEFAULT_LOOPBACK_SAMPLES = 5_000
-_DEFAULT_LOOPBACK_WARMUP = 500
-_DEFAULT_CONCURRENCY = (1, 10, 50, 100)
-_DEFAULT_PORT = 8765
 
-# sleep() target for the jitter probe.
-_JITTER_TARGET_NS = 1_000_000  # 1 ms
+# All tunables live in `data/config/method/calibration.json`; this module
+# reads them once at import so every entry point (CLI, `run()`, notebook)
+# sees the same defaults. Fallbacks are preserved here only for the case
+# where the config file is missing or unreadable.
+def _load_cfg() -> Dict[str, Any]:
+    """*_load_cfg()* read calibration defaults from the method-config JSON.
+
+    Returns:
+        dict: the parsed JSON contents, or an empty dict when the file is absent.
+    """
+    try:
+        from src.io.config import load_method_cfg
+        return load_method_cfg("calibration")
+    except (FileNotFoundError, ImportError):
+        return {}
+
+
+_CALIB_CFG: Dict[str, Any] = _load_cfg()
+
+_DEFAULT_TIMER_SAMPLES = int(_CALIB_CFG.get("timer_samples", 0))
+_DEFAULT_JITTER_SAMPLES = int(_CALIB_CFG.get("jitter_samples", 0))
+_DEFAULT_LOOPBACK_SAMPLES = int(_CALIB_CFG.get("loopback_samples", 0))
+_DEFAULT_LOOPBACK_WARMUP = int(_CALIB_CFG.get("loopback_warmup", 0))
+_DEFAULT_CONCURRENCY = tuple(_CALIB_CFG.get("concurrency", ()))
+# Target sample count per concurrency level. `per_worker` is derived as
+# `max(1, samples_per_level // concurrency)` unless the caller overrides
+# it, and the aggregated latencies are trimmed to `samples_per_level` so
+# every level reports the same number of observations.
+_DEFAULT_SAMPLES_PER_LEVEL = int(_CALIB_CFG.get("samples_per_level", 0))
+_DEFAULT_PORT = int(_CALIB_CFG.get("port", 8765))
+_DEFAULT_READY_TIMEOUT_S = float(_CALIB_CFG.get("ready_timeout_s", 5.0))
+_DEFAULT_UVICORN_BACKLOG = int(_CALIB_CFG.get("uvicorn_backlog", 16384))
+_DEFAULT_HTTPX_TIMEOUT_S = float(_CALIB_CFG.get("httpx_timeout_s", 0))
+_DEFAULT_SKIP_JITTER = bool(_CALIB_CFG.get("skip_jitter", False))
+_DEFAULT_SKIP_LOOPBACK = bool(_CALIB_CFG.get("skip_loopback", False))
+
+# sleep() target for the jitter probe, in nanoseconds. Read directly
+# from the config in the same unit (ns) used internally by the hot path.
+_JITTER_TARGET_NS = int(_CALIB_CFG.get("jitter_target_ns", 1_000_000))
 
 
 def _banner(msg: str) -> None:
@@ -264,13 +289,17 @@ class _UvicornThread(threading.Thread):
         _port: TCP port the server is bound to.
     """
 
-    def __init__(self, app: FastAPI, port: int) -> None:
+    def __init__(self, app: FastAPI, port: int,
+                 backlog: int = _DEFAULT_UVICORN_BACKLOG) -> None:
         super().__init__(daemon=True)
+        # large accept backlog so the high-concurrency levels (c=5000,
+        # c=10000) don't get refused at the kernel socket queue.
         _config = uvicorn.Config(app,
                                  host="127.0.0.1",
                                  port=int(port),
                                  log_level="error",
-                                 access_log=False)
+                                 access_log=False,
+                                 backlog=int(backlog))
         self._server = uvicorn.Server(_config)
         self._port = int(port)
 
@@ -321,7 +350,10 @@ async def measure_loopback(port: int,
     _url = "/ping"
     _base = f"http://127.0.0.1:{port}"
     _rtts: List[int] = []
-    async with httpx.AsyncClient(base_url=_base) as _client:
+    # loopback is serial so 1 keep-alive connection is enough; explicit
+    # Limits still documents intent and avoids accidental pool caps.
+    _limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    async with httpx.AsyncClient(base_url=_base, limits=_limits) as _client:
         for _ in range(int(warmup)):
             await _client.get(_url)
         for _ in range(int(samples)):
@@ -362,20 +394,24 @@ async def _run_concurrent_worker(client: httpx.AsyncClient,
 
 async def measure_handler_scaling(port: int,
                                   concurrency: Tuple[int, ...],
-                                  per_worker: int,
                                   warmup: int,
+                                  per_worker: Optional[int] = None,
+                                  samples_per_level: int = _DEFAULT_SAMPLES_PER_LEVEL,
                                   on_level_start: Optional[Any] = None,
                                   on_level_done: Optional[Any] = None) -> Dict[str, Dict[str, float]]:
     """*measure_handler_scaling()* loopback latency at increasing concurrency levels.
 
-    For each level `c`, launches `c` concurrent workers each doing `per_worker` requests. Reports the aggregate latency distribution. Quantifies how much the FastAPI / event-loop stack's response time increases as in-flight requests stack up on the empty handler.
+    For each level `c`, launches `c` concurrent workers each doing a derived number of sequential requests, aggregates the latency distribution. Quantifies how the FastAPI / event-loop stack's response time grows as in-flight requests stack up on the empty handler.
+
+    When `per_worker` is not supplied, each level targets `samples_per_level` total samples and sets `per_worker = max(1, samples_per_level // c)`. This keeps per-level wall time bounded even at c = 10 000, where a naive fixed `per_worker=200` would issue 2 million requests for one level.
 
     Args:
         port (int): port the ping server is listening on.
         concurrency (tuple[int, ...]): levels to test (e.g. 1, 10, 50, 100).
-        per_worker (int): requests per concurrent worker.
         warmup (int): discard-this-many requests (total, not per-worker) upfront.
-        on_level_start (Optional[callable]): invoked with `(level, total_samples)` before each level starts. Lets the caller print progress without this function doing its own I/O.
+        per_worker (Optional[int]): sequential requests per concurrent worker. When `None`, derived from `samples_per_level`.
+        samples_per_level (int): target total samples per level when `per_worker` is derived; ignored when `per_worker` is given explicitly.
+        on_level_start (Optional[callable]): invoked with `(level, total_samples)` before each level starts.
         on_level_done (Optional[callable]): invoked with `(level, stats_dict, elapsed_s)` after each level finishes.
 
     Returns:
@@ -384,23 +420,54 @@ async def measure_handler_scaling(port: int,
     _url = "/ping"
     _base = f"http://127.0.0.1:{port}"
     _result: Dict[str, Dict[str, float]] = {}
-    async with httpx.AsyncClient(base_url=_base) as _client:
+    # raise httpx's connection pool cap (default 100) so the real
+    # concurrency matches the requested level; uvicorn answers over a
+    # single /ping route so keep-alive reuse is fine.
+    _max_c = 1
+    for _c_peek in concurrency:
+        if int(_c_peek) > _max_c:
+            _max_c = int(_c_peek)
+    _limits = httpx.Limits(max_connections=_max_c,
+                           max_keepalive_connections=_max_c)
+    # long connect + read timeouts because at c=5000-10000 the kernel
+    # connect queue drains slowly and per-request latency can be in the
+    # seconds; the default 5 s timeout trips before the measurement runs.
+    _timeout = httpx.Timeout(_DEFAULT_HTTPX_TIMEOUT_S)
+    async with httpx.AsyncClient(base_url=_base,
+                                 limits=_limits,
+                                 timeout=_timeout) as _client:
         for _ in range(int(warmup)):
             await _client.get(_url)
         for _c in concurrency:
             _count = int(_c)
-            _total = _count * int(per_worker)
+            if per_worker is not None:
+                _reqs = int(per_worker)
+            else:
+                _reqs = max(1, int(samples_per_level) // _count)
+            _total = _count * _reqs
             if on_level_start is not None:
                 on_level_start(_count, _total)
             _t0 = time.perf_counter()
             _tasks: List[Any] = []
             for _ in range(_count):
-                _tasks.append(_run_concurrent_worker(_client, _url, per_worker))
+                _tasks.append(_run_concurrent_worker(_client, _url, _reqs))
             _lists = await asyncio.gather(*_tasks)
             _all: List[int] = []
             for _lst in _lists:
                 _all.extend(_lst)
             _arr = np.asarray(_all, dtype=np.int64)
+            # Uniform sample size per level so statistics are comparable.
+            # At high concurrency the per_worker=1 floor forces total to
+            # equal the concurrency level (e.g. c=10000 -> 10000 samples);
+            # trim to samples_per_level after gathering so every level
+            # contributes the same number of observations while still
+            # exercising the requested concurrency in flight. Only trims
+            # when per_worker was auto-derived; explicit per_worker keeps
+            # the full count.
+            if per_worker is None:
+                _cap = int(samples_per_level)
+                if _arr.size > _cap:
+                    _arr = _arr[:_cap]
             _us = _arr / 1000.0
             _min = float(_us.min())
             _median = float(np.median(_us))
@@ -421,7 +488,87 @@ async def measure_handler_scaling(port: int,
             if on_level_done is not None:
                 _elapsed = time.perf_counter() - _t0
                 on_level_done(_count, _stats, _elapsed)
+            # release per-level buffers (latency list, numpy arrays,
+            # task list) before moving on so the next high-concurrency
+            # level doesn't stack its allocations on top of stale ones.
+            del _all, _arr, _us, _tasks, _lists
+            gc.collect()
     return _result
+
+
+def _run_probes_in_dedicated_loop(**kwargs: Any) -> Dict[str, Any]:
+    """*_run_probes_in_dedicated_loop()* drive `_run_async_probes` on a fresh thread with its own event loop.
+
+    Jupyter (and any ipykernel-based host) installs `SelectorEventLoop` on Windows for tornado compatibility; `select()` on Windows caps at 512 file descriptors, which breaks the high-concurrency scaling probe (c=1000+ needs thousands of sockets). A fresh thread running `ProactorEventLoop` on Windows (IOCP) has no such cap.
+
+    On non-Windows platforms this still isolates the probes from any ambient loop and behaves identically.
+
+    Args:
+        **kwargs: forwarded verbatim to `_run_async_probes`.
+
+    Returns:
+        dict: the probes' result envelope.
+
+    Raises:
+        Exception: re-raises any exception that fired inside the worker thread.
+    """
+    _result_box: List[Any] = [None]
+    _error_box: List[Optional[BaseException]] = [None]
+
+    def _worker() -> None:
+        try:
+            if sys.platform == "win32":
+                _loop = asyncio.ProactorEventLoop()
+            else:
+                _loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(_loop)
+                _result_box[0] = _loop.run_until_complete(
+                    _run_async_probes(**kwargs))
+            finally:
+                _loop.close()
+        except BaseException as _exc:
+            _error_box[0] = _exc
+
+    _t = threading.Thread(target=_worker, daemon=False)
+    _t.start()
+    _t.join()
+    _err = _error_box[0]
+    if _err is not None:
+        raise _err
+    _out = _result_box[0]
+    # the worker thread owned the event loop, the uvicorn server, and
+    # the httpx client; now that the thread has joined, clear the local
+    # boxes + force a GC pass so none of the sockets / coroutine state
+    # lingers once the caller returns.
+    _result_box.clear()
+    _error_box.clear()
+    gc.collect()
+    return _out
+
+
+def _print_phase_marker(name: str) -> None:
+    """*_print_phase_marker()* emit the `[3/4]` / `[4/4]` line when a phase begins."""
+    if name == "loopback":
+        print("  [3/4] loopback latency ...", flush=True)
+    elif name == "handler_scaling":
+        print("  [4/4] empty-handler scaling ...", flush=True)
+
+
+def _print_level_start(level: int, total: int) -> None:
+    """*_print_level_start()* emit the one-line "running N requests" marker at a scaling level."""
+    print(f"      c={level:>6}  running {total} requests ...", flush=True)
+
+
+def _print_level_done(level: int,
+                      stats: Dict[str, float],
+                      elapsed: float) -> None:
+    """*_print_level_done()* emit the one-line "done in Xs" marker with the level's headline stats."""
+    _med = stats.get("median_us", 0.0)
+    _p99 = stats.get("p99_us", 0.0)
+    print(f"      c={level:>6}  done in {elapsed:.1f}s  "
+          f"median={_med:.1f}us  p99={_p99:.1f}us",
+          flush=True)
 
 
 def _parse_concurrency(arg: str) -> Tuple[int, ...]:
@@ -526,7 +673,8 @@ async def _run_async_probes(*,
                             loopback_samples: int,
                             loopback_warmup: int,
                             concurrency: Tuple[int, ...],
-                            per_worker: int,
+                            per_worker: Optional[int],
+                            samples_per_level: int,
                             ready_timeout_s: float,
                             on_phase_start: Optional[Any] = None,
                             on_level_start: Optional[Any] = None,
@@ -565,8 +713,9 @@ async def _run_async_probes(*,
         _result["handler_scaling"] = await measure_handler_scaling(
             port=port,
             concurrency=concurrency,
-            per_worker=per_worker,
             warmup=loopback_warmup,
+            per_worker=per_worker,
+            samples_per_level=samples_per_level,
             on_level_start=on_level_start,
             on_level_done=on_level_done,
         )
@@ -581,11 +730,12 @@ def run(*,
         loopback_samples: int = _DEFAULT_LOOPBACK_SAMPLES,
         loopback_warmup: int = _DEFAULT_LOOPBACK_WARMUP,
         concurrency: Tuple[int, ...] = _DEFAULT_CONCURRENCY,
-        per_worker: int = 200,
+        per_worker: Optional[int] = None,
+        samples_per_level: int = _DEFAULT_SAMPLES_PER_LEVEL,
         port: int = _DEFAULT_PORT,
-        ready_timeout_s: float = 5.0,
-        skip_jitter: bool = False,
-        skip_loopback: bool = False,
+        ready_timeout_s: float = _DEFAULT_READY_TIMEOUT_S,
+        skip_jitter: bool = _DEFAULT_SKIP_JITTER,
+        skip_loopback: bool = _DEFAULT_SKIP_LOOPBACK,
         write: bool = True,
         output: Optional[str] = None,
         verbose: bool = True) -> Dict[str, Any]:
@@ -599,7 +749,8 @@ def run(*,
         loopback_samples (int): GET /ping samples for the loopback probe.
         loopback_warmup (int): warmup GETs discarded before the loopback probe.
         concurrency (tuple[int, ...]): levels for the handler-scaling probe.
-        per_worker (int): requests per concurrent worker.
+        per_worker (Optional[int]): sequential requests per concurrent worker; when `None`, derived from `samples_per_level`.
+        samples_per_level (int): target total samples per concurrency level when `per_worker` is derived.
         port (int): loopback ping server port.
         ready_timeout_s (float): seconds to wait for uvicorn readiness.
         skip_jitter (bool): if True, skip the jitter probe.
@@ -621,13 +772,18 @@ def run(*,
     _now = datetime.now()
     _timestamp = _now.isoformat(timespec="seconds")
 
+    if per_worker is None:
+        _per_worker_record: Optional[int] = None
+    else:
+        _per_worker_record = int(per_worker)
     _args_block = {
         "timer_samples": int(timer_samples),
         "jitter_samples": int(jitter_samples),
         "loopback_samples": int(loopback_samples),
         "loopback_warmup": int(loopback_warmup),
         "concurrency": _concurrency_list,
-        "per_worker": int(per_worker),
+        "per_worker": _per_worker_record,
+        "samples_per_level": int(samples_per_level),
         "port": int(port),
         "skip_jitter": bool(skip_jitter),
         "skip_loopback": bool(skip_loopback),
@@ -656,39 +812,27 @@ def run(*,
                 print("  [3/4] loopback ... SKIPPED", flush=True)
                 print("  [4/4] handler scaling ... SKIPPED", flush=True)
         else:
-            _on_phase = None
-            _on_level_start = None
-            _on_level_done = None
             if verbose:
-                def _on_phase(name: str) -> None:
-                    if name == "loopback":
-                        print("  [3/4] loopback latency ...", flush=True)
-                    elif name == "handler_scaling":
-                        print("  [4/4] empty-handler scaling ...", flush=True)
+                _on_phase = _print_phase_marker
+                _on_level_start = _print_level_start
+                _on_level_done = _print_level_done
+            else:
+                _on_phase = None
+                _on_level_start = None
+                _on_level_done = None
 
-                def _on_level_start(level: int, total: int) -> None:
-                    print(f"      c={level:>4}  running {total} requests ...",
-                          flush=True)
-
-                def _on_level_done(level: int, stats: Dict[str, float],
-                                   elapsed: float) -> None:
-                    _med = stats.get("median_us", 0.0)
-                    _p99 = stats.get("p99_us", 0.0)
-                    print(f"      c={level:>4}  done in {elapsed:.1f}s  "
-                          f"median={_med:.1f}us  p99={_p99:.1f}us",
-                          flush=True)
-
-            _probes = asyncio.run(_run_async_probes(
+            _probes = _run_probes_in_dedicated_loop(
                 port=port,
                 loopback_samples=loopback_samples,
                 loopback_warmup=loopback_warmup,
                 concurrency=concurrency,
                 per_worker=per_worker,
+                samples_per_level=samples_per_level,
                 ready_timeout_s=ready_timeout_s,
                 on_phase_start=_on_phase,
                 on_level_start=_on_level_start,
                 on_level_done=_on_level_done,
-            ))
+            )
             _envelope.update(_probes)
 
     _t_end = time.perf_counter()
@@ -703,6 +847,9 @@ def run(*,
         _write_json(_out, _envelope)
         _envelope["output_path"] = str(_out)
 
+    # final sweep: the probe allocations are gone but interpreter-level
+    # caches (httpx module, uvicorn server class) may still hold cycles.
+    gc.collect()
     return _envelope
 
 
@@ -739,14 +886,22 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help=("comma-separated concurrency levels for the "
                           "handler-scaling probe "
                           f"(default: {_default_conc_csv})"))
-    _p.add_argument("--per-worker", type=int, default=200,
-                    help=("requests per concurrent worker in the "
-                          "handler-scaling probe (default: 200)"))
+    _p.add_argument("--per-worker", type=int, default=None,
+                    help=("sequential requests per concurrent worker; "
+                          "when omitted, derived from --samples-per-level "
+                          "so total samples per level stay bounded"))
+    _p.add_argument("--samples-per-level", type=int,
+                    default=_DEFAULT_SAMPLES_PER_LEVEL,
+                    help=("target total samples per concurrency level "
+                          "when --per-worker is derived "
+                          f"(default: {_DEFAULT_SAMPLES_PER_LEVEL})"))
     _p.add_argument("--port", type=int, default=_DEFAULT_PORT,
                     help=("loopback ping server port "
                           f"(default: {_DEFAULT_PORT})"))
-    _p.add_argument("--ready-timeout-s", type=float, default=5.0,
-                    help="seconds to wait for uvicorn readiness (default: 5.0)")
+    _p.add_argument("--ready-timeout-s", type=float,
+                    default=_DEFAULT_READY_TIMEOUT_S,
+                    help=("seconds to wait for uvicorn readiness "
+                          f"(default: {_DEFAULT_READY_TIMEOUT_S})"))
     _p.add_argument("--skip-loopback", action="store_true",
                     help="run only the timer + jitter probes (no HTTP)")
     _p.add_argument("--skip-jitter", action="store_true",
@@ -786,6 +941,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         loopback_warmup=_args.loopback_warmup,
         concurrency=_concurrency,
         per_worker=_args.per_worker,
+        samples_per_level=_args.samples_per_level,
         port=_args.port,
         ready_timeout_s=_args.ready_timeout_s,
         skip_jitter=_args.skip_jitter,

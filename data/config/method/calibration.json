@@ -1,0 +1,16 @@
+{
+    "timer_samples": 100000,
+    "jitter_samples": 5000,
+    "jitter_target_ns": 1000000,
+    "loopback_samples": 5000,
+    "loopback_warmup": 500,
+    "concurrency": [1, 10, 50, 100, 200, 500, 1000, 5000, 8000, 10000],
+    "per_worker": null,
+    "samples_per_level": 500,
+    "port": 8765,
+    "ready_timeout_s": 5.0,
+    "uvicorn_backlog": 16384,
+    "httpx_timeout_s": 60.0,
+    "skip_jitter": false,
+    "skip_loopback": false
+}
