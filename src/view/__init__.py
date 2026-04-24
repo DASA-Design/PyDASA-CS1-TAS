@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """Plotting helpers (one module per diagram family)."""
 
+from src.view.calibration import (
+    plot_calib_dashboard,
+    plot_calib_scaling,
+)
 from src.view.dc_charts import (
     plot_arts_distributions,
     plot_system_behaviour,
@@ -25,6 +29,8 @@ __all__ = [
     "DIM_GLOSSARY_DEFAULT",
     "QN_GLOSSARY_DEFAULT",
     "plot_arts_distributions",
+    "plot_calib_dashboard",
+    "plot_calib_scaling",
     "plot_dim_topology",
     "plot_nd_ci",
     "plot_nd_diffmap",

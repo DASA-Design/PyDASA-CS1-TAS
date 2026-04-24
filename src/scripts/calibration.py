@@ -3,13 +3,13 @@
 calibration.py
 ==============
 
-Per-host noise-floor characterization for the `experiment` method. Runs the four baselines from `notes/calibration.md` section 3 -- timer resolution, scheduling jitter, loopback latency, empty-handler scaling -- and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
+Per-host noise-floor characterization for the `experiment` method. Runs four baselines (timer resolution, scheduling jitter, loopback latency, empty-handler scaling) and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
 
-Every `experiment` run should reference the latest calibration JSON by timestamp in its run envelope (`baseline_ref`) so measured latencies can be reported as `value - loopback_median +/- jitter_p99`. This is the pre-run gate planned for P0.3; this script (P0.1) only produces the baseline.
+Every `experiment` run should reference the latest calibration JSON by timestamp in its run envelope (`baseline_ref`) so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
 
 Kept deliberately small and dependency-light:
 
-    - ctypes `timeBeginPeriod(1)` inlined -- no import from `src.methods.experiment` whose transitive imports would warm the executor pool and perturb the measurements.
+    - ctypes `timeBeginPeriod(1)` is inlined so this module stays free of heavy transitive imports that would warm the executor pool and perturb the measurements.
     - `time.perf_counter_ns()` throughout; integer arithmetic in the hot path, seconds only at JSON-write time.
     - FastAPI `/ping` runs in a background uvicorn thread so the loopback probe measures real TCP loopback, not ASGI in-process shortcuts.
 
@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # scientific stack
+import nest_asyncio
 import numpy as np
 
 # bring the repo root onto sys.path so ad-hoc script runs import cleanly
@@ -57,10 +58,15 @@ _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
 sys.path.insert(0, str(_ROOT))
 
-# HTTP + server stack -- imported after sys.path tweak so a fresh clone works
+# HTTP + server stack: imported after the sys.path tweak so a fresh clone works
 import httpx  # noqa: E402
 import uvicorn  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
+
+
+# allow `asyncio.run` inside an already-running event loop (e.g. a Jupyter
+# kernel); no-op outside one.
+nest_asyncio.apply()
 
 
 _CALIB_DIR = _ROOT / "data" / "results" / "experiment" / "calibration"
@@ -72,7 +78,7 @@ _DEFAULT_LOOPBACK_WARMUP = 500
 _DEFAULT_CONCURRENCY = (1, 10, 50, 100)
 _DEFAULT_PORT = 8765
 
-# sleep() target for the jitter probe; matches the recipe in section 3.2
+# sleep() target for the jitter probe.
 _JITTER_TARGET_NS = 1_000_000  # 1 ms
 
 
@@ -88,7 +94,7 @@ def _banner(msg: str) -> None:
 def _windows_timer_resolution(period_ms: int = 1):
     """*_windows_timer_resolution()* raise the Windows system-timer floor for the block.
 
-    No-op on non-Windows. Mirror of the helper in `src/methods/experiment.py`; inlined here to keep `calibration.py` free of the experiment module's transitive imports (which would warm the executor pool and perturb the jitter / loopback measurements).
+    No-op on non-Windows. Inlined rather than imported from elsewhere so this module stays free of heavy transitive imports that would warm the executor pool and perturb the jitter / loopback measurements.
 
     Args:
         period_ms (int): requested timer floor in milliseconds; OS clamps to supported range.
@@ -112,7 +118,7 @@ def _windows_timer_resolution(period_ms: int = 1):
 def snapshot_host_profile() -> Dict[str, Any]:
     """*snapshot_host_profile()* capture OS, CPU, RAM, python identity for the envelope.
 
-    Does not depend on `psutil` (deliberately excluded per the `project_experiment_milestone.md` memory note). Thermal readings are not collected for the same reason; run with a cool laptop on charger and document conditions in the devlog.
+    Uses only the Python standard library so the probe adds no third-party dependency and does not perturb the measurements that follow. Thermal readings are intentionally omitted; run-time conditions (thermals, background load) should be captured out-of-band by the caller.
 
     Returns:
         dict: hostname, os, cpu_count, python, timer resolution guesses.
@@ -146,14 +152,21 @@ def snapshot_host_profile() -> Dict[str, Any]:
     except Exception:
         _mem_gb = None
 
+    _hostname = socket.gethostname()
+    _os = platform.platform()
+    _py_ver = platform.python_version()
+    _py_impl = platform.python_implementation()
+    _cpu_count = os.cpu_count()
+    _cpu_machine = platform.machine()
+    _cpu_processor = platform.processor()
     return {
-        "hostname": socket.gethostname(),
-        "os": platform.platform(),
-        "python": platform.python_version(),
-        "python_impl": platform.python_implementation(),
-        "cpu_count": os.cpu_count(),
-        "cpu_machine": platform.machine(),
-        "cpu_processor": platform.processor(),
+        "hostname": _hostname,
+        "os": _os,
+        "python": _py_ver,
+        "python_impl": _py_impl,
+        "cpu_count": _cpu_count,
+        "cpu_machine": _cpu_machine,
+        "cpu_processor": _cpu_processor,
         "ram_total_gb": _mem_gb,
     }
 
@@ -183,12 +196,17 @@ def measure_timer(samples: int) -> Dict[str, float]:
         return {"min_ns": 0, "median_ns": 0.0, "mean_ns": 0.0,
                 "std_ns": 0.0, "zero_frac": 1.0}
     _arr = np.asarray(_deltas, dtype=np.int64)
+    _min = int(_arr.min())
+    _median = float(np.median(_arr))
+    _mean = float(_arr.mean())
+    _std = float(_arr.std())
+    _zero_frac = float(_zero / samples)
     return {
-        "min_ns": int(_arr.min()),
-        "median_ns": float(np.median(_arr)),
-        "mean_ns": float(_arr.mean()),
-        "std_ns": float(_arr.std()),
-        "zero_frac": float(_zero / samples),
+        "min_ns": _min,
+        "median_ns": _median,
+        "mean_ns": _mean,
+        "std_ns": _std,
+        "zero_frac": _zero_frac,
     }
 
 
@@ -211,12 +229,17 @@ def measure_jitter(samples: int) -> Dict[str, float]:
         _jitters.append((_t2 - _t1) - _JITTER_TARGET_NS)
     _arr = np.asarray(_jitters, dtype=np.int64)
     _us = _arr / 1000.0
+    _mean = float(_us.mean())
+    _std = float(_us.std())
+    _p50 = float(np.percentile(_us, 50))
+    _p99 = float(np.percentile(_us, 99))
+    _max = float(_us.max())
     return {
-        "mean_us": float(_us.mean()),
-        "std_us": float(_us.std()),
-        "p50_us": float(np.percentile(_us, 50)),
-        "p99_us": float(np.percentile(_us, 99)),
-        "max_us": float(_us.max()),
+        "mean_us": _mean,
+        "std_us": _std,
+        "p50_us": _p50,
+        "p99_us": _p99,
+        "max_us": _max,
     }
 
 
@@ -257,9 +280,14 @@ class _UvicornThread(threading.Thread):
 
     def wait_ready(self, timeout_s: float = 5.0) -> None:
         """*wait_ready()* poll `/ping` until it returns 200 or the timeout fires."""
-        _deadline = time.perf_counter() + float(timeout_s)
+        _start = time.perf_counter()
+        _timeout = float(timeout_s)
+        _deadline = _start + _timeout
         _url = f"http://127.0.0.1:{self._port}/ping"
-        while time.perf_counter() < _deadline:
+        while True:
+            _now = time.perf_counter()
+            if _now >= _deadline:
+                break
             try:
                 _r = httpx.get(_url, timeout=0.5)
                 if _r.status_code == 200:
@@ -303,13 +331,19 @@ async def measure_loopback(port: int,
             _rtts.append(_t2 - _t1)
     _arr = np.asarray(_rtts, dtype=np.int64)
     _us = _arr / 1000.0
+    _min = float(_us.min())
+    _median = float(np.median(_us))
+    _p95 = float(np.percentile(_us, 95))
+    _p99 = float(np.percentile(_us, 99))
+    _std = float(_us.std())
+    _n = int(samples)
     return {
-        "min_us": float(_us.min()),
-        "median_us": float(np.median(_us)),
-        "p95_us": float(np.percentile(_us, 95)),
-        "p99_us": float(np.percentile(_us, 99)),
-        "std_us": float(_us.std()),
-        "samples": int(samples),
+        "min_us": _min,
+        "median_us": _median,
+        "p95_us": _p95,
+        "p99_us": _p99,
+        "std_us": _std,
+        "samples": _n,
     }
 
 
@@ -329,16 +363,20 @@ async def _run_concurrent_worker(client: httpx.AsyncClient,
 async def measure_handler_scaling(port: int,
                                   concurrency: Tuple[int, ...],
                                   per_worker: int,
-                                  warmup: int) -> Dict[str, Dict[str, float]]:
+                                  warmup: int,
+                                  on_level_start: Optional[Any] = None,
+                                  on_level_done: Optional[Any] = None) -> Dict[str, Dict[str, float]]:
     """*measure_handler_scaling()* loopback latency at increasing concurrency levels.
 
-    For each level `c`, launches `c` concurrent workers each doing `per_worker` requests. Reports the aggregate latency distribution. Tells you how much the FastAPI / event-loop stack degrades as load stacks up on the empty handler.
+    For each level `c`, launches `c` concurrent workers each doing `per_worker` requests. Reports the aggregate latency distribution. Quantifies how much the FastAPI / event-loop stack's response time increases as in-flight requests stack up on the empty handler.
 
     Args:
         port (int): port the ping server is listening on.
         concurrency (tuple[int, ...]): levels to test (e.g. 1, 10, 50, 100).
         per_worker (int): requests per concurrent worker.
         warmup (int): discard-this-many requests (total, not per-worker) upfront.
+        on_level_start (Optional[callable]): invoked with `(level, total_samples)` before each level starts. Lets the caller print progress without this function doing its own I/O.
+        on_level_done (Optional[callable]): invoked with `(level, stats_dict, elapsed_s)` after each level finishes.
 
     Returns:
         dict[str, dict]: `{"<c>": {min_us, median_us, p95_us, p99_us, std_us, samples}}`.
@@ -350,28 +388,58 @@ async def measure_handler_scaling(port: int,
         for _ in range(int(warmup)):
             await _client.get(_url)
         for _c in concurrency:
-            _tasks = [_run_concurrent_worker(_client, _url, per_worker)
-                      for _ in range(int(_c))]
+            _count = int(_c)
+            _total = _count * int(per_worker)
+            if on_level_start is not None:
+                on_level_start(_count, _total)
+            _t0 = time.perf_counter()
+            _tasks: List[Any] = []
+            for _ in range(_count):
+                _tasks.append(_run_concurrent_worker(_client, _url, per_worker))
             _lists = await asyncio.gather(*_tasks)
             _all: List[int] = []
             for _lst in _lists:
                 _all.extend(_lst)
             _arr = np.asarray(_all, dtype=np.int64)
             _us = _arr / 1000.0
-            _result[str(int(_c))] = {
-                "min_us": float(_us.min()),
-                "median_us": float(np.median(_us)),
-                "p95_us": float(np.percentile(_us, 95)),
-                "p99_us": float(np.percentile(_us, 99)),
-                "std_us": float(_us.std()),
-                "samples": int(_us.size),
+            _min = float(_us.min())
+            _median = float(np.median(_us))
+            _p95 = float(np.percentile(_us, 95))
+            _p99 = float(np.percentile(_us, 99))
+            _std = float(_us.std())
+            _n = int(_us.size)
+            _key = str(_count)
+            _stats = {
+                "min_us": _min,
+                "median_us": _median,
+                "p95_us": _p95,
+                "p99_us": _p99,
+                "std_us": _std,
+                "samples": _n,
             }
+            _result[_key] = _stats
+            if on_level_done is not None:
+                _elapsed = time.perf_counter() - _t0
+                on_level_done(_count, _stats, _elapsed)
     return _result
 
 
 def _parse_concurrency(arg: str) -> Tuple[int, ...]:
-    """*_parse_concurrency()* parse a comma-separated concurrency list."""
-    return tuple(int(_x.strip()) for _x in arg.split(",") if _x.strip())
+    """*_parse_concurrency()* parse a comma-separated concurrency list.
+
+    Args:
+        arg (str): comma-separated concurrency levels, e.g. `"1,10,50,100"`.
+
+    Returns:
+        tuple[int, ...]: parsed levels; empty fragments are dropped.
+    """
+    _out: List[int] = []
+    for _raw in arg.split(","):
+        _token = _raw.strip()
+        if not _token:
+            continue
+        _out.append(int(_token))
+    return tuple(_out)
 
 
 def _build_output_path(profile: Dict[str, Any], stamp: Optional[str] = None) -> Path:
@@ -383,9 +451,12 @@ def _build_output_path(profile: Dict[str, Any], stamp: Optional[str] = None) -> 
         profile (dict): host profile (we use `hostname`).
         stamp (Optional[str]): override the timestamp suffix; default `now()`.
     """
-    _host = str(profile.get("hostname", "unknown")).replace(" ", "-")
+    _raw_host = profile.get("hostname", "unknown")
+    _host_str = str(_raw_host)
+    _host = _host_str.replace(" ", "-")
     if stamp is None:
-        _stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _now = datetime.now()
+        _stamp = _now.strftime("%Y%m%d_%H%M%S")
     else:
         _stamp = str(stamp)
     return _CALIB_DIR / f"{_host}_{_stamp}.json"
@@ -401,57 +472,238 @@ def _write_json(path: Path, data: Dict[str, Any]) -> None:
 def _print_summary(envelope: Dict[str, Any]) -> None:
     """*_print_summary()* compact post-run readout."""
     _banner("Calibration summary")
+
     _hp = envelope.get("host_profile", {})
-    print(f"  host         : {_hp.get('hostname')}  ({_hp.get('os')})")
-    print(f"  python       : {_hp.get('python')} {_hp.get('python_impl')}  "
-          f"cpu={_hp.get('cpu_count')}  ram={_hp.get('ram_total_gb')}")
+    _host = _hp.get("hostname")
+    _os = _hp.get("os")
+    _py = _hp.get("python")
+    _py_impl = _hp.get("python_impl")
+    _cpu = _hp.get("cpu_count")
+    _ram = _hp.get("ram_total_gb")
+    print(f"  host         : {_host}  ({_os})")
+    print(f"  python       : {_py} {_py_impl}  cpu={_cpu}  ram={_ram}")
+
     _t = envelope.get("timer", {})
-    print(f"  timer        : min={_t.get('min_ns')} ns  "
-          f"median={_t.get('median_ns'):.1f} ns  "
-          f"std={_t.get('std_ns'):.1f} ns")
+    _t_min = _t.get("min_ns")
+    _t_median = _t.get("median_ns")
+    _t_std = _t.get("std_ns")
+    print(f"  timer        : min={_t_min} ns  "
+          f"median={_t_median:.1f} ns  "
+          f"std={_t_std:.1f} ns")
+
     _j = envelope.get("jitter")
     if _j is not None:
-        print(f"  jitter       : mean={_j.get('mean_us'):.1f} us  "
-              f"p99={_j.get('p99_us'):.1f} us  "
-              f"max={_j.get('max_us'):.1f} us")
+        _j_mean = _j.get("mean_us")
+        _j_p99 = _j.get("p99_us")
+        _j_max = _j.get("max_us")
+        print(f"  jitter       : mean={_j_mean:.1f} us  "
+              f"p99={_j_p99:.1f} us  "
+              f"max={_j_max:.1f} us")
+
     _l = envelope.get("loopback")
     if _l is not None:
-        print(f"  loopback     : min={_l.get('min_us'):.1f} us  "
-              f"median={_l.get('median_us'):.1f} us  "
-              f"p99={_l.get('p99_us'):.1f} us")
+        _l_min = _l.get("min_us")
+        _l_median = _l.get("median_us")
+        _l_p99 = _l.get("p99_us")
+        print(f"  loopback     : min={_l_min:.1f} us  "
+              f"median={_l_median:.1f} us  "
+              f"p99={_l_p99:.1f} us")
+
     _h = envelope.get("handler_scaling")
     if _h:
         print("  handler scaling (median / p99 us):")
         for _c, _stats in _h.items():
-            print(f"    c={_c:>4}  median={_stats['median_us']:.1f}  "
-                  f"p99={_stats['p99_us']:.1f}  "
-                  f"samples={_stats['samples']}")
+            _s_median = _stats["median_us"]
+            _s_p99 = _stats["p99_us"]
+            _s_n = _stats["samples"]
+            print(f"    c={_c:>4}  median={_s_median:.1f}  "
+                  f"p99={_s_p99:.1f}  "
+                  f"samples={_s_n}")
 
 
-async def _run_async_probes(args: argparse.Namespace) -> Dict[str, Any]:
-    """*_run_async_probes()* drive the loopback + handler-scaling probes against a uvicorn thread."""
+async def _run_async_probes(*,
+                            port: int,
+                            loopback_samples: int,
+                            loopback_warmup: int,
+                            concurrency: Tuple[int, ...],
+                            per_worker: int,
+                            ready_timeout_s: float,
+                            on_phase_start: Optional[Any] = None,
+                            on_level_start: Optional[Any] = None,
+                            on_level_done: Optional[Any] = None) -> Dict[str, Any]:
+    """*_run_async_probes()* drive the loopback + handler-scaling probes against a uvicorn thread.
+
+    Args:
+        port (int): port the ping server binds to.
+        loopback_samples (int): request count for the loopback probe.
+        loopback_warmup (int): warmup GETs discarded upfront.
+        concurrency (tuple[int, ...]): levels for the handler-scaling probe.
+        per_worker (int): requests per concurrent worker.
+        ready_timeout_s (float): seconds to wait for uvicorn readiness.
+        on_phase_start (Optional[callable]): called with the phase name (`"loopback"` or `"handler_scaling"`) just before each phase begins, so the caller can print a progress marker at the right moment.
+        on_level_start (Optional[callable]): forwarded to `measure_handler_scaling`.
+        on_level_done (Optional[callable]): forwarded to `measure_handler_scaling`.
+
+    Returns:
+        dict: `{"loopback": {...}, "handler_scaling": {...}}`.
+    """
     _result: Dict[str, Any] = {}
-    if args.skip_loopback:
-        return _result
     _app = _build_ping_app()
-    _server = _UvicornThread(_app, args.port)
+    _server = _UvicornThread(_app, port)
     _server.start()
     try:
-        _server.wait_ready(timeout_s=args.ready_timeout_s)
+        _server.wait_ready(timeout_s=ready_timeout_s)
+        if on_phase_start is not None:
+            on_phase_start("loopback")
         _result["loopback"] = await measure_loopback(
-            port=args.port,
-            samples=args.loopback_samples,
-            warmup=args.loopback_warmup,
+            port=port,
+            samples=loopback_samples,
+            warmup=loopback_warmup,
         )
+        if on_phase_start is not None:
+            on_phase_start("handler_scaling")
         _result["handler_scaling"] = await measure_handler_scaling(
-            port=args.port,
-            concurrency=args.concurrency,
-            per_worker=args.per_worker,
-            warmup=args.loopback_warmup,
+            port=port,
+            concurrency=concurrency,
+            per_worker=per_worker,
+            warmup=loopback_warmup,
+            on_level_start=on_level_start,
+            on_level_done=on_level_done,
         )
     finally:
         _server.shutdown()
     return _result
+
+
+def run(*,
+        timer_samples: int = _DEFAULT_TIMER_SAMPLES,
+        jitter_samples: int = _DEFAULT_JITTER_SAMPLES,
+        loopback_samples: int = _DEFAULT_LOOPBACK_SAMPLES,
+        loopback_warmup: int = _DEFAULT_LOOPBACK_WARMUP,
+        concurrency: Tuple[int, ...] = _DEFAULT_CONCURRENCY,
+        per_worker: int = 200,
+        port: int = _DEFAULT_PORT,
+        ready_timeout_s: float = 5.0,
+        skip_jitter: bool = False,
+        skip_loopback: bool = False,
+        write: bool = True,
+        output: Optional[str] = None,
+        verbose: bool = True) -> Dict[str, Any]:
+    """*run()* collect the calibration envelope.
+
+    Runs the four probes (timer, jitter, loopback, handler scaling) under `_windows_timer_resolution(1)` and returns the full envelope. When `write=True`, the JSON is persisted under `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json` (or `output` when given) and the resolved path is recorded on the envelope as `output_path`.
+
+    Args:
+        timer_samples (int): back-to-back `perf_counter_ns` reads for the timer probe.
+        jitter_samples (int): 1 ms sleep cycles for the jitter probe.
+        loopback_samples (int): GET /ping samples for the loopback probe.
+        loopback_warmup (int): warmup GETs discarded before the loopback probe.
+        concurrency (tuple[int, ...]): levels for the handler-scaling probe.
+        per_worker (int): requests per concurrent worker.
+        port (int): loopback ping server port.
+        ready_timeout_s (float): seconds to wait for uvicorn readiness.
+        skip_jitter (bool): if True, skip the jitter probe.
+        skip_loopback (bool): if True, skip both the loopback and handler-scaling probes.
+        write (bool): persist the envelope to JSON when True.
+        output (Optional[str]): override path when `write=True`; defaults to the per-host path.
+        verbose (bool): print phase markers to stdout when True.
+
+    Returns:
+        dict: the envelope (`host_profile`, `args`, `timer`, `jitter`, `loopback`, `handler_scaling`, `timestamp`, `elapsed_s`, `output_path`).
+    """
+    _profile = snapshot_host_profile()
+    _t0 = time.perf_counter()
+
+    _concurrency_list: List[int] = []
+    for _c in concurrency:
+        _concurrency_list.append(int(_c))
+
+    _now = datetime.now()
+    _timestamp = _now.isoformat(timespec="seconds")
+
+    _args_block = {
+        "timer_samples": int(timer_samples),
+        "jitter_samples": int(jitter_samples),
+        "loopback_samples": int(loopback_samples),
+        "loopback_warmup": int(loopback_warmup),
+        "concurrency": _concurrency_list,
+        "per_worker": int(per_worker),
+        "port": int(port),
+        "skip_jitter": bool(skip_jitter),
+        "skip_loopback": bool(skip_loopback),
+    }
+    _envelope: Dict[str, Any] = {
+        "host_profile": _profile,
+        "args": _args_block,
+        "timestamp": _timestamp,
+    }
+
+    with _windows_timer_resolution(1):
+        if verbose:
+            print("  [1/4] timer resolution ...", flush=True)
+        _envelope["timer"] = measure_timer(timer_samples)
+
+        if skip_jitter:
+            if verbose:
+                print("  [2/4] jitter ... SKIPPED", flush=True)
+        else:
+            if verbose:
+                print("  [2/4] scheduling jitter ...", flush=True)
+            _envelope["jitter"] = measure_jitter(jitter_samples)
+
+        if skip_loopback:
+            if verbose:
+                print("  [3/4] loopback ... SKIPPED", flush=True)
+                print("  [4/4] handler scaling ... SKIPPED", flush=True)
+        else:
+            _on_phase = None
+            _on_level_start = None
+            _on_level_done = None
+            if verbose:
+                def _on_phase(name: str) -> None:
+                    if name == "loopback":
+                        print("  [3/4] loopback latency ...", flush=True)
+                    elif name == "handler_scaling":
+                        print("  [4/4] empty-handler scaling ...", flush=True)
+
+                def _on_level_start(level: int, total: int) -> None:
+                    print(f"      c={level:>4}  running {total} requests ...",
+                          flush=True)
+
+                def _on_level_done(level: int, stats: Dict[str, float],
+                                   elapsed: float) -> None:
+                    _med = stats.get("median_us", 0.0)
+                    _p99 = stats.get("p99_us", 0.0)
+                    print(f"      c={level:>4}  done in {elapsed:.1f}s  "
+                          f"median={_med:.1f}us  p99={_p99:.1f}us",
+                          flush=True)
+
+            _probes = asyncio.run(_run_async_probes(
+                port=port,
+                loopback_samples=loopback_samples,
+                loopback_warmup=loopback_warmup,
+                concurrency=concurrency,
+                per_worker=per_worker,
+                ready_timeout_s=ready_timeout_s,
+                on_phase_start=_on_phase,
+                on_level_start=_on_level_start,
+                on_level_done=_on_level_done,
+            ))
+            _envelope.update(_probes)
+
+    _t_end = time.perf_counter()
+    _elapsed = _t_end - _t0
+    _envelope["elapsed_s"] = round(_elapsed, 3)
+
+    if write:
+        if output:
+            _out = Path(output)
+        else:
+            _out = _build_output_path(_profile)
+        _write_json(_out, _envelope)
+        _envelope["output_path"] = str(_out)
+
+    return _envelope
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -478,10 +730,15 @@ def _build_argparser() -> argparse.ArgumentParser:
                     default=_DEFAULT_LOOPBACK_WARMUP,
                     help=("warmup GETs discarded before the loopback probe "
                           f"(default: {_DEFAULT_LOOPBACK_WARMUP})"))
+    _default_conc_tokens: List[str] = []
+    for _c in _DEFAULT_CONCURRENCY:
+        _default_conc_tokens.append(str(_c))
+    _default_conc_csv = ",".join(_default_conc_tokens)
+
     _p.add_argument("--concurrency", type=str, default=None,
                     help=("comma-separated concurrency levels for the "
                           "handler-scaling probe "
-                          f"(default: {','.join(str(_c) for _c in _DEFAULT_CONCURRENCY)})"))
+                          f"(default: {_default_conc_csv})"))
     _p.add_argument("--per-worker", type=int, default=200,
                     help=("requests per concurrent worker in the "
                           "handler-scaling probe (default: 200)"))
@@ -501,76 +758,47 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
-    """*main()* CLI entry point.
+    """*main()* CLI entry point; parses `argv` and delegates to `run()`.
 
     Args:
         argv (Optional[List[str]]): argv override for tests; None uses `sys.argv`.
     """
-    _args = _build_argparser().parse_args(argv)
+    _parser = _build_argparser()
+    _args = _parser.parse_args(argv)
     if _args.concurrency is not None:
-        _args.concurrency = _parse_concurrency(_args.concurrency)
+        _concurrency = _parse_concurrency(_args.concurrency)
     else:
-        _args.concurrency = _DEFAULT_CONCURRENCY
+        _concurrency = _DEFAULT_CONCURRENCY
 
-    _profile = snapshot_host_profile()
-
-    _banner(f"calibration.py  host={_profile['hostname']!r}  "
-            f"os={_profile['os']}  python={_profile['python']}")
-    print(f"  cpu_count={_profile['cpu_count']}  "
-          f"ram_total_gb={_profile['ram_total_gb']}")
+    _hostname = socket.gethostname()
+    _py_ver = platform.python_version()
+    _banner(f"calibration.py  host={_hostname!r}  python={_py_ver}")
     print(f"  timer_samples={_args.timer_samples}  "
           f"jitter_samples={_args.jitter_samples}  "
           f"loopback_samples={_args.loopback_samples}  "
-          f"concurrency={_args.concurrency}")
+          f"concurrency={_concurrency}")
+    print()
 
-    _t0 = time.perf_counter()
-    _envelope: Dict[str, Any] = {
-        "host_profile": _profile,
-        "args": {
-            "timer_samples": int(_args.timer_samples),
-            "jitter_samples": int(_args.jitter_samples),
-            "loopback_samples": int(_args.loopback_samples),
-            "loopback_warmup": int(_args.loopback_warmup),
-            "concurrency": list(int(_c) for _c in _args.concurrency),
-            "per_worker": int(_args.per_worker),
-            "port": int(_args.port),
-            "skip_jitter": bool(_args.skip_jitter),
-            "skip_loopback": bool(_args.skip_loopback),
-        },
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-    }
-
-    with _windows_timer_resolution(1):
-        print("\n  [1/4] timer resolution ...")
-        _envelope["timer"] = measure_timer(_args.timer_samples)
-
-        if _args.skip_jitter:
-            print("\n  [2/4] jitter ... SKIPPED")
-        else:
-            print("\n  [2/4] scheduling jitter ...")
-            _envelope["jitter"] = measure_jitter(_args.jitter_samples)
-
-        if _args.skip_loopback:
-            print("\n  [3/4] loopback ... SKIPPED")
-            print("\n  [4/4] handler scaling ... SKIPPED")
-        else:
-            print("\n  [3/4] loopback latency ...")
-            print("\n  [4/4] empty-handler scaling ...")
-            _probes = asyncio.run(_run_async_probes(_args))
-            _envelope.update(_probes)
-
-    _envelope["elapsed_s"] = round(time.perf_counter() - _t0, 3)
-
-    if _args.output:
-        _out = Path(_args.output)
-    else:
-        _out = _build_output_path(_profile)
-    _write_json(_out, _envelope)
-    _envelope["output_path"] = str(_out)
+    _envelope = run(
+        timer_samples=_args.timer_samples,
+        jitter_samples=_args.jitter_samples,
+        loopback_samples=_args.loopback_samples,
+        loopback_warmup=_args.loopback_warmup,
+        concurrency=_concurrency,
+        per_worker=_args.per_worker,
+        port=_args.port,
+        ready_timeout_s=_args.ready_timeout_s,
+        skip_jitter=_args.skip_jitter,
+        skip_loopback=_args.skip_loopback,
+        write=True,
+        output=_args.output,
+        verbose=True,
+    )
 
     _print_summary(_envelope)
     print()
-    print(f"  >>> written: {_out}")
+    _out_path = _envelope.get("output_path")
+    print(f"  >>> written: {_out_path}")
 
 
 if __name__ == "__main__":
