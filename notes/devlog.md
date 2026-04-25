@@ -4,6 +4,46 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-25 — σ formula correction + audit campaign + experiment-networks rename
+
+**σ = λW/L → σ = λW/K.** User flagged the methodology-correct stall-coefficient formula. The old form was Little's-law identity (≈1 in steady state, structurally insensitive to K); the new form measures queueing share of capacity. Fix landed across:
+
+- `data/config/method/dimensional.json::coefficients[1].expr_pattern` (`{pi[0]}*{pi[3]}**(-1)`).
+- `src/dimensional/networks.py::sweep_artifact` and `sweep_arch` inner-loop expressions.
+- `src/dimensional/reshape.py::aggregate_arch_coefs` (denominator `sum(K)`) and `aggregate_sweep_to_arch`.
+- `src/methods/calibration.py::_run_calib_pipeline` (LaTeX `\frac{λ·W}{K}`).
+- `src/experiment/architecture.py::sweep_arch_exp` (analytic body).
+- `src/view/qn_diagram.py::DIM_GLOSSARY_DEFAULT` (legend).
+- `.claude/skills/develop/pydasa-usage.md` Stall row (canonical-coefficients table).
+- Tests: `tests/dimensional/test_coefficients.py`, `tests/dimensional/test_sensitivity.py`, `tests/experiment/test_architecture.py`.
+- Notebook captions: `00-calibration.ipynb`, `04-yoly.ipynb`, `06-yoly-experimental.ipynb`.
+
+Under Little's law (λW = L), `σ_new ≡ θ` on closed-form solves. On prototype runs the equality only holds approximately because operational λ counts every arrival but `L = X·W` uses successful-throughput X; `tests/experiment/test_architecture.py::test_sigma_close_to_theta` loosens to `rtol=0.5` to absorb this.
+
+**Module rename.** `src/experiment/networks.py` → `src/experiment/architecture.py` (homonym disambiguation vs `src/dimensional/networks.py`); `tests/experiment/test_networks.py` → `tests/experiment/test_architecture.py`. Public alias `from src.experiment import sweep_arch_exp` already in `__init__.py`, so external callers were untouched. Stale references swept from CLAUDE.md and `src/methods/calibration.py` docstring.
+
+**Audit campaign.** Ran systematic 3-skill audits (`code-documentation` + `coding-conventions` + `style-polish`) on every src/dimensional + src/methods/{calibration,experiment} + src/io/tooling + src/experiment/architecture module and their test parity files. Recurring patterns:
+
+- R16 stacked-`#` runs collapsed to one-line whys (≈40 sites).
+- `src.view.dc_charts.<plotter>` → `src.view.<plotter>` public-alias references (≈8 sites).
+- Bare `except Exception:` narrowed to specific types: `(OverflowError, ValueError, ZeroDivisionError)` for M/M/c/K solver, `(RuntimeError, OSError, ConnectionError)` for uvicorn launches, `(httpx.HTTPError, ConnectionError, OSError)` for httpx readiness probes. The K-disappearance bug (solver overflow at K=16384 for c≥2) had been silently swallowed for weeks; narrowing surfaced it as a real solver ceiling.
+- Lazy stdlib imports (`ctypes`, `os`, `solve_jackson_lams`) promoted to module top.
+- Test type-hint sweep: every `test_*` method got `-> None` + fixture-arg types.
+- `*test_name()*` lead-in convention enforced on every test docstring; module-docstring class-bullet lists matched against actual class counts.
+- `Optional[X]` not `X | None`, `Dict[...]` not `dict[...]` for project consistency.
+
+**New helpers** in `src/dimensional/reshape.py`: `_safe_div(num, den)` and `_per_combo_mean(sweep_data, art_keys, sym_template)` to remove duplication.
+
+**Coverage gap closed.** Added `TestAggregateSweepToArch` with 5 contracts using a synthetic 2-artifact sweep.
+
+**Jupyter-safe asyncio dispatch** added to `src/methods/experiment.py::_run_async_safe` (worker-thread `ProactorEventLoop`/`SelectorEventLoop` when an ambient loop is detected; falls back to `asyncio.run` when none). Lets `_RUN_RATE_SWEEP = True` work in `00-calibration.ipynb` without the `RuntimeError: asyncio.run() cannot be called from a running event loop`.
+
+**Calibration completion.** Per-host JSON now carries `dimensional_card` (PyDASA-routed) + `rate_sweep` (calibrated_rate=200 req/s for `DESKTOP-INKGBK6`) + 128 kB payload threading from JSON config. `src.io.load_dim_card` accessor lazy-derives the card when not pre-baked. `derive_calib_sweep` (Route A predicted) returns nested `{combo_tag: per_combo_block}`; notebook overlays all 12 `(c, K)` combos in a single `plot_yoly_chart` via `scenarios={...}`. K grid trimmed to `[50, 100, 200, 500]` because the closed-form solver overflows at larger K + c.
+
+**Test count after the campaign.** 107+ tests across `tests/dimensional/`, `tests/methods/test_calibration.py`, `tests/methods/test_experiment.py`, `tests/io/test_tooling.py`, `tests/experiment/test_architecture.py` all green. The audit applied ≈80 individual fix items across ≈20 src + tests files.
+
+---
+
 ## 2026-04-24 — Calibration dimensional card (Route B, measurement-derived)
 
 Added `src.methods.calibration.derive_calib_coefs(envelope, payload_size_bytes=0)` producing theta / sigma / eta / phi from the measured `handler_scaling` + `loopback` blocks (Route B — measurement, not M/M/c/K prediction). Plumbing:
