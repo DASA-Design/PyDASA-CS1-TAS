@@ -4,6 +4,138 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-24 — Calibration dimensional card (Route B, measurement-derived)
+
+Added `src.methods.calibration.derive_calib_coefs(envelope, payload_size_bytes=0)` producing theta / sigma / eta / phi from the measured `handler_scaling` + `loopback` blocks (Route B — measurement, not M/M/c/K prediction). Plumbing:
+
+- μ = 1e6 / loopback.median_us (host bare-metal service rate).
+- For each `n_con_usr` level: `R = median_us × 1e-6`, `X = n/R`, `L = n`, `Wq = (median_us − loopback.median_us) × 1e-6`.
+- θ = L/K, σ = Wq·λ/L, η = X·K/(μ·c_srv), φ = (L·B)/(K·B) = L/K when payload is constant.
+- ε excluded: `/ping` has no business logic that can fail.
+- Output dict uses LaTeX-subscripted keys ready for `src.view.dc_charts.plot_yoly_chart` — no new plotter; the notebook renders the card with the same helper the dimensional method uses on TAS architectures.
+- Stored under `envelope["dimensional_card"]`; notebook section 6b displays it.
+
+**Caveat.** φ is NaN by default because every `/ping` request carries the same body, making memory utilisation identical to θ (degenerate-memory case). Becomes informative only after the payload-echo upgrade (128/256 kB body). Noted in the notebook markdown + CLAUDE.md.
+
+Test count: 7 new `TestCalibDimCard` cases, all green. Helper reuses the existing dimensional vocabulary (same LaTeX subscripts, same plotter input shape) so the calibration fits into the DASA coefficient-space story without new view code.
+
+---
+
+## 2026-04-24 — Calibration P0 + scoped P1 + P2 stop-gate closed
+
+**What closed.** P0.1-P0.4 (host harness + rate-sweep fold-in + pre-run gate + first baseline), scoped P1 (bounded `deque(maxlen=500_000)` + `record_row` + `dropped_count` + `drain()` + `perf_counter_ns` in the hot path), and the P2 stop-gate all landed on 2026-04-23 / 2026-04-24. Full detail in `notes/calibration.md` Checkpoint log.
+
+**P2 verdict.** 5 trials of `experiment.run(adp=baseline)` against the post-P1 code: every trial completed cleanly (`stopped=schedule_complete`, `log_drop_counts == {}`), `client_effective_rate` mean 6.82 req/s (range 6.49-7.26, ~6 % spread), `W_net` mean 17.5 ms with a visible warm-in trend, wall-clock 173.7 s per trial. Interpretation: **safety properties confirmed**; the bounded-deque invariant holds, ns-precision is stable, nothing regressed. **Performance lift is NOT decided** — the default ramp tops out ~7 req/s, far below the ~180 req/s degradation point the calibration found. The handler-scaling data (8× latency degradation at c=10 on an empty `/ping` handler with ZERO logging) already strongly suggests event-loop queueing inside each service is the dominant bottleneck, not logger overhead. A saturation-regime A/B bench would cost many trials × many rates × many minutes of wall time; deferred until a use case demands it.
+
+**Module renames.** Three files were called `calibration.py`. Kept the runner (`src/methods/calibration.py`) and renamed the other two for clarity:
+
+- `src/io/calibration.py` → `src/io/tooling.py`
+- `src/view/calibration.py` → `src/view/characterization.py`
+
+Public API (`from src.io import ...` / `from src.view import ...`) unchanged.
+
+**Reference baseline for this host (DESKTOP-INKGBK6).** Clean re-bench on the post-refactor code, apps closed:
+
+| Probe | Number |
+|---|---|
+| Timer min / median / std | 100 ns / 100 ns / 392 ns |
+| Jitter mean / p99 / max | 663 μs / 1357 μs / 1985 μs |
+| Loopback median / p99 | 1.29 ms / 2.21 ms |
+| Handler c=1 → c=10000 | 1.5 ms → 30 s (log-log) |
+
+Every experiment result on this host should report `reported = measured_us − 1288.5 µs ± 1357.1 µs`.
+
+**Next.** P3.1 (extract endpoints to `experiment.json`) is the highest-leverage refactor. P4 is blocked on having a second LAN machine. A live rate-sweep would unblock the pending Camara rate-rescaling decision (`project_camara_rate_rescaling_pending.md`).
+
+---
+
+## 2026-04-23 — Calibration + logger refactor + local/remote plan drafted
+
+**Plan filed.** `notes/calibration.md` now holds the living memory + checkpoint doc for a multi-phase effort: (P0) per-host noise-floor harness, (P1) `@logger` append + periodic-drain refactor to kill mid-run disk I/O, (P2) local re-baseline, (P3) remote-ready packaging, (P4) 3-machine LAN deployment, (P5) comparison + case-study integration. Status column in that file is the single source of truth; this devlog gets only the transitions.
+
+**Filesystem split applied.** Mirrored `data/img/experiment/` in `data/results/experiment/`: both now carry `calibration/`, `local/<adaptation>/`, `remote/<adaptation>/`. Existing single-laptop results moved under `local/`; `.gitkeep` markers placed on every new empty directory per `data/results/.gitignore` convention (content ignored, structure tracked). `src/io` writers + `src/view` plotters still emit to pre-split paths; that wiring is phase P3.1, not landed.
+
+**Why now.** The experiment method currently degrades measurably above ~180 req/s on the single laptop. The Camara-rate rescaling question (2026-04-23 entry below) only becomes answerable once the noise floor is characterized per host — otherwise we cannot tell whether "degradation" is measurement noise, logger back-pressure, or real service saturation.
+
+**Stop-gate.** P3/P4 do NOT start until P2 has proven the logger refactor lifted the ceiling. If the refactor shows no lift, logger was not the bottleneck (per `feedback_measure_before_assume.md`) and the plan pivots toward the OS scheduler / HTTP stack / service saturation branches before sinking days into remote deployment.
+
+---
+
+## 2026-04-23 — Camara service / arrival rates need rescaling for the prototype
+
+**Open question.** The seeded values in `data/config/profile/{dflt,opti}.json` come from Weyns & Calinescu 2015 + Camara 2023 (Java/ReSeP stack): `mu` in [150, 1580] req/s and `lambda_z = 345` req/s at TAS_{1}. The FastAPI prototype in `src/experiment/` cannot sustain those rates: `python -m src.methods.calibration --rate-sweep --rate-sweep-target-loss 1.0` reports the highest sustainable rate at <= 1 % effective-rate loss is **~200 req/s**. Above that, the asyncio chain + httpx connection pool + executor wakeup dominate and the client undershoots the target by 7-30 %.
+
+**Why it matters.** If `07-comparison.ipynb` runs analytic at lambda_z=345 and experiment at lambda_z=345-but-actually-280, the headline analytic-vs-experiment delta is dominated by client undershoot, not by DASA tech-agnosticism. The DASA claim becomes untestable until the operating points line up.
+
+**Two options.**
+
+1. **Scale `lambda_z` down** (preserve mu ratios). Pick lambda_z = 200 (or whatever `--calibrate 1.0` returns at the time). Update `dflt.json` and `opti.json` symmetrically. Analytic + experiment then meet at the prototype-sustainable rate.
+2. **Scale `mu` up** (preserve lambda_z = 345). Bump every `mu` setpoint so the prototype headroom matches Camara's. Risk: large `mu` values push asyncio.sleep below the OS-timer floor at the per-service tick.
+
+Option 1 is the cheaper move; option 2 is closer to the original paper's QoS targets. Defer the decision until we wire the two notebooks (05-experimental + 06-yoly-experimental) at the candidate operating points and observe the comparison quality.
+
+**Markers.** `TODO_revisit_rates` keys added to both profile JSONs so a grep finds the same context from the data side. Resolve both at the same time (delete the keys when the decision lands).
+
+---
+
+## 2026-04-22 — Experiment notebook split + sweep_arch_exp
+
+**Decision.** Split the experiment method into two notebooks, mirroring the dimensional / yoly split locked on 2026-04-19:
+
+- `05-experimental.ipynb` keeps the fixed-point per-adaptation execution (one `(mu, c, K)` per adaptation, lambda ramped to saturation, side-by-side analytic prediction + R1/R2/R3 verdict).
+- `06-yoly-experimental.ipynb` adds a configuration-sweep yoly view measured on the FastAPI prototype, reusing the dc_charts plot vocabulary (`yc_arch`, `sb_arch`, `ad_per_node`, `yab_per_node`, `yac_per_node`, before/after overlay).
+
+**What changed.**
+
+- `src/experiment/networks.py` new module exposing `sweep_arch_exp(cfg, sweep_grid, *, method_cfg, adp)`. Mirrors `src.dimensional.networks.sweep_arch` shape; each combo overrides every node's `mu / c / K`, launches the mesh once, and derives one `(theta, sigma, eta, phi)` point per artifact. Reuses `_run_async` + `_build_svc_df_from_logs` from `src.methods.experiment` via local import to avoid a circular dependency.
+- `src/experiment/__init__.py` re-exports `sweep_arch_exp`.
+- `data/config/method/experiment.json` adds a `sweep_grid` block (`mu_factor=[0.5, 1.0, 2.0]`, `c=[1, 2]`, `K=[10, 32]`, `util_threshold=0.95`) — 12 combos. Deliberately small because each combo is a real mesh launch + ramp (~30 s).
+- `tests/experiment/test_networks.py` covers shape / dimensional bounds / stability gate via a 1-combo `_QUICK_GRID` + tight ramp; 8 tests in 2.22 s.
+- `06-comparison.ipynb` renumbered to `07-comparison.ipynb`.
+- `CLAUDE.md` + `notes/workflow.md` table updated to reflect the 7-notebook layout (5 methods, two of them split).
+
+**Why launch-per-combo, not in-process reconfig.** The simpler path; keeps the sweep helper a thin orchestrator over the existing run pipeline. In-process knob mutation would require service-side support and is deferred until the small-grid path proves insufficient.
+
+**Validation.** Test suite green. Notebook end-to-end run pending — to be confirmed once the small-grid sweep is exercised on a development laptop.
+
+---
+
+## 2026-04-22 — Plotter polish: L on qn_topology node labels, `.2e` + `\frac`/`\cdot` on dim_topology
+
+Incremental user-driven polish after the initial `plot_dim_topology` landing.
+
+- **`plot_qn_topology`** — node labels now show `L = <val>` (avg number in system, requests) instead of `rho = <val>` (unitless, already in the colourbar). Colouring is unchanged (still rho-driven); only the label value changed. All four analytic adaptation topologies regenerated.
+- **`plot_dim_topology`** — three refinements:
+  1. `$\eta = \frac{\chi \cdot K}{\mu \cdot c}$` (explicit `\cdot` between multi-symbol factors so mathtext renders visible multiplications instead of kerning symbols together).
+  2. Scientific notation `.2e` across every numeric display (table cells, node labels, NETWORK overlay). Coefficients span orders of magnitude across scenarios (`phi` goes from ~1e-3 baseline to ~1e-1 heavy load); uniform `.2e` prevents fixed-point formats from hiding the variation.
+  3. `color_by="eta"` default + data-driven min-max normalisation pinned into the memory so future callers do not cap at 1.
+- **Regenerated**: `data/img/analytic/{baseline,s1,s2,aggregate}/topology.{png,svg}` via full `01-analytic.ipynb` re-execution; `data/img/dimensional/{baseline,s1,s2,aggregate}/topology.{png,svg}` via direct calls + re-executed `03-dimensional.ipynb`.
+- **CLAUDE.md + memory updated**: the uniform-format rule ("if you mix `.2e` with `.4f` across sites of the same figure you create false visual comparability"), the label-shows-L convention on qn_topology, and the overlay `$\bar{sym}$ (Name): value` format are all pinned.
+
+---
+
+## 2026-04-22 — Audit closure + full B-batch rename sweep + `plot_dim_topology`
+
+Closed the 15-rule src + tests audit (docstring wrapping, acronyms, verb-first, type hints, locals prefix, dataclass fields, first-def pedagogy, no inline ternaries, section banners, no em-dashes, boolean decomposition, imports at top, @property getters, British English, neutral increase/decrease). Every src module + tests mirror + demo + notebook markdown was walked; every stage logged in `notes/audit.md`. The 11 deferred B-batch public-API renames (B1 / B3 / B5 / B6 remainder / B7 / B8 / B9 / B10 / B11 + B4 / B12 internal) drained in one final sweep.
+
+- **B-batch executed** (30+ symbols): `NetworkConfig → NetCfg`, `load_method_config → load_method_cfg`, `Service* → Svc*` (Spec / Request / Response / Context), `ServiceRegistry → SvcRegistry`, `ExternalForwardFn → ExtFwdFn`, `mount_atomic_service → mount_atomic_svc`, `mount_composite_service → mount_composite_svc`, `ArtifactSpec._setpoint → .read_setpoint`, `._sub → .format_sub`, `per_artifact_lambdas → compute_lams_per_artifact`, `per_artifact_rhos → compute_rhos_per_artifact`, `lambda_z_for_rho → invert_rho_to_lam_z`, `solve_jackson_lambdas → solve_jackson_lams`, `lambda_zero (param) → lam_z`, `simulate_network → simulate_net`, `solve_network (stochastic) → solve_net`, `_time_weighted_mean → compute_time_weighted_mean`, `_model_string → format_model_string`, `aggregate_network → aggregate_net`, `check_requirements → check_reqs`, `sweep_architecture → sweep_arch`, `_find_max_stable_lambda_factor → _find_max_stable_lam_factor`, networks `_setpoint → read_setpoint`, `coefs_delta → compute_coefs_delta`, `network_delta → compute_net_delta`, `ClientConfig / RampConfig / CascadeConfig → *Cfg`, `_avg_request_size → _compute_avg_req_size`, `_specs_from_config → _build_specs_from_cfg`, `_routing_row → _read_routing_row`, `_router_kind_map → _build_router_kind_map`, `lambda_z_entry → get_lam_z_entry`. Full before / after table in [project_b_batch_renames memory](../../.claude/...).
+
+- **Held back**: CSV column names on `SvcResp` (`service_name`, `message`), JSON-backed fields on `ClientCfg` (`entry_service`, `request_size_bytes`, `request_sizes_by_kind`), and PACS Variable-dict JSON keys (`_setpoint`, `_mean`, `_data`, `_dims`, ...). These are wire-schema / on-disk contract; renaming them would break historical replication dumps + force in-lockstep JSON-config edits. Python identifiers flip; disk schemas stay.
+
+- **R15 terminology swept** in `notes/context.md` + `notes/objective.md`: "improve reliability" → "raise reliability", "signals degrade" → "signals fall", "improves freshness" → "raises freshness", "degrades both" → "lowers both". Third-party citation titles (Arteaga Martin / Correal Torres paper) preserved verbatim.
+
+- **New plotter `plot_dim_topology`**: dimensional analog of `plot_qn_topology`, mirrors the 3/4 graph + 1/4 table layout. Default `color_by="eta"` (min-max normalised because eta is unbounded), 2-line node labels (key + theta), architecture-average overlay `$\bar{\theta}, \bar{\sigma}, \bar{\eta}, \bar{\phi}$` in the top-right lightblue box, full coefficient table below the graph. Wired into `03-dimensional.ipynb` as section 4. `data/img/dimensional/<adp>/topology.{png,svg}` now regenerates for every adaptation, bringing dimensional into layout parity with analytic. `plot_nd_heatmap` deliberately kept intact — still called on baseline, still emits `nd_heatmap.{png,svg}`.
+
+- **Tests**: 338 passing, ~6 min wall clock. Notebooks 01-05 re-executed end-to-end; 06-comparison carries a pre-existing `ImportError: _async_run` (method 5 not yet built, unrelated to these renames).
+
+- **Policy pins extracted** (now in CLAUDE.md): (i) wire-schema identifiers off-limits to Python renames; (ii) PACS Variable-dict JSON keys are contract and never touched by a sweep; (iii) scoped renames beat global regex when two modules intentionally share a name; (iv) `notes/audit.md` and `notes/devlog.md` skipped in whole-repo sweeps — they're historical record; (v) dict-subscript `["NAME"]` false-positives need manual review after every whole-word regex sweep.
+
+**Gap flagged, not closed**: `tests/view/test_qn_diagram.py` does not exist; the plotter module is ~1300 lines and a pixel-level regression test is out of scope for this pass. Recorded as an audit gap in `notes/audit.md` Stage 0.10 close.
+
+**Why now.** The user initiated the walk to bring the codebase to a consistent convention floor before the comparison method (method 5) lands on top. Drain the queue, pin the policies, move on.
+
+---
+
 ## 2026-04-22 — Refactor: `composite` now layers on `atomic` via extension points
 
 Removed the duplicated handler step-order body that had grown in `services/atomic.py` and `services/composite.py`. The two handlers were functionally identical — service-time sleep, epsilon Bernoulli, routing pick, dispatch, wrap with `@logger(ctx)` — but with three composite-only wrinkles (kind-dispatch at entry, in-process sibling lookup, per-member routes). The duplication was bounded but about to cost us: `notes/experiment.md §6.3` pins several observables (`mu_measured`, `epsilon_measured`, `chi_measured`, Little's-law check) that would have forced parallel edits in both files before method 5 could land.

@@ -108,14 +108,31 @@ Filename = profile identifier (same rule as inputs). Adding a second profile is 
 ### Figures
 
 ```
-assets/img/<method>/<adaptation>/<figure_name>.{png,svg}
+data/img/<method>/<adaptation>/<figure_name>.{png,svg}
 ```
 
 ### Leaf-filename pattern
 
 - **Profile-stamped** leaves use the profile identifier: `<profile>.json`. The path tells you the method and adaptation; the filename tells you the profile. Symmetric with config inputs (`profile/<profile>.json`).
 - **Content-type** leaves have fixed names: `requirements.json`. These are profile-agnostic schemas consulted independently.
-- Figures under `assets/img/<method>/<adaptation>/` use descriptive lowercase stems (`qn_diagram.png`, `perf_histogram.png`, etc.).
+- Figures under `data/img/<method>/<adaptation>/` use descriptive lowercase stems. Reusable prefixes indicate which plotter produced the figure.
+
+### Plotter filename acronyms
+
+Short prefixes on figure stems identify the source plotter so reviewers can trace a PNG/SVG back to the producing code. Used across `data/img/<method>/...` and the throwaway `_sandbox/` dumps.
+
+| Prefix | Plotter | Expansion |
+|---|---|---|
+| `nd_` | `plot_nd_heatmap` / `plot_nd_diffmap` / `plot_nd_ci` | **n**o**d**e (per-artifact) |
+| `net_` | `plot_net_bars` / `plot_net_delta` | **net**work-wide |
+| `topology` | `plot_qn_topology` / `plot_qn_topology_grid` | QN architecture |
+| `ad_` | `plot_arts_distributions` | **a**rts **d**istributions |
+| `sb_` | `plot_system_behaviour` | **s**ystem **b**ehaviour |
+| `yc_` | `plot_yoly_chart` | **y**oly **c**hart |
+| `yab_` | `plot_yoly_arts_behaviour` | **y**oly **a**rtifact **b**ehaviour |
+| `yac_` | `plot_yoly_arts_charts` | **y**oly **a**rtifact **c**harts |
+
+Example stems: `nd_heatmap.png`, `nd_diffmap_vs_baseline.png`, `net_bars_all.png`, `ad_per_node.png`, `yac_per_node.png`, `yc_tas1.png`, `sb_tas1.png`.
 
 ---
 
@@ -200,7 +217,8 @@ Every method's output lives at `data/results/<method>/<adaptation>/<profile>.jso
 
 - **Purpose.** Small-scale ReSeP + ActivFORMS-lite implementation — ground-truths the other three methods against a real (if simplified) architecture.
 - **Inputs.** Same as analytic plus `method/experiment.json`.
-- **Produces.** `experiment/<a>/<p>.json` with key `variables`; `requirements.json`; event-trace figures.
+- **Produces.** `experiment/<deployment>/<a>/<p>.json` with key `variables`; `requirements.json`; event-trace figures. `<deployment>` = `local` (single laptop) or `remote` (3-machine LAN); `calibration/` sits alongside and holds per-host noise-floor JSONs (no adaptation axis).
+- **Pre-run gate.** Every experiment run MUST be preceded by a calibration against the target host; the run envelope records `baseline_ref` pointing at the JSON under `data/results/experiment/calibration/`. Plan, recipes, and phase checkpoints live in `notes/calibration.md`.
 - **Reference ground truth.** The authors' own TAS 1.6 replication dump lives under `data/reference/` — 3 QoS objectives × 2 adaptation states (`no-adapt`, `simple-adapt`), each with `invocations.csv`, `log.csv`, `results.csv`, and 8 plots. Schema documented in `data/reference/profile.md`. Treat these as the authoritative replication target.
 - **Acceptance.** Reproduces Table IV of [1] within published tolerance: `baseline` failure rate ≈ 0.18, S1/retry-style ≈ 0.11, S2/select-reliable-style ≈ 0.00; experiment variable means fall inside stochastic 95 % CIs for the same adaptation; per-service cost distribution matches `data/reference/<QoS>/<adapt>/results.csv` within replication noise.
 
@@ -242,12 +260,16 @@ The `comparison` method's `requirements.json` rolls this up across all four eval
 One per method, no prefix:
 
 ```
-analytic.ipynb
-stochastic.ipynb
-dimensional.ipynb
-experiment.ipynb
-comparison.ipynb
+01-analytic.ipynb
+02-stochastic.ipynb
+03-dimensional.ipynb
+04-yoly.ipynb
+05-experimental.ipynb
+06-yoly-experimental.ipynb
+07-comparison.ipynb
 ```
+
+The dimensional and experiment methods are each delivered as two notebooks: a focused per-adaptation execution (`03-dimensional.ipynb`, `05-experimental.ipynb`) and a configuration-sweep yoly view (`04-yoly.ipynb`, `06-yoly-experimental.ipynb`). The yoly notebooks share the `src/view/dc_charts.py` plot vocabulary regardless of whether the data came from a closed-form M/M/c/K solve or a prototype measurement.
 
 Each notebook runs the full adaptation axis for its method, displays the resulting variable tables and figures inline, and closes with R1/R2/R3 verdict tables. Zero logic — only imports, `run()` calls, and narrative markdown.
 
@@ -303,11 +325,13 @@ Both paths produce byte-identical artifacts.
 
 ```
 PyDASA-CS1-TAS/
-├── analytic.ipynb
-├── stochastic.ipynb
-├── dimensional.ipynb
-├── experiment.ipynb
-├── comparison.ipynb
+├── 01-analytic.ipynb
+├── 02-stochastic.ipynb
+├── 03-dimensional.ipynb
+├── 04-yoly.ipynb
+├── 05-experimental.ipynb
+├── 06-yoly-experimental.ipynb
+├── 07-comparison.ipynb
 ├── src/
 │   ├── methods/              # orchestrators (one per method)
 │   ├── analytic/  stochastic/  dimensional/  experiment/
