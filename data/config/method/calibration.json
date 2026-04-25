@@ -15,13 +15,13 @@
     "skip_loopback": false,
     "skip_rate_sweep": true,
     "payload_size_bytes": 128000,
-    "inter_level_delay_s": 0.5,
-    "inter_trial_delay_s": 0.5,
+    "inter_level_delay_s": 0.3,
+    "inter_trial_delay_s": 0.3,
     "rate_sweep": {
         "adaptation": "baseline",
-        "rates": [5, 10, 50, 100, 150, 200, 250, 300],
-        "trials_per_rate": 7,
-        "min_samples_per_kind": 32,
+        "rates": [10, 50, 100, 150, 200, 250, 300],
+        "trials_per_rate": 17,
+        "min_samples_per_kind": 37,
         "max_probe_window_s": 4.0,
         "cascade_mode": "rolling",
         "cascade_threshold": 0.10,
@@ -35,6 +35,9 @@
         "K": [50, 100, 200, 500],
         "lambda_steps": 20,
         "lambda_factor_min": 0.05,
-        "util_threshold": 0.95
+        "util_threshold": 0.95,
+        "mu_anchor_req_per_s": 125.0,
+        "lambda_min_req_per_s": 50.0,
+        "lambda_max_req_per_s": 250.0
     }
 }
