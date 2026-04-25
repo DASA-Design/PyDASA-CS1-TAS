@@ -174,7 +174,7 @@ def sweep_artifact(artifact_key: str,
                     _K_lt.append(float(_K_int))
                     _lam_lt.append(float(_lam))
 
-    # subscripted symbol map ready for the dc_charts plotters
+    # subscripted symbol map ready for the src.view.plot_yoly_chart family
     return {
         f"\\theta_{{{artifact_key}}}": np.asarray(_theta_lt, dtype=float),
         f"\\sigma_{{{artifact_key}}}": np.asarray(_sigma_lt, dtype=float),
@@ -278,7 +278,7 @@ def sweep_arch(cfg: NetCfg,
 
     Args:
         cfg (NetCfg): resolved network configuration.
-        sweep_grid (Dict[str, Any]): grid from `data/config/method/dimensional.json::sweep_grid`. Required keys: `mu_factor`, `c`, `K`, `lambda_steps`, `lambda_factor_min`. `util_threshold` read from the grid when not supplied as kwarg.
+        sweep_grid (Dict[str, Any]): grid from `data/config/method/dimensional.json::sweep_grid`. Required keys: `mu_factor`, `c`, `K`, `lambda_steps`, `lambda_factor_min`. Optional key: `util_threshold` (used as the stability cap when the `util_threshold` kwarg is `None`).
         util_threshold (Optional[float]): stability cap; overrides the grid value when supplied.
         model (str): queue model. Defaults to `"M/M/c/K"`.
 

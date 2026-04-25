@@ -15,10 +15,11 @@ Public API:
 # native python modules
 from __future__ import annotations
 
+# data types
+from typing import Dict
+
 # pydasa library
-from pydasa.dimensional.vaschy import Schema
-from pydasa.workflows.influence import SensitivityAnalysis
-from pydasa.workflows.phenomena import AnalysisEngine
+from pydasa import AnalysisEngine, Schema, SensitivityAnalysis
 
 
 def analyse_symbolic(engine: AnalysisEngine,
@@ -28,7 +29,7 @@ def analyse_symbolic(engine: AnalysisEngine,
                      cat: str = "SYM",
                      fwk: str = "CUSTOM",
                      idx: int = 0,
-                     name: str = "sensitivity") -> dict[str, dict[str, float]]:
+                     name: str = "sensitivity") -> Dict[str, Dict[str, float]]:
     """*analyse_symbolic()* run symbolic sensitivity at a single value type.
 
     Args:
@@ -41,7 +42,10 @@ def analyse_symbolic(engine: AnalysisEngine,
         name (str): human-readable workflow name.
 
     Returns:
-        dict[str, dict[str, float]]: nested `{SEN_{coeff}: {var: sensitivity_value}}` over every coefficient in `engine.coefficients` (raw Pi and derived). Non-numeric entries are filtered out.
+        Dict[str, Dict[str, float]]: nested `{SEN_{coeff}: {var: sensitivity_value}}` over every coefficient in `engine.coefficients` (raw Pi and derived). Non-numeric entries are filtered out.
+
+    Raises:
+        ValueError: when `val_type` is not one of `{"mean", "setpoint", "min", "max"}` (propagated from `pydasa.SensitivityAnalysis.analyze_symbolic`).
     """
     # spin up the pydasa workflow and attach the same variables/coefficients (pass by keyword — dataclass field order differs from our arg order)
     _sen = SensitivityAnalysis(_idx=idx,
@@ -56,9 +60,9 @@ def analyse_symbolic(engine: AnalysisEngine,
     _raw = _sen.analyze_symbolic(val_type=val_type)
 
     # reshape: keep only numeric leaves, drop sympy residues
-    _out: dict[str, dict[str, float]] = {}
+    _out: Dict[str, Dict[str, float]] = {}
     for _coef, _vmap in _raw.items():
-        _numeric: dict[str, float] = {}
+        _numeric: Dict[str, float] = {}
         for _var_sym, _val in _vmap.items():
             if isinstance(_val, (int, float)):
                 _numeric[_var_sym] = float(_val)

@@ -29,7 +29,7 @@ import re
 from typing import Any
 
 # pydasa library
-from pydasa.workflows.phenomena import AnalysisEngine
+from pydasa import AnalysisEngine
 
 
 # placeholder matcher for the `{pi[i]}` indices in expr_pattern strings
@@ -66,15 +66,19 @@ def derive_coefs(engine: AnalysisEngine,
                  artifact_key: str) -> dict[str, Any]:
     """*derive_coefs()* apply named coefficient specs to a post-analysis engine.
 
-    Each spec's `symbol` is subscripted with `artifact_key` so the final coefficient symbol becomes e.g. `\\theta_{TAS_{1}}`.
+    Each spec's `symbol` (a bare name like `"theta"`, no leading backslash) is prepended with `\\\\` and subscripted with `artifact_key` so the final coefficient symbol becomes e.g. `\\theta_{TAS_{1}}`.
 
     Args:
         engine (AnalysisEngine): engine with Pi-groups already derived (`run_analysis()` must have been called).
-        specs (list[dict[str, Any]]): coefficient specs from `dimensional.json` with keys `symbol`, `expr_pattern`, `name`, `description`.
+        specs (list[dict[str, Any]]): coefficient specs from `dimensional.json` with keys `symbol` (bare LaTeX name, no leading backslash), `expr_pattern`, `name`, `description`.
         artifact_key (str): artifact identifier in LaTeX subscript form, e.g. `"TAS_{1}"`.
 
     Returns:
         dict[str, Any]: `{full_sym: Coefficient}` for the derived coefficients only; raw Pi-groups remain in `engine.coefficients`.
+
+    Raises:
+        IndexError: when an `expr_pattern` references a Pi-group index outside `engine.coefficients` (propagated from `_resolve_expr`).
+        KeyError: when a spec dict lacks one of the required keys (`symbol`, `expr_pattern`, `name`, `description`).
     """
     # collect the Pi-group keys in order so expr_pattern indices line up
     _pi_keys = [_k for _k in engine.coefficients.keys() if _k.startswith("\\Pi_")]
