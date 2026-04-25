@@ -5,18 +5,18 @@ Module networks.py
 
 Configuration-sweep helpers for the dimensional method's yoly notebook.
 
-Two sweeps, answering different questions:
+Sweeps answering different questions:
 
     - `sweep_artifacts(cfg, sweep_grid)` is an INDEPENDENT per-artifact sweep. Each node's lambda is the seeded analytic value; no routing propagation. Answers *"what is the design space of THIS node in isolation?"*. Useful for per-node introspection but not architecture-level analysis.
-    - `sweep_arch(cfg, sweep_grid, tag="TAS")` is a JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from  `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lams(P, f * lambda_z)` redistributes external  arrivals to per-node rates before the M/M/c/K solve; the first node to saturate stops that combo's ramp, since the whole network's instability is dominated by its busiest node.
+    - `sweep_arch(cfg, sweep_grid, tag="TAS")` is a JACKSON-PROPAGATED whole-network sweep. For each `(mu_factor, c, K)` combo, overrides every node's design knobs uniformly, binary-searches for the max external arrival factor that keeps the whole network stable, then linspaces from `lambda_factor_min * f_max` to `f_max` in `lambda_steps` increments. At every step `solve_jackson_lams(P, f * lambda_z)` redistributes external arrivals to per-node rates before the M/M/c/K solve; the first node to saturate stops that combo's ramp, since the whole network's instability is dominated by its busiest node.
     - `sweep_artifact(key, vars_block, sweep_grid, ...)` is the underlying single-artifact helper used by `sweep_artifacts`.
 
-All three return dicts shape-compatible with the dc_charts plotters. Coefficients are derived via closed-form directly from the M/M/c/K solver (no PyDASA round-trip):
+The three sweep functions return dicts shape-compatible with the `src.view.plot_yoly_arts_charts` family; `_read_setpoint` is a one-line accessor returning a float. Coefficients are derived via closed-form directly from the M/M/c/K solver (no PyDASA round-trip):
 
-    - theta = L / K              (Occupancy)
-    - sigma = lambda * W / L     (Stall, ~1 in steady state)
-    - eta   = chi * K / (mu * c) (Effective-yield)
-    - phi   = M_act / M_buf      (Memory-use, collapses to theta under L * delta / K * delta)
+    - theta = L / K (Occupancy)
+    - sigma = lambda * W / K (Stall, queueing share of capacity)
+    - eta = chi * K / (mu * c) (Effective-yield)
+    - phi = (L * delta) / (K * delta) (Memory-use; explicit byte arithmetic, reduces to L/K under constant delta)
 
 *IMPORTANT:* the sweep is deterministic (not Monte Carlo). For stochastic sampling go through `src.methods.dimensional` plus the dimensional notebook.
 """
@@ -36,7 +36,7 @@ from src.io import NetCfg
 
 
 # default utilisation cap; points with rho at or above this are dropped
-_UTIL_THLD_DEFAULT = 0.95
+_UTIL_THRESH_DEFAULT = 0.95
 
 
 def read_setpoint(vars_block: Dict[str, Dict[str, Any]],
@@ -65,7 +65,7 @@ def sweep_artifact(artifact_key: str,
                    vars_block: Dict[str, Dict[str, Any]],
                    sweep_grid: Dict[str, Any],
                    *,
-                   util_threshold: float = _UTIL_THLD_DEFAULT,
+                   util_threshold: float = _UTIL_THRESH_DEFAULT,
                    model: str = "M/M/c/K") -> Dict[str, np.ndarray]:
     """*sweep_artifact()* sweeps the `(mu, c, K)` design grid AND ramps `lambda` for each combo, returning trace-shaped coefficient curves.
 
@@ -81,7 +81,7 @@ def sweep_artifact(artifact_key: str,
 
     Args:
         artifact_key (str): artifact identifier in LaTeX subscript form (e.g. `"TAS_{1}"`).
-        vars_block (Dict[str, Dict[str, Any]]): the artifact's `vars` dict from the profile JSON. Must carry `\\lambda`, `\\mu`, `\\epsilon`, `\\delta` setpoints (all under the artifact subscript).
+        vars_block (Dict[str, Dict[str, Any]]): the artifact's `vars` dict from the profile JSON. Must carry `\\mu` and `\\epsilon` setpoints under the artifact subscript; `d` is optional (defaults to 1 kB so the phi byte arithmetic still cancels).
         sweep_grid (Dict[str, Any]): grid declared in `data/config/method/dimensional.json::sweep_grid`. Keys: `mu_factor`, `c`, `K`, `lambda_steps`, `lambda_factor_min`.
         util_threshold (float): drop points with `rho >= util_threshold`. Defaults to `0.95`.
         model (str): queue model passed to the `Queue` factory. Defaults to `"M/M/c/K"`.
@@ -95,6 +95,12 @@ def sweep_artifact(artifact_key: str,
     # baselines
     _mu_base = read_setpoint(vars_block, "\\mu", artifact_key)
     _eps = read_setpoint(vars_block, "\\epsilon", artifact_key)
+    # per-request payload (kB); 1 kB fallback so M_act/M_buf reduces to L/K cleanly
+    _d_sym = f"d_{{{artifact_key}}}"
+    if _d_sym in vars_block:
+        _delta_kB = float(vars_block[_d_sym].get("_setpoint", 1.0))
+    else:
+        _delta_kB = 1.0
 
     # lambda iteration parameters from the sweep grid (with safe defaults)
     _n_steps = int(sweep_grid.get("lambda_steps", 30))
@@ -135,7 +141,8 @@ def sweep_artifact(artifact_key: str,
                                    c_max=_c_int,
                                    K_max=_K_int)
                         _q.calculate_metrics()
-                    except Exception:
+                    except (OverflowError, ValueError, ZeroDivisionError):
+                        # M/M/c/K closed-form overflow at large K + c (factorial blow-up); drop the point so genuine bugs still surface as uncaught
                         continue
 
                     if _q.rho >= util_threshold:
@@ -148,10 +155,15 @@ def sweep_artifact(artifact_key: str,
 
                     _chi = float(_lam) * (1.0 - _eps)
                     _theta = _L / _K_int
-                    _sigma = float(_lam) * _W / _L
+                    _sigma = float(_lam) * _W / _K_int
                     _eta = _chi * _K_int / (_mu * _c_int)
-                    # phi = M_act / M_buf = (L * delta) / (K * delta) = L / K
-                    _phi = _L / _K_int
+                    # phi = M_act/M_buf with explicit delta; reduces to L/K under constant payload (sanity-check)
+                    _m_act = _L * _delta_kB
+                    _m_buf = _K_int * _delta_kB
+                    if _m_buf > 0:
+                        _phi = _m_act / _m_buf
+                    else:
+                        _phi = float("nan")
 
                     _theta_lt.append(_theta)
                     _sigma_lt.append(_sigma)
@@ -178,11 +190,11 @@ def sweep_artifact(artifact_key: str,
 def sweep_artifacts(cfg: NetCfg,
                     sweep_grid: Dict[str, List[float]],
                     *,
-                    util_threshold: float = _UTIL_THLD_DEFAULT,
+                    util_threshold: float = _UTIL_THRESH_DEFAULT,
                     model: str = "M/M/c/K",
                     artifact_filter: Iterable[str] = ()
                     ) -> Dict[str, Dict[str, np.ndarray]]:
-    """*sweep_artifacts()* runs `sweep_artifact` INDEPENDENTLY for every node of a resolved `NetCfg` and returns the nested cloud dict consumed by `src.view.dc_charts.plot_yoly_arts_*`.
+    """*sweep_artifacts()* runs `sweep_artifact` INDEPENDENTLY for every node of a resolved `NetCfg` and returns the nested cloud dict consumed by `src.view.plot_yoly_arts_charts` and friends.
 
     Each artifact is swept as if it were an isolated M/M/c/K queue; routing is NOT propagated. For the architecture-level view (where changing one node's design affects everyone else through routing) use `sweep_arch`.
 
@@ -277,14 +289,14 @@ def sweep_arch(cfg: NetCfg,
     if util_threshold is not None:
         _util = util_threshold
     else:
-        _util = float(sweep_grid.get("util_threshold", _UTIL_THLD_DEFAULT))
+        _util = float(sweep_grid.get("util_threshold", _UTIL_THRESH_DEFAULT))
     _mu_factors = sweep_grid.get("mu_factor", [1.0])
     _c_vals = sweep_grid.get("c", [1])
     _K_vals = sweep_grid.get("K", [10])
     _n_steps = int(sweep_grid.get("lambda_steps", 10))
     _lam_min_frac = float(sweep_grid.get("lambda_factor_min", 0.05))
 
-    # pre-read per-node seeds for the scaling + failure-probability access
+    # pre-read per-node mu setpoints + entry lambda_z; reused across every (mu_factor, c, K) combo
     _arts = cfg.artifacts
     _mu_base = np.array([float(_a.mu) for _a in _arts], dtype=float)
     _lz_base = cfg.build_lam_z_vec()
@@ -344,7 +356,8 @@ def sweep_arch(cfg: NetCfg,
                                        c_max=_c_int,
                                        K_max=_K_int)
                             _q.calculate_metrics()
-                        except Exception:
+                        except (OverflowError, ValueError, ZeroDivisionError):
+                            # solver overflow at large K + c flags this combo as unstable for the rest of the lambda ramp
                             _unstable = True
                             break
                         if _q.rho >= _util or _q.avg_len <= 0:
@@ -352,8 +365,9 @@ def sweep_arch(cfg: NetCfg,
                             break
                         _solved.append((_a, _lam_i, _mu_i, _q))
 
+                    # stop this combo's lambda ramp on the first unstable point
                     if _unstable:
-                        break  # stop this combo's lambda ramp
+                        break
 
                     # record one stable sweep point per artifact
                     for _a, _lam_i, _mu_i, _q in _solved:
@@ -361,13 +375,24 @@ def sweep_arch(cfg: NetCfg,
                         _L = float(_q.avg_len)
                         _W = float(_q.avg_wait)
                         _eps = float(_a.vars[f"\\epsilon_{{{_k}}}"]["_setpoint"])
+                        # per-artifact per-request payload (kB); 1 kB fallback when missing
+                        _d_sym = f"d_{{{_k}}}"
+                        if _d_sym in _a.vars:
+                            _delta_kB = float(_a.vars[_d_sym]["_setpoint"])
+                        else:
+                            _delta_kB = 1.0
 
                         _chi = _lam_i * (1.0 - _eps)
                         _theta = _L / _K_int
-                        _sigma = _lam_i * _W / _L
+                        _sigma = _lam_i * _W / float(_K_int)
                         _eta = _chi * _K_int / (_mu_i * _c_int)
-                        # phi = M_act/M_buf = (L * delta) / (K * delta) = L / K
-                        _phi = _L / _K_int
+                        # phi = M_act/M_buf with explicit delta; reduces to L/K under constant payload (sanity-check)
+                        _m_act = _L * _delta_kB
+                        _m_buf = _K_int * _delta_kB
+                        if _m_buf > 0:
+                            _phi = _m_act / _m_buf
+                        else:
+                            _phi = float("nan")
 
                         _per_art[_k][f"\\theta_{{{_k}}}"].append(_theta)
                         _per_art[_k][f"\\sigma_{{{_k}}}"].append(_sigma)

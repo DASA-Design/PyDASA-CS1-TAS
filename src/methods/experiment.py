@@ -5,9 +5,9 @@ Module experiment.py
 
 Architectural experiment orchestrator: method 4 of the CS-01 TAS pipeline.
 
-Spins up a FastAPI microservice replication of the TAS topology, drives a deterministic-rate client ramp through `TAS_{1}`, collects per-invocation logs per service, and produces the standard envelope shape (per-node DataFrame + network aggregate + R1 / R2 / R3 verdict).
+Spins up a FastAPI microservice mesh that mirrors the TAS topology, drives a deterministic-rate client ramp through `TAS_{1}`, collects per-invocation logs per service, and produces the standard envelope shape (per-node DataFrame + network aggregate + R1 / R2 / R3 verdict).
 
-The experiment validates DASA's **technology-agnosticism**: the analytic / dimensional predictions should hold on a completely independent stack. It does NOT reproduce the original authors' ReSeP / Java numbers.
+The experiment validates DASA's technology-agnosticism: the analytic / dimensional predictions should hold on a completely independent stack. It does NOT reproduce the original authors' ReSeP / Java TAS numbers.
 
 Public API:
     - `run(adp, prf, scn, wrt, method_cfg=None)` standard orchestrator contract.
@@ -24,13 +24,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import ctypes
+import gc
 import json
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 # data types
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 # scientific stack
 import numpy as np
@@ -52,10 +55,7 @@ from src.io import (NetCfg, calibration_age_hours, calibration_band_us,
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
 
-# Hours after which a calibration envelope is considered stale (warning
-# only; still proceeds). Anything below this threshold is accepted
-# without comment; older runs get a printed warning so the reporting
-# path keeps using the number but the operator knows it may drift.
+# Hours after which a calibration is considered stale (warning only)
 _CALIB_STALE_HOURS: float = 24.0
 
 
@@ -64,7 +64,7 @@ def _resolve_baseline(*,
                       verbose: bool = True) -> Optional[Dict[str, Any]]:
     """*_resolve_baseline()* load the most recent calibration for this host.
 
-    Enforces the pre-run gate planned for the experiment method: every run must reference a noise-floor calibration from the host it is running on, so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
+    Enforces the pre-run calibration gate: every run must reference a recent noise-floor calibration for the host so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
 
     Args:
         skip (bool): if True, bypass the gate entirely and return `None`. A loud warning is printed so downstream consumers know reported numbers are un-adjusted.
@@ -147,18 +147,19 @@ def _windows_timer_resolution(period_ms: int = 1):
     precision on Windows). No-op on non-Windows platforms.
 
     Args:
-        period_ms (int): requested timer floor in milliseconds. The OS
-            clamps this to the supported range (typically 1-15 ms).
+        period_ms (int): requested timer floor in milliseconds. The OS clamps this to the supported range (typically 1-15 ms).
+
+    Yields:
+        None: contextmanager body produces no value; entering the block raises the timer resolution, exiting restores it.
     """
     if sys.platform != "win32":
         yield
         return
 
     try:
-        import ctypes
         _winmm = ctypes.WinDLL("winmm")
     except (OSError, AttributeError):
-        # winmm unavailable -> silently fall back to default resolution
+        # winmm unavailable -> fall back to default resolution
         yield
         return
 
@@ -200,6 +201,9 @@ def _build_svc_df_from_logs(cfg: NetCfg,
 
     Returns:
         pd.DataFrame: one row per artifact with the analytic-schema columns plus `buffer_reject_rate`.
+
+    Raises:
+        pandas.errors.EmptyDataError: when a per-service CSV exists but is empty (zero rows including header). Missing CSVs are tolerated and produce zero-filled rows.
     """
     _rows: List[Dict[str, Any]] = []
 
@@ -220,10 +224,7 @@ def _build_svc_df_from_logs(cfg: NetCfg,
             _df = pd.read_csv(_csv)
             _n = len(_df)
 
-            # CSVs serialise the success column as the strings "True" /
-            # "False"; pandas reads them back as object-dtype, and
-            # `.astype(bool)` of a non-empty string is unconditionally
-            # True. Coerce explicitly so business-failure splits work.
+            # pandas reads success="True"/"False" as object-dtype; astype(bool) is wrong, coerce via str.lower().eq("true")
             _succ_col = _df["success"]
             if _succ_col.dtype != bool:
                 _succ_bool = _succ_col.astype(str).str.lower().eq("true")
@@ -265,15 +266,12 @@ def _build_svc_df_from_logs(cfg: NetCfg,
                 _W = float(np.nanmean(_end - _recv))
                 _Wq = float(np.nanmean(_start - _recv))
 
-                # operational utilisation U = B / (T * c), where B is the
-                # total busy time across the c server slots. Identity U=X*S
-                # holds by construction (no PASTA assumption needed)
+                # operational U = B / (T*c); identity U = X*S holds by construction (no PASTA needed)
                 _B = float(np.nansum(_end - _start))
                 _c = max(int(_a.c), 1)
                 _rho = _B / (duration_s * _c)
 
-                # operational throughput X = C / T; use this in Little's law
-                # rather than lambda so failed completions don't inflate L
+                # X = C / T; use in Little's law so failed completions don't inflate L
                 _X = len(_succ) / duration_s
                 _L = _X * _W
                 _Lq = _X * _Wq
@@ -313,11 +311,11 @@ async def _run_async(cfg: NetCfg,
 
     Returns:
         Dict[str, Any]: ramp output plus `duration_s` and `service_log_counts`.
+
+    Raises:
+        Exception: any error raised by `ExperimentLauncher` startup, `ClientSimulator.run_ramp()`, `_lnc.snapshot_config`, or `_lnc.flush_logs` propagates unmodified so the caller's replicate loop can decide whether to retry or abort.
     """
-    # boost the Windows system-timer resolution to 1 ms for the lifetime
-    # of this run so asyncio.sleep can resolve sub-15-ms interarrivals
-    # (no-op on non-Windows). Anchored here so every per-replicate call
-    # to _run_async benefits without each caller having to remember it.
+    # 1 ms timer resolution for the lifetime of this run; no-op off-Windows
     with _windows_timer_resolution(1):
         async with ExperimentLauncher(cfg=cfg,
                                       method_cfg=method_cfg,
@@ -328,7 +326,7 @@ async def _run_async(cfg: NetCfg,
             # scalar fallback kept for back-compat with tests that don't define a full sizes-by-kind map; defaults to the analyse_request size
             _req_size = int(_sizes_by_kind.get("analyse_request", 256))
 
-            # FR-3.5: if ramp.rho_grid is set, invert it to rates via the analytic Jackson solver and keep the per-point metadata for post-run probe annotation. Either rates or rho_grid is authoritative (validate_ramp rejects both).
+            # FR-3.5: invert rho_grid to rates via Jackson solver; rates and rho_grid are mutually exclusive (validate_ramp enforces)
             _ramp_block = dict(method_cfg["ramp"])
             _rho_grid_meta: List[Dict[str, Any]] = []
             if _ramp_block.get("rho_grid"):
@@ -390,6 +388,63 @@ async def _run_async(cfg: NetCfg,
     return _ans
 
 
+def _run_async_safe(
+    coro_factory: Callable[[], Awaitable[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """*_run_async_safe()* drive an awaitable from a sync caller, even when an event loop is already running (Jupyter, IPython, calibration's rate sweep).
+
+    `asyncio.run()` raises `RuntimeError: asyncio.run() cannot be called from a running event loop` whenever an ambient loop is alive. This helper detects that case and dispatches `coro_factory()` to a fresh `ProactorEventLoop` (Windows) / `SelectorEventLoop` (POSIX) on a daemon worker thread, then joins. With no ambient loop it falls back to the simpler `asyncio.run` path so CLI invocations stay unchanged.
+
+    Mirrors the trick `src.methods.calibration._run_probes_in_dedicated_loop` already uses for the high-fd-count probe path, but kept local to this module so the experiment runner has no calibration import dependency.
+
+    Args:
+        coro_factory: zero-arg callable returning the coroutine to run. Re-invoked from inside the worker thread so the coroutine binds to the worker-thread loop.
+
+    Raises:
+        Exception: re-raises any exception that fired inside the worker thread.
+
+    Returns:
+        Dict[str, Any]: the awaitable's resolved result.
+    """
+    try:
+        asyncio.get_running_loop()
+        _ambient_loop = True
+    except RuntimeError:
+        _ambient_loop = False
+
+    if not _ambient_loop:
+        return asyncio.run(coro_factory())
+
+    _result_box: List[Any] = [None]
+    _error_box: List[Optional[BaseException]] = [None]
+
+    def _worker() -> None:
+        try:
+            if sys.platform == "win32":
+                _loop = asyncio.ProactorEventLoop()
+            else:
+                _loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(_loop)
+                _result_box[0] = _loop.run_until_complete(coro_factory())
+            finally:
+                _loop.close()
+        except BaseException as _exc:
+            _error_box[0] = _exc
+
+    _t = threading.Thread(target=_worker, daemon=False)
+    _t.start()
+    _t.join()
+    _err = _error_box[0]
+    if _err is not None:
+        raise _err
+    _out = _result_box[0]
+    _result_box.clear()
+    _error_box.clear()
+    gc.collect()
+    return _out
+
+
 def run(adp: Optional[str] = None,
         prf: Optional[str] = None,
         scn: Optional[str] = None,
@@ -411,7 +466,7 @@ def run(adp: Optional[str] = None,
         verbose (bool): when False, suppress the calibration stale / skip warnings; metric output is unaffected.
 
     Returns:
-        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `baseline`, `paths`.
+        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `client_effective_rate`, `log_drop_counts`, `replicates`, `baseline`, `paths`.
 
     Raises:
         RuntimeError: when `skip_calibration` is False and no calibration exists for the current host.
@@ -426,7 +481,7 @@ def run(adp: Optional[str] = None,
         _mcfg = load_method_cfg("experiment")
     _adp = adp or "baseline"
 
-    # FR-3.8: replicate loop. Per-replicate seed = derive_seed(root, "rep_<k>") using the same FNV-1a machine that seeds every per-service RNG, so replicate seeds are stable across processes and distinct from every per-service seed. R=1 keeps the flat log-dir layout (back-compat).
+    # FR-3.8: per-replicate seed = derive_seed(root, "rep_<k>"); R=1 keeps flat log-dir layout
     _replications = int(_mcfg.get("replications", 1))
     _root_seed = int(_mcfg.get("seed", 0))
     _replicates: List[Dict[str, Any]] = []
@@ -446,16 +501,23 @@ def run(adp: Optional[str] = None,
             else:
                 _log_dir = _base_dir / f"rep_{_k}"
             _log_dir.mkdir(parents=True, exist_ok=True)
-            _run_out = asyncio.run(
-                _run_async(_cfg, _rep_mcfg, _adp, _log_dir))
-            _nds = _build_svc_df_from_logs(_cfg, _log_dir,
+            _run_out = _run_async_safe(lambda: _run_async(_cfg,
+                                                          _rep_mcfg,
+                                                          _adp,
+                                                          _log_dir))
+            _nds = _build_svc_df_from_logs(_cfg,
+                                           _log_dir,
                                            _run_out["duration_s"])
         else:
             with tempfile.TemporaryDirectory() as _tmp_str:
                 _log_dir = Path(_tmp_str)
-                _run_out = asyncio.run(
-                    _run_async(_cfg, _rep_mcfg, _adp, _log_dir))
-                _nds = _build_svc_df_from_logs(_cfg, _log_dir,
+                _run_out = _run_async_safe(
+                    lambda: _run_async(_cfg,
+                                       _rep_mcfg,
+                                       _adp,
+                                       _log_dir))
+                _nds = _build_svc_df_from_logs(_cfg,
+                                               _log_dir,
                                                _run_out["duration_s"])
 
         _net = aggregate_net(_nds)
@@ -510,9 +572,7 @@ def run(adp: Optional[str] = None,
         "paths": _paths,
     }
 
-    # P1.2 invariant: a healthy run never overflows the per-service
-    # log buffer. A non-zero count means observations were lost; warn
-    # so the operator notices, and surface the counts on the envelope.
+    # P1.2 invariant: log-buffer overflow == lost observations; warn loud so the operator notices
     if verbose and _ans["log_drop_counts"]:
         print(f"WARNING: per-service log buffer overflowed: "
               f"{_ans['log_drop_counts']}. Raise `SvcCtx.log_maxlen` "
@@ -587,31 +647,33 @@ def _write_results(cfg: NetCfg,
 def main() -> None:
     """*main()* CLI entry point.
 
-    Parses flags, calls `run()`, and prints a one-screen summary
-    plus the paths of any written files.
+    Parses flags, calls `run()`, and prints a one-screen summary plus the paths of any written files.
+
+    Side Effects:
+        Prints summary lines to stdout. When `--no-write` is NOT set, writes `<scenario>/<profile>.json` and `<scenario>/requirements.json` under `data/results/experiment/`, and per-service CSV logs in the same scenario directory.
     """
     _parser = argparse.ArgumentParser(
-        description="Architectural experiment for CS-01 TAS.",)
+        description="Architectural experiment for CS-01 TAS.")
 
     _parser.add_argument("--adaptation",
                          choices=["baseline", "s1", "s2", "aggregate"],
                          default=None,
-                         help="adaptation state",)
+                         help="adaptation state")
     _parser.add_argument("--profile",
                          choices=["dflt", "opti"],
                          default=None,
-                         help="explicit profile file stem",)
+                         help="explicit profile file stem")
     _parser.add_argument("--scenario",
                          default=None,
-                         help="explicit scenario name",)
+                         help="explicit scenario name")
     _parser.add_argument("--no-write",
                          action="store_true",
-                         help="skip writing result files",)
+                         help="skip writing result files")
     _parser.add_argument("--skip-calibration",
                          action="store_true",
                          help=("bypass the pre-run calibration gate; "
                                "a warning is printed and the baseline "
-                               "is NOT subtracted from reported latencies"),)
+                               "is NOT subtracted from reported latencies"))
 
     _args = _parser.parse_args()
 
@@ -619,7 +681,7 @@ def main() -> None:
                   prf=_args.profile,
                   scn=_args.scenario,
                   wrt=not _args.no_write,
-                  skip_calibration=_args.skip_calibration,)
+                  skip_calibration=_args.skip_calibration)
 
     _cfg = _result["config"]
     _net = _result["network"].iloc[0]
