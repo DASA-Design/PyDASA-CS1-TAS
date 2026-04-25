@@ -3,17 +3,17 @@
 Module reshape.py
 =================
 
-Result-envelope reshapers for the dimensional method. Turn the per-artifact dict produced by `src.methods.dimensional.run` into the flat pandas shapes the existing `src.view.qn_diagram` plotters consume.
+Result-envelope reshapers for the dimensional method. Turn the per-artifact dict produced by `src.methods.dimensional.run` into the flat pandas shapes the `src.view` plotter family consumes (`plot_nd_diffmap`, `plot_net_delta`, `plot_yoly_chart`, `plot_yoly_arts_charts`, ...).
 
 Public API:
     - `coefs_to_nodes(result)` per-node DataFrame with one row per artifact and columns `key`, `theta`, `sigma`, `eta`, `phi` (only those coefficients that were derived).
     - `coefs_to_net(result, agg="mean")` single-row DataFrame of network-wide aggregates across artifacts.
     - `compute_coefs_delta(nds_dflt, nds_other, *, pct=True)` the fractional change frame used by `plot_nd_diffmap` / `plot_net_delta`.
-    - `aggregate_arch_coefs(result, tag="TAS")` PACS- iter2-style architecture-level aggregate (sum first, divide after).
+    - `aggregate_arch_coefs(result, tag="TAS")` PACS-iter2-style architecture-level aggregate (sum first, divide after).
     - `aggregate_sweep_to_arch(sweep_data, tag="TAS")` collapse per-artifact sweep arrays into flat architecture-level arrays.
     - `compute_net_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
 
-*IMPORTANT:* coefficient names drop the artifact subscript here (the symbol `\\theta_{TAS_{1}}` becomes column `theta`) so the plotters see uniform column names across artifacts.
+*IMPORTANT:* in `coefs_to_nodes` / `coefs_to_net` / `compute_coefs_delta` coefficient names drop the artifact subscript (the symbol `\\theta_{TAS_{1}}` becomes column `theta`) so plotters see uniform column names across artifacts; `aggregate_arch_coefs` and `aggregate_sweep_to_arch` keep the subscript (their output already represents a single architecture-level entity tagged once).
 """
 # native python modules
 from __future__ import annotations
@@ -26,9 +26,43 @@ import numpy as np
 import pandas as pd
 
 
-# short-name mapping from the PACS LaTeX symbols used in coefficient keys
-# to flat pandas column names
+# short-name map: PACS LaTeX coefficient keys -> flat pandas column names
 _COEF_NAMES = ("theta", "sigma", "eta", "phi")
+
+
+def _safe_div(num: float, den: float) -> float:
+    """*_safe_div()* divide `num` by `den` with a zero-denominator guard.
+
+    Args:
+        num (float): numerator.
+        den (float): denominator. Non-positive (zero or negative) values short-circuit to 0.0.
+
+    Returns:
+        float: `num / den` when `den > 0`, else `0.0`. Avoids the four-line `if/else` repeat that the architecture-level aggregator would otherwise carry per coefficient.
+    """
+    if den > 0:
+        return num / den
+    return 0.0
+
+
+def _per_combo_mean(sweep_data: Dict[str, Dict[str, np.ndarray]],
+                    art_keys: List[str],
+                    sym_template: str) -> np.ndarray:
+    """*_per_combo_mean()* average a per-artifact array (e.g. `c_{<art>}`, `\\mu_{<art>}`, `K_{<art>}`) across the artifact axis at every sweep point.
+
+    Used in `aggregate_sweep_to_arch` because uniform `(mu_factor, c, K)` overrides per combo make every artifact's value identical at a given sweep index; the mean equals any-artifact value but is a defensive choice.
+
+    Args:
+        sweep_data (Dict[str, Dict[str, np.ndarray]]): nested sweep output (artifact_key -> per-combo block).
+        art_keys (List[str]): artifact key list to iterate.
+        sym_template (str): str.format-style template with a `{art}` placeholder. Pass with literal-brace escaping for the LaTeX subscript braces, e.g. `"c_{{{art}}}"`, `"\\\\mu_{{{art}}}"`, `"K_{{{art}}}"`. The `{art}` token is substituted with each artifact key when looking up the per-block array.
+
+    Returns:
+        np.ndarray: mean across artifacts at every sweep index; shape matches the per-artifact arrays.
+    """
+    _stack = np.stack([sweep_data[_k][sym_template.format(art=_k)]
+                       for _k in art_keys])
+    return np.mean(_stack, axis=0)
 
 
 def _extract_coef_column(full_sym: str) -> str:
@@ -162,17 +196,20 @@ def aggregate_arch_coefs(result: Dict[str, Any],
     This answers *"what is the TAS as a WHOLE doing?"* rather than *"what is the typical node doing?"*. The per-node `coefs_to_net` averages pre-computed per-node coefficients; this one sums raw L, K, lambda, ... across every artifact in the network and derives ONE theta / sigma / eta / phi / epsilon at the architecture level.
 
         - theta_arch = (sum L_i) / (sum K_i)
-        - sigma_arch = (sum lambda_i * W_i) / (sum L_i)
+        - sigma_arch = (sum lambda_i * W_i) / (sum K_i)
         - eta_arch   = (sum chi_i * K_i) / (sum mu_i * c_i)
         - phi_arch   = (sum M_act_i) / (sum M_buf_i)
         - epsilon_arch = 1 - prod(1 - epsilon_i)
 
     Args:
-        result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`. Must carry `config` (a `NetCfg`) so raw per-artifact variable setpoints can be read.
+        result (Dict[str, Any]): result dict returned by `src.methods.dimensional.run`. Must carry `config` (a `NetCfg`) so raw per-artifact variable setpoints can be read. Each artifact's `vars` block must carry the literal keys `L_{<key>}`, `K_{<key>}`, `W_{<key>}`, `\\lambda_{<key>}`, `\\chi_{<key>}`, `\\mu_{<key>}`, `c_{<key>}`, `M_{act_{<key>}}`, `M_{buf_{<key>}}`, `\\epsilon_{<key>}` (PACS variable schema).
         tag (str): architecture subscript to use in the output column keys. Defaults to `"TAS"` so columns become `\\theta_{TAS}`, `\\sigma_{TAS}`, ..., matching the PACS iter2 `\\theta_{PACS}` convention one-for-one.
 
     Returns:
         pd.DataFrame: single-row frame with `nodes` (count) plus `\\theta_{<tag>}`, `\\sigma_{<tag>}`, `\\eta_{<tag>}`, `\\phi_{<tag>}`, `\\epsilon_{<tag>}`.
+
+    Raises:
+        KeyError: when an artifact's `vars` block lacks one of the expected setpoints (any of L, K, W, lambda, chi, mu, c, M_act, M_buf, epsilon).
     """
     _cfg = result["config"]
     _arts = _cfg.artifacts
@@ -213,27 +250,11 @@ def aggregate_arch_coefs(result: Dict[str, Any],
         _sum_m_buf += _m_buf
         _prod_1_minus_eps *= (1.0 - _eps)
 
-    # derive architecture-level coefficients (guard against zero denominators)
-    if _sum_K > 0:
-        _theta_arch = _sum_L / _sum_K
-    else:
-        _theta_arch = 0.0
-
-    if _sum_L > 0:
-        _sigma_arch = _sum_lamW / _sum_L
-    else:
-        _sigma_arch = 0.0
-
-    if _sum_mu_c > 0:
-        _eta_arch = _sum_chi_K / _sum_mu_c
-    else:
-        _eta_arch = 0.0
-
-    if _sum_m_buf > 0:
-        _phi_arch = _sum_m_act / _sum_m_buf
-    else:
-        _phi_arch = 0.0
-
+    # derive architecture-level coefficients (zero-denominator guard via _safe_div)
+    _theta_arch = _safe_div(_sum_L, _sum_K)
+    _sigma_arch = _safe_div(_sum_lamW, _sum_K)
+    _eta_arch = _safe_div(_sum_chi_K, _sum_mu_c)
+    _phi_arch = _safe_div(_sum_m_act, _sum_m_buf)
     _eps_arch = 1.0 - _prod_1_minus_eps
 
     # assemble the single-row envelope; keys follow the PACS-style subscript
@@ -258,7 +279,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
     Aggregation at each sweep index `k`:
 
         - theta_arch[k] = (sum_i L_i[k]) / (sum_i K_i[k])
-        - sigma_arch[k] = (sum_i lambda_i[k] * W_i[k]) / (sum_i L_i[k])
+        - sigma_arch[k] = (sum_i lambda_i[k] * W_i[k]) / (sum_i K_i[k])
         - eta_arch[k]   = (sum_i chi_i[k] * K_i[k]) / (sum_i mu_i[k] * c_i[k])
         - phi_arch[k]   = (sum_i M_act_i[k]) / (sum_i M_buf_i[k])
         - lambda_arch[k] = sum_i lambda_i[k]             # total traffic through the network
@@ -268,7 +289,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         tag (str): architecture subscript applied to the flat output keys. Defaults to `"TAS"` so outputs are `\\theta_{TAS}`, `\\sigma_{TAS}`, ....
 
     Returns:
-        Dict[str, np.ndarray]: flat dict keyed by full LaTeX symbol with `tag` subscript. Shape-compatible with `src.view.dc_charts.plot_yoly_chart` and `plot_system_behaviour` (they lookup by semantic prefix).
+        Dict[str, np.ndarray]: flat dict keyed by full LaTeX symbol with `tag` subscript. Shape-compatible with `src.view.plot_yoly_chart` and `src.view.plot_system_behaviour` (they look up by semantic prefix).
     """
     _art_keys = list(sweep_data.keys())
     if not _art_keys:
@@ -279,7 +300,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
                 f"c_{{{tag}}}": _empty, f"\\mu_{{{tag}}}": _empty,
                 f"K_{{{tag}}}": _empty, f"\\lambda_{{{tag}}}": _empty}
 
-    # one artifact decides the sweep length; all others must match
+    # one artifact decides the sweep length; sweep_arch guarantees alignment across artifacts
     _first = _art_keys[0]
     _n = len(sweep_data[_first][f"\\theta_{{{_first}}}"])
 
@@ -301,10 +322,9 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         _mu = _block[f"\\mu_{{{_k}}}"]
         _lam = _block[f"\\lambda_{{{_k}}}"]
 
-        # reconstruct raw node variables from the stored ratios so we can sum
-        _L = _theta * _K                     # theta = L / K  ->  L = theta * K
-        _lam_W = _sigma * _L                 # sigma = lam*W / L  ->  lam*W = sigma * L
-        # eta = chi*K / (mu*c)  ->  chi*K = eta*mu*c
+        # reconstruct raw node vars (L, lam*W, chi*K) from stored ratios so we can sum point-by-point
+        _L = _theta * _K
+        _lam_W = _sigma * _K
         _chi_K = _eta * _mu * _c
 
         _sum_L += _L
@@ -314,24 +334,20 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         _sum_mu_c += _mu * _c
         _sum_lam += _lam
 
-    # guard against zero denominators on unstable / empty slices
-    _theta_arch = np.where(_sum_K > 0, _sum_L /
-                           np.where(_sum_K > 0, _sum_K, 1.0), 0.0)
-    _sigma_arch = np.where(_sum_L > 0, _sum_lamW /
-                           np.where(_sum_L > 0, _sum_L, 1.0), 0.0)
-    _eta_arch = np.where(_sum_mu_c > 0, _sum_chi_K /
-                         np.where(_sum_mu_c > 0, _sum_mu_c, 1.0), 0.0)
+    # guard against zero denominators on unstable / empty slices via per-element where-clamp
+    _K_safe = np.where(_sum_K > 0, _sum_K, 1.0)
+    _muc_safe = np.where(_sum_mu_c > 0, _sum_mu_c, 1.0)
+    _theta_arch = np.where(_sum_K > 0, _sum_L / _K_safe, 0.0)
+    _sigma_arch = np.where(_sum_K > 0, _sum_lamW / _K_safe, 0.0)
+    _eta_arch = np.where(_sum_mu_c > 0, _sum_chi_K / _muc_safe, 0.0)
     # phi = M_act/M_buf = (L*delta)/(K*delta) = L/K = theta under the CS-01 TAS schema
     _phi_arch = _theta_arch
 
     # uniform (mu_factor, c, K) override per combo means mean == any-artifact value
-    _c_mean = np.mean(np.stack([sweep_data[_k][f"c_{{{_k}}}"]
-                                for _k in _art_keys]), axis=0)
-    _mu_mean = np.mean(np.stack([sweep_data[_k][f"\\mu_{{{_k}}}"]
-                                 for _k in _art_keys]), axis=0)
-    _K_mean = np.mean(np.stack([sweep_data[_k][f"K_{{{_k}}}"]
-                                for _k in _art_keys]), axis=0)
-    ans = {
+    _c_mean = _per_combo_mean(sweep_data, _art_keys, "c_{{{art}}}")
+    _mu_mean = _per_combo_mean(sweep_data, _art_keys, "\\mu_{{{art}}}")
+    _K_mean = _per_combo_mean(sweep_data, _art_keys, "K_{{{art}}}")
+    _ans = {
         f"\\theta_{{{tag}}}": _theta_arch,
         f"\\sigma_{{{tag}}}": _sigma_arch,
         f"\\eta_{{{tag}}}": _eta_arch,
@@ -341,7 +357,7 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
         f"K_{{{tag}}}": _K_mean,
         f"\\lambda_{{{tag}}}": _sum_lam,
     }
-    return ans
+    return _ans
 
 
 def compute_net_delta(net_dflt: pd.DataFrame,
@@ -351,8 +367,8 @@ def compute_net_delta(net_dflt: pd.DataFrame,
     """*compute_net_delta()* computes the network-wide coefficient delta between two scenarios.
 
     Args:
-        net_dflt (pd.DataFrame): baseline single-row network frame.
-        net_other (pd.DataFrame): adapted single-row network frame.
+        net_dflt (pd.DataFrame): baseline single-row network frame, typically the output of `coefs_to_net`.
+        net_other (pd.DataFrame): adapted single-row network frame; same shape as `net_dflt`. Both must be single-row; only the first row (`.iloc[0]`) is read.
         pct (bool): if True (default), return fractional change; if False, return absolute change.
 
     Returns:
