@@ -10,7 +10,7 @@ Every `experiment` run should reference the latest calibration JSON by timestamp
 Kept deliberately small and dependency-light:
 
     - `time.perf_counter_ns()` throughout; integer arithmetic in the hot path, seconds only at JSON-write time.
-    - FastAPI `/ping` runs in a background uvicorn thread so the loopback probe measures real TCP loopback, not ASGI in-process shortcuts.
+    - A vernier echo service (`mount_vernier_svc` -> `POST /invoke`) runs in a background uvicorn thread so the loopback probe measures real TCP loopback, not ASGI in-process shortcuts. Requests carry a `SvcReq` body whose `payload.blob` is `payload_size_bytes` long, so the bytes traverse the kernel buffer + ASGI stack end-to-end and `phi` becomes informative.
     - `winmm.timeBeginPeriod(1)` is wrapped around the probe block via a contextmanager so asyncio.sleep can resolve sub-15-ms intervals on Windows.
 
 Run::
@@ -58,6 +58,13 @@ import numpy as np
 import httpx
 import uvicorn
 from fastapi import FastAPI
+
+# local modules
+from src.experiment.payload import generate_payload
+from src.experiment.services import (SvcReq,
+                                     SvcSpec,
+                                     make_base_app,
+                                     mount_vernier_svc)
 
 _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
@@ -291,13 +298,36 @@ def measure_jitter(samples: int) -> Dict[str, float]:
 
 
 def _build_ping_app() -> FastAPI:
-    """*_build_ping_app()* minimal FastAPI app exposing `GET /ping`."""
-    _app = FastAPI()
+    """*_build_ping_app()* FastAPI app with the vernier echo route.
 
-    @_app.get("/ping")
-    async def _ping() -> Dict[str, bool]:
-        return {"ok": True}
+    Mounts a single terminal `mount_vernier_svc` handler on the app. SvcSpec knobs come from `data/config/method/calibration.json`: `c` and `K` are the first elements of `sweep_grid.{c, K}`; `mu` and `epsilon` are zero so the loopback floor stays honest; `mem_per_buffer` is derived from `payload_size_bytes * K * SvcSpec.MEM_HEADROOM_FACTOR`.
 
+    Returns:
+        FastAPI: app with `/healthz` (from `make_base_app`) and `/invoke` (from vernier).
+    """
+    _grid = _CALIB_CFG.get("sweep_grid", {})
+    _payload_bytes = int(_DEFAULT_PAYLOAD_SIZE_BYTES)
+    _c_list = _grid.get("c", [1])
+    _K_list = _grid.get("K", [50])
+    if _c_list:
+        _c = int(_c_list[0])
+    else:
+        _c = 1
+    if _K_list:
+        _K = int(_K_list[0])
+    else:
+        _K = 50
+    _spec = SvcSpec(name="CALIB",
+                    role="atomic",
+                    port=int(_DEFAULT_PORT),
+                    mu=0.0,
+                    epsilon=0.0,
+                    c=_c,
+                    K=_K,
+                    seed=0,
+                    mem_per_buffer=int(_payload_bytes * _K * SvcSpec.MEM_HEADROOM_FACTOR))
+    _app = make_base_app("calibration-vernier")
+    mount_vernier_svc(_app, _spec, payload_size_bytes=_payload_bytes)
     return _app
 
 
@@ -329,11 +359,11 @@ class _UvicornThread(threading.Thread):
         self._server.run()
 
     def wait_ready(self, timeout_s: float = 5.0) -> None:
-        """*wait_ready()* poll `/ping` until it returns 200 or the timeout fires."""
+        """*wait_ready()* poll `/healthz` until it returns 200 or the timeout fires."""
         _start = time.perf_counter()
         _timeout = float(timeout_s)
         _deadline = _start + _timeout
-        _url = f"http://127.0.0.1:{self._port}/ping"
+        _url = f"http://127.0.0.1:{self._port}/healthz"
         while True:
             _now = time.perf_counter()
             if _now >= _deadline:
@@ -354,32 +384,53 @@ class _UvicornThread(threading.Thread):
         self.join(timeout=5.0)
 
 
+def _build_probe_body(payload_size_bytes: int) -> Dict[str, Any]:
+    """*_build_probe_body()* build a `SvcReq.model_dump()` body for the vernier probes.
+
+    Called once before each timed loop so payload generation does not enter the RTT brackets. The same dict is reused for every request inside the loop.
+
+    Args:
+        payload_size_bytes (int): declared payload size; produces a real ASCII blob of exactly that length.
+
+    Returns:
+        dict: serialised `SvcReq` ready to pass to `httpx.AsyncClient.post(json=...)`.
+    """
+    _payload = generate_payload(kind="ping",
+                                size_bytes=int(payload_size_bytes))
+    _req = SvcReq(kind="ping",
+                  size_bytes=int(payload_size_bytes),
+                  payload=_payload.to_dict())
+    return _req.model_dump()
+
+
 async def measure_loopback(port: int,
                            samples: int,
                            warmup: int) -> Dict[str, float]:
-    """*measure_loopback()* round-trip latency of an empty `GET /ping`.
+    """*measure_loopback()* round-trip latency of a vernier `POST /invoke`.
 
-    Uses one `httpx.AsyncClient` with keep-alive so we measure steady-state loopback (TCP handshake excluded). All timings in `perf_counter_ns`.
+    Uses one `httpx.AsyncClient` with keep-alive so we measure steady-state loopback (TCP handshake excluded). The `SvcReq` body is built once before the timed loop so payload generation never enters the RTT brackets. All timings in `perf_counter_ns`.
 
     Args:
-        port (int): port the ping server is listening on.
+        port (int): port the vernier server is listening on.
         samples (int): request count after warmup.
         warmup (int): discard-this-many requests before timing.
 
     Returns:
         dict: min_us / median_us / p95_us / p99_us / std_us / samples.
     """
-    _url = "/ping"
+    _url = "/invoke"
     _base = f"http://127.0.0.1:{port}"
+    # build the request body once outside the timed loop so payload generation never enters the RTT brackets
+    _body = _build_probe_body(_DEFAULT_PAYLOAD_SIZE_BYTES)
     _rtts: List[int] = []
     # serial loopback; cap the pool at 1 to avoid accidental concurrency
     _limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
     async with httpx.AsyncClient(base_url=_base, limits=_limits) as _client:
         for _ in range(int(warmup)):
-            await _client.get(_url)
+            await _client.post(_url, json=_body)
         for _ in range(int(samples)):
             _t1 = time.perf_counter_ns()
-            await _client.get(_url)
+            await _client.post(_url, json=_body)
             _t2 = time.perf_counter_ns()
             _rtts.append(_t2 - _t1)
     _arr = np.asarray(_rtts, dtype=np.int64)
@@ -403,12 +454,13 @@ async def measure_loopback(port: int,
 
 async def _run_concurrent_worker(client: httpx.AsyncClient,
                                  url: str,
-                                 n: int) -> List[int]:
-    """*_run_concurrent_worker()* one task: issue `n` sequential GETs, return RTT ns list."""
+                                 n: int,
+                                 body: Dict[str, Any]) -> List[int]:
+    """*_run_concurrent_worker()* one task: issue `n` sequential POSTs of `body`, return RTT ns list."""
     _out: List[int] = []
     for _ in range(int(n)):
         _t1 = time.perf_counter_ns()
-        await client.get(url)
+        await client.post(url, json=body)
         _t2 = time.perf_counter_ns()
         _out.append(_t2 - _t1)
     return _out
@@ -442,8 +494,10 @@ async def measure_handler_scaling(port: int,
     Returns:
         dict[str, dict]: `{"<n_con_usr>": {min_us, median_us, p95_us, p99_us, std_us, samples}}`.
     """
-    _url = "/ping"
+    _url = "/invoke"
     _base = f"http://127.0.0.1:{port}"
+    # build the request body once outside the timed loop so payload generation never enters the RTT brackets
+    _body = _build_probe_body(_DEFAULT_PAYLOAD_SIZE_BYTES)
     _result: Dict[str, Dict[str, float]] = {}
     # lift httpx pool cap (default 100) to the max ladder level
     _max_n_con = 1
@@ -458,7 +512,7 @@ async def measure_handler_scaling(port: int,
                                  limits=_limits,
                                  timeout=_timeout) as _client:
         for _ in range(int(warmup)):
-            await _client.get(_url)
+            await _client.post(_url, json=_body)
         for _n_con in n_con_usr:
             _count = int(_n_con)
             if per_worker is not None:
@@ -471,7 +525,7 @@ async def measure_handler_scaling(port: int,
             _t0 = time.perf_counter()
             _tasks: List[Any] = []
             for _ in range(_count):
-                _tasks.append(_run_concurrent_worker(_client, _url, _reqs))
+                _tasks.append(_run_concurrent_worker(_client, _url, _reqs, _body))
             _lists = await asyncio.gather(*_tasks)
             _all: List[int] = []
             for _lst in _lists:
@@ -1777,82 +1831,6 @@ def derive_calib_coefs(envelope: Dict[str, Any],
     }
     _coefs["meta"] = _meta
     return _coefs
-
-
-def derive_calib_sweep(envelope: Dict[str, Any],
-                       *,
-                       sweep_grid: Optional[Dict[str, Any]] = None,
-                       tag: str = _CALIB_DIM_TAG
-                       ) -> Dict[str, Dict[str, np.ndarray]]:
-    """*derive_calib_sweep()* run the analytic (Route A) `(mu, c, K, lambda)` sweep against the calibration service's measured operating point.
-
-    For each `(c, K)` combo on the grid, anchors `mu` on the envelope's measured `loopback.median_us` and `epsilon = 0` (the `/ping` service has no failure mode), then delegates to `src.dimensional.networks.sweep_artifact` to ramp `mu_factor` and `lambda` and solve M/M/c/K closed-form at every point. Each combo gets its own per-artifact entry in the returned nested dict, tagged `"<tag>_c<c>_K<K>"`, so the existing yoly plotters (`plot_arts_distributions`, `plot_yoly_arts_charts`, `plot_yoly_arts_behaviour`) can iterate render distinct clouds.
-
-    The shape mirrors `src.experiment.architecture.sweep_arch_exp`'s output (nested `{artifact_key: {full_symbol: ndarray}}`), so all the multi-artifact view machinery from `06-yoly-experimental.ipynb` works here.
-
-    Args:
-        envelope (Dict[str, Any]): calibration envelope (must carry `loopback.median_us`).
-        sweep_grid (Optional[Dict[str, Any]]): sweep grid; falls back to `data/config/method/calibration.json::sweep_grid` when `None`. Required keys: `mu_factor`, `c`, `K`, `lambda_steps`, `lambda_factor_min`, `util_threshold`.
-        tag (str): base artifact subscript tag; per-combo tags are derived as `"<tag>_c<c>_K<K>"`.
-
-    Returns:
-        Dict[str, Dict[str, np.ndarray]]: nested `{combo_tag: per_combo_sweep}`. Each per-combo dict matches `sweep_artifact`'s return shape (LaTeX-subscripted `\\theta_{combo}`, `\\sigma_{combo}`, `\\eta_{combo}`, `\\phi_{combo}`, plus `c_{combo}`, `\\mu_{combo}`, `K_{combo}`, `\\lambda_{combo}`). Empty dict when the envelope has no usable `loopback` block or the grid is empty.
-    """
-    from src.dimensional.networks import sweep_artifact  # noqa: WPS433
-
-    _loop = envelope.get("loopback")
-    if not isinstance(_loop, dict):
-        return {}
-    _mu_us = float(_loop.get("median_us", 0.0))
-    if _mu_us <= 0.0:
-        return {}
-    _mu = 1e6 / _mu_us
-
-    if sweep_grid is None:
-        _grid = _CALIB_CFG.get("sweep_grid", {})
-    else:
-        _grid = dict(sweep_grid)
-    if not _grid:
-        return {}
-
-    # iterate (c, K) cartesian explicitly; sweep_artifact handles the inner (mu_factor x lambda_steps) ramp
-    _cs: List[int] = [int(_v) for _v in _grid.get("c", [1])]
-    _Ks: List[int] = [int(_v) for _v in _grid.get("K", [10])]
-
-    _out: Dict[str, Dict[str, np.ndarray]] = {}
-    for _c_val in _cs:
-        for _K_val in _Ks:
-            if _K_val < _c_val:
-                continue
-            _combo_tag = f"{tag}_c{_c_val}_K{_K_val}"
-            _vars: Dict[str, Dict[str, Any]] = {
-                f"\\mu_{{{_combo_tag}}}": {
-                    "_sym": f"\\mu_{{{_combo_tag}}}",
-                    "_fwk": "CUSTOM",
-                    "_dims": "S*T^-1",
-                    "_units": "req/s",
-                    "_setpoint": _mu,
-                },
-                f"\\epsilon_{{{_combo_tag}}}": {
-                    "_sym": f"\\epsilon_{{{_combo_tag}}}",
-                    "_fwk": "CUSTOM",
-                    "_dims": "S*T^-1",
-                    "_units": "n.a.",
-                    "_setpoint": 0.0,
-                },
-            }
-            # per-combo grid: pin c and K to a single value so sweep_artifact's inner cartesian collapses to mu_factor x lambda_steps
-            _combo_grid = dict(_grid)
-            _combo_grid["c"] = [_c_val]
-            _combo_grid["K"] = [_K_val]
-            _combo_sweep = sweep_artifact(_combo_tag, _vars, _combo_grid)
-            # skip combos where every lambda step was unstable (empty arrays)
-            _theta = _combo_sweep.get(f"\\theta_{{{_combo_tag}}}")
-            if _theta is None or len(_theta) == 0:
-                continue
-            _out[_combo_tag] = _combo_sweep
-
-    return _out
 
 
 def main(argv: Optional[List[str]] = None) -> None:
