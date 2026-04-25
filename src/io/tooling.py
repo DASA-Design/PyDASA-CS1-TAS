@@ -5,15 +5,17 @@ Module io/tooling.py
 
 Loader + small derivation helpers for the per-host noise-floor calibration JSON produced by `src.methods.calibration.run`.
 
-Every `experiment` run is gated on having a recent calibration for the current host so measured latencies can be reported as `value - loopback_median +/- jitter_p99`. This module owns the filesystem lookup, timestamp parsing, and the two numeric accessors the reporting path needs.
+Every `experiment` run is gated on having a recent calibration for the current host so measured latencies can be reported as `value - loopback_median +/- jitter_p99`. This module owns the filesystem lookup, timestamp parsing, and the small set of numeric accessors the reporting path needs.
 
-Public API:
+Public API (in code-body order):
     - `find_latest_calibration(host)` -> newest JSON path for the given host, or None.
     - `load_latest_calibration(host)` -> parsed envelope, or None.
     - `calibration_floor_us(envelope)` -> loopback median in microseconds.
     - `calibration_band_us(envelope)` -> jitter p99 in microseconds.
-    - `calibration_age_hours(envelope)` -> hours since the envelope was written.
+    - `rate_sweep_calibrated_rate(envelope)` -> highest sustainable rate (req/s) recorded by the rate-sweep block, or None.
+    - `rate_sweep_loss_at(envelope, target_rate)` -> mean loss percent at `target_rate`, or None when the rate was not measured.
     - `load_dim_card(host, payload_size_bytes)` -> dimensional card dict for the latest envelope (lazy-derived if absent on disk), or None.
+    - `calibration_age_hours(envelope)` -> hours since the envelope was written.
 """
 # native python modules
 from __future__ import annotations
@@ -66,6 +68,10 @@ def load_latest_calibration(host: Optional[str] = None) -> Optional[Dict[str, An
 
     Returns:
         Optional[Dict[str, Any]]: parsed envelope with an extra `output_path` key, or `None` when no matching file exists.
+
+    Raises:
+        json.JSONDecodeError: when the on-disk calibration JSON is malformed (the file resolved fine but the contents do not parse).
+        OSError: on filesystem failure while opening the resolved path.
     """
     _path = find_latest_calibration(host=host)
     if _path is None:
@@ -85,7 +91,7 @@ def calibration_floor_us(envelope: Dict[str, Any]) -> float:
         envelope (Dict[str, Any]): calibration envelope from `load_latest_calibration`.
 
     Returns:
-        float: loopback median in microseconds, or 0.0 when the loopback block is absent.
+        float: loopback median in microseconds, or 0.0 when the loopback block (or its `median_us` field) is absent.
     """
     _loopback = envelope.get("loopback")
     if not isinstance(_loopback, dict):
@@ -102,7 +108,7 @@ def calibration_band_us(envelope: Dict[str, Any]) -> float:
         envelope (Dict[str, Any]): calibration envelope from `load_latest_calibration`.
 
     Returns:
-        float: jitter p99 in microseconds, or 0.0 when the jitter block is absent.
+        float: jitter p99 in microseconds, or 0.0 when the jitter block (or its `p99_us` field) is absent.
     """
     _jitter = envelope.get("jitter")
     if not isinstance(_jitter, dict):
@@ -176,6 +182,10 @@ def load_dim_card(host: Optional[str] = None,
 
     Returns:
         Optional[Dict[str, Any]]: dim-card dict (LaTeX-subscripted coefficient arrays + `meta` provenance), or `None` when no calibration exists for the host or when neither a pre-baked block nor the source blocks (`handler_scaling` + `loopback`) are present.
+
+    Raises:
+        json.JSONDecodeError: propagated from `load_latest_calibration` when the on-disk envelope is malformed.
+        Exception: any error raised by the lazy `derive_calib_coefs` path (e.g. PyDASA pipeline failure) propagates unmodified.
     """
     _envelope = load_latest_calibration(host=host)
     if _envelope is None:
