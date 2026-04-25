@@ -3,9 +3,13 @@
 Module methods/calibration.py
 =============================
 
-Per-host noise-floor characterisation method; sibling to `src.methods.analytic` / `stochastic` / `dimensional` / `experiment`, but its subject is the host (not the TAS architecture). Runs four baselines (timer resolution, scheduling jitter, loopback latency, empty-handler scaling over `n_con_usr`) and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
+Per-host noise-floor characterisation. Sibling to `src.methods.analytic` / `stochastic` / `dimensional` / `experiment`, but its subject is the host, not the TAS architecture. Runs four baselines (timer resolution, scheduling jitter, loopback latency, vernier-handler scaling over `n_con_usr`) and writes one JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`. Every `experiment` run references the latest envelope by timestamp (`baseline_ref`) so measured latencies report as `value - loopback_median +/- jitter_p99`.
 
-Every `experiment` run should reference the latest calibration JSON by timestamp in its run envelope (`baseline_ref`) so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
+Three public entry points share this module:
+
+    - `run(...)` host-floor probes + optional rate-saturation block + Route-B dim card.
+    - `run_rate_sweep(...)` rate-saturation probe driven against the full TAS mesh; opt-in.
+    - `run_calib_sweep(envelope, sweep_grid, ...)` Route-B measured sweep across `(c, K, mu_factor)`; drives vernier per combo and reuses `derive_calib_coefs`.
 
 Kept deliberately small and dependency-light:
 
@@ -18,19 +22,28 @@ Run::
     python -m src.methods.calibration
     python -m src.methods.calibration --timer-samples 50000 --jitter-samples 2000
     python -m src.methods.calibration --loopback-samples 2000 --n-con-usr 1,10,50,100
-    python -m src.methods.calibration --skip-loopback  # timer + jitter only
+    python -m src.methods.calibration --skip-loopback                    # timer + jitter only
+    python -m src.methods.calibration --rate-sweep                       # adds rate-saturation block
+    python -c "from src.methods.calibration import run, run_calib_sweep; \\
+               env = run(); run_calib_sweep(env)"                          # measured sweep
 
 Output JSON shape (truncated)::
 
     {
-        "host_profile": {"hostname": "...", "os": "...", "cpu_count": 8, ...},
-        "timer":   {"min_ns": 100, "median_ns": 100.0, "mean_ns": 112.4, "std_ns": 18.3},
-        "jitter":  {"mean_us": 480.1, "p99_us": 1250.2, "max_us": 2104.5, "std_us": 230.6},
-        "loopback":{"min_us": 180.0, "median_us": 240.0, "p95_us": 410.0, "p99_us": 640.0, "std_us": 95.1},
-        "handler_scaling": {"1": {...}, "10": {...}, "50": {...}, "100": {...}},
-        "timestamp": "2026-04-23T19:42:11",
-        "elapsed_s": 42.7
+        "host_profile":      {"hostname": "...", "os": "...", "cpu_count": 16, ...},
+        "args":              {"timer_samples": 100000, ...},
+        "timer":             {"min_ns": 100, "median_ns": 100.0, ...},
+        "jitter":            {"mean_us": 627, "p99_us": 1272, "max_us": 10386, ...},
+        "loopback":          {"min_us": 2210, "median_us": 3121, "p99_us": 7681, ...},
+        "handler_scaling":   {"1": {...}, "10": {...}, "100": {...}, "1000": {...}},
+        "rate_sweep":        {"rates": [...], "aggregates": {...}, ...},     # optional
+        "dimensional_card":  {"\\theta_{CALIB}": [...], ...},                  # Route-B card
+        "timestamp":         "2026-04-25T14:31:53",
+        "elapsed_s":         37.4,
+        "output_path":       ".../DESKTOP-INKGBK6_20260425_143153.json"
     }
+
+The Route-B sweep envelope written by `run_calib_sweep` lands at the same directory with a `_sweep` suffix and carries one combo block per `(c, K, mu_factor)` cartesian point.
 """
 # native python modules
 from __future__ import annotations
@@ -138,7 +151,7 @@ _TARGET_TICK_S: float = 0.020
 
 
 def _banner(msg: str) -> None:
-    """*_banner()* print a centred header band."""
+    """*_banner()* render a centred header band on stdout."""
     print()
     print("=" * 78)
     print(f"  {msg}")
@@ -224,9 +237,9 @@ def snapshot_host_profile() -> Dict[str, Any]:
 
 
 def measure_timer(samples: int) -> Dict[str, float]:
-    """*measure_timer()* probe clock resolution via back-to-back `perf_counter_ns` reads.
+    """*measure_timer()* return min/median/mean/std of clock resolution from back-to-back `perf_counter_ns` reads.
 
-    Skips zero-delta reads (same tick bucket) and summarises the positive deltas. The minimum tick is the actual clock resolution on this host.
+    Zero-delta reads (same tick bucket) are skipped; only positive deltas are summarised. The minimum tick is the actual clock resolution on this host.
 
     Args:
         samples (int): number of back-to-back reads to collect.
@@ -245,8 +258,13 @@ def measure_timer(samples: int) -> Dict[str, float]:
         else:
             _zero += 1
     if not _deltas:
-        return {"min_ns": 0, "median_ns": 0.0, "mean_ns": 0.0,
-                "std_ns": 0.0, "zero_frac": 1.0}
+        return {
+            "min_ns": 0,
+            "median_ns": 0.0,
+            "mean_ns": 0.0,
+            "std_ns": 0.0,
+            "zero_frac": 1.0,
+        }
     _arr = np.asarray(_deltas, dtype=np.int64)
     _min = int(_arr.min())
     _median = float(np.median(_arr))
@@ -264,9 +282,9 @@ def measure_timer(samples: int) -> Dict[str, float]:
 
 
 def measure_jitter(samples: int) -> Dict[str, float]:
-    """*measure_jitter()* scheduling-jitter probe via `time.sleep(0.001)`.
+    """*measure_jitter()* report mean/std/p50/p99/max of OS sleep oversleep across N samples of `time.sleep(0.001)`.
 
-    Records the difference between requested 1 ms and the actual elapsed ns. `max_us` and `p99_us` are the OS-interruption tail any inter-arrival smaller than those values cannot resolve cleanly.
+    Records the difference between requested 1 ms and the actual elapsed ns. `max_us` and `p99_us` are the OS-interruption tail; any inter-arrival smaller than those values cannot resolve cleanly.
 
     Args:
         samples (int): number of sleep cycles to measure.
@@ -334,7 +352,7 @@ def _build_ping_app() -> FastAPI:
 class _UvicornThread(threading.Thread):
     """Daemon thread that runs a uvicorn server on `127.0.0.1:port`.
 
-    Exposes `.wait_ready()` so the caller can block until the server's `/ping` endpoint answers, and `.shutdown()` to stop cleanly.
+    Exposes `.wait_ready()` so the caller can block until the server's `/healthz` endpoint answers, and `.shutdown()` to stop cleanly.
 
     Attributes:
         _server: Underlying `uvicorn.Server` instance.
@@ -382,6 +400,36 @@ class _UvicornThread(threading.Thread):
         """*shutdown()* tell uvicorn to exit; joins the thread."""
         self._server.should_exit = True
         self.join(timeout=5.0)
+
+
+def _stats_from_us_array(us_arr: np.ndarray) -> Dict[str, float]:
+    """*_stats_from_us_array()* return the canonical 6-key latency-stats dict from a microsecond array.
+
+    Single source of truth for the `handler_scaling[<level>]` shape (`min_us`, `median_us`, `p95_us`, `p99_us`, `std_us`, `samples`). Reused by `measure_loopback`, `measure_handler_scaling`, and `_drive_lambda_step` so the schema is declared once.
+
+    Args:
+        us_arr (np.ndarray): per-request latencies in microseconds; empty array yields a zero-valued stats dict so callers can short-circuit on `samples == 0`.
+
+    Returns:
+        Dict[str, float]: stats keyed identically to a `handler_scaling` entry.
+    """
+    if us_arr.size == 0:
+        return {
+            "min_us": 0.0,
+            "median_us": 0.0,
+            "p95_us": 0.0,
+            "p99_us": 0.0,
+            "std_us": 0.0,
+            "samples": 0,
+        }
+    return {
+        "min_us": float(us_arr.min()),
+        "median_us": float(np.median(us_arr)),
+        "p95_us": float(np.percentile(us_arr, 95)),
+        "p99_us": float(np.percentile(us_arr, 99)),
+        "std_us": float(us_arr.std()),
+        "samples": int(us_arr.size),
+    }
 
 
 def _build_probe_body(payload_size_bytes: int) -> Dict[str, Any]:
@@ -435,21 +483,7 @@ async def measure_loopback(port: int,
             _rtts.append(_t2 - _t1)
     _arr = np.asarray(_rtts, dtype=np.int64)
     _us = _arr / 1000.0
-    _min = float(_us.min())
-    _median = float(np.median(_us))
-    _p95 = float(np.percentile(_us, 95))
-    _p99 = float(np.percentile(_us, 99))
-    _std = float(_us.std())
-    _n = int(samples)
-    _result = {
-        "min_us": _min,
-        "median_us": _median,
-        "p95_us": _p95,
-        "p99_us": _p99,
-        "std_us": _std,
-        "samples": _n,
-    }
-    return _result
+    return _stats_from_us_array(_us)
 
 
 async def _run_concurrent_worker(client: httpx.AsyncClient,
@@ -476,14 +510,14 @@ async def measure_handler_scaling(port: int,
                                   on_level_done: Optional[Any] = None) -> Dict[str, Dict[str, float]]:
     """*measure_handler_scaling()* loopback latency at increasing concurrent-user load levels.
 
-    For each `n_con_usr` (concurrent in-flight requests from the calibration client) in the ladder, launches `n_con_usr` concurrent workers each doing a derived number of sequential requests against the single-worker (`c_srv=1`) calibration service, aggregates the latency distribution. Quantifies how the FastAPI / event-loop stack's response time grows as in-flight user requests stack up on an empty handler.
+    For each `n_con_usr` (concurrent in-flight requests from the calibration client) in the ladder, launches `n_con_usr` concurrent workers each doing a derived number of sequential requests against the single-worker (`c_srv=1`) calibration service, aggregates the latency distribution. Quantifies how the FastAPI / event-loop stack's response time grows as in-flight user requests stack up on the vernier handler.
 
     `n_con_usr` is the CLIENT-side concurrency knob; the SERVICE-side parallelism `c_srv` stays fixed at 1 (one uvicorn worker, one handler). The two must not be conflated.
 
     When `per_worker` is not supplied, each level targets `samples_per_level` total samples and sets `per_worker = max(1, samples_per_level // n_usr)`. This keeps per-level wall time bounded even at `n_usr = 10_000`, where a naive fixed `per_worker=200` would issue 2 million requests for one level.
 
     Args:
-        port (int): port the ping server is listening on.
+        port (int): port the vernier server is listening on.
         n_con_usr (tuple[int, ...]): concurrent-user load levels to test (e.g. 1, 10, 50, 100).
         warmup (int): discard-this-many requests (total, not per-worker) upfront.
         per_worker (Optional[int]): sequential requests per concurrent worker. When `None`, derived from `samples_per_level`.
@@ -537,21 +571,8 @@ async def measure_handler_scaling(port: int,
                 if _arr.size > _cap:
                     _arr = _arr[:_cap]
             _us = _arr / 1000.0
-            _min = float(_us.min())
-            _median = float(np.median(_us))
-            _p95 = float(np.percentile(_us, 95))
-            _p99 = float(np.percentile(_us, 99))
-            _std = float(_us.std())
-            _n = int(_us.size)
             _key = str(_count)
-            _stats = {
-                "min_us": _min,
-                "median_us": _median,
-                "p95_us": _p95,
-                "p99_us": _p99,
-                "std_us": _std,
-                "samples": _n,
-            }
+            _stats = _stats_from_us_array(_us)
             _result[_key] = _stats
             if on_level_done is not None:
                 _elapsed = time.perf_counter() - _t0
@@ -618,7 +639,7 @@ def _print_phase_marker(name: str) -> None:
     if name == "loopback":
         print("  [3/4] loopback latency ...", flush=True)
     elif name == "handler_scaling":
-        print("  [4/4] empty-handler scaling ...", flush=True)
+        print("  [4/4] vernier handler scaling ...", flush=True)
 
 
 def _print_level_start(level: int, total: int) -> None:
@@ -744,13 +765,16 @@ def _run_single_rate_probe(rate: float,
     from src.io import load_method_cfg
     from src.methods.experiment import run as _experiment_run
     _mcfg = load_method_cfg("experiment")
+    _cascade = {
+        "mode": str(cascade_mode),
+        "threshold": float(cascade_threshold),
+        "window": int(cascade_window),
+    }
     _mcfg["ramp"] = {
         "min_samples_per_kind": int(min_samples),
         "max_probe_window_s": float(max_probe_s),
         "rates": [float(rate)],
-        "cascade": {"mode": str(cascade_mode),
-                    "threshold": float(cascade_threshold),
-                    "window": int(cascade_window)},
+        "cascade": _cascade,
     }
     return _experiment_run(
         adp=adaptation,
@@ -814,8 +838,15 @@ def _aggregate_rate_trials(trials: List[Dict[str, float]]
         _lams.append(float(_t["entry_lambda"]))
     _n = len(_effs)
     if _n == 0:
-        _empty = {"target": 0.0, "mean": 0.0, "lo": 0.0, "hi": 0.0,
-                  "mean_loss_pct": 0.0, "mean_entry_lambda": 0.0, "n": 0}
+        _empty = {
+            "target": 0.0,
+            "mean": 0.0,
+            "lo": 0.0,
+            "hi": 0.0,
+            "mean_loss_pct": 0.0,
+            "mean_entry_lambda": 0.0,
+            "n": 0,
+        }
         return _empty
     _mean = sum(_effs) / _n
     _lo = min(_effs)
@@ -849,7 +880,7 @@ def _print_rate_header(rate: float) -> None:
 
 def _print_rate_trial_row(trial_idx: int,
                           summary: Dict[str, float]) -> None:
-    """*_print_rate_trial_row()* one-line per-trial output."""
+    """*_print_rate_trial_row()* one-line per-trial output; kept available for opt-in debugging even though `run_rate_sweep` no longer calls it by default."""
     _eff = summary["effective"]
     _lam = summary["entry_lambda"]
     _gap = summary["gap"]
@@ -964,8 +995,8 @@ def run_rate_sweep(*,
         _trials: List[Dict[str, float]] = []
         for _i in range(int(trials_per_rate)):
             # quiet window between trials (skip before trial 0 of each rate)
-            if _i > 0 and _delay > 0.0:
-                time.sleep(_delay)
+            # if _i > 0 and _delay > 0.0:
+            #     time.sleep(_delay)
             _res = _run_single_rate_probe(
                 rate=_rate,
                 adaptation=adaptation,
@@ -977,8 +1008,6 @@ def run_rate_sweep(*,
             )
             _summary = _summarise_rate_trial(_rate, _res, entry_service)
             _trials.append(_summary)
-            if verbose:
-                _print_rate_trial_row(_i, _summary)
             # drop envelope before the next trial allocates
             del _res
             gc.collect()
@@ -998,9 +1027,11 @@ def run_rate_sweep(*,
     for _rate_key, _trials_val in _per_trial.items():
         _per_trial_json[str(_rate_key)] = _trials_val
 
-    _cascade_block = {"mode": str(cascade_mode),
-                      "threshold": float(cascade_threshold),
-                      "window": int(cascade_window)}
+    _cascade_block = {
+        "mode": str(cascade_mode),
+        "threshold": float(cascade_threshold),
+        "window": int(cascade_window),
+    }
 
     _ans: Dict[str, Any] = {
         "adaptation": str(adaptation),
@@ -1145,9 +1176,9 @@ async def _run_async_probes(*,
     """*_run_async_probes()* drive the loopback + handler-scaling probes against a uvicorn thread.
 
     Args:
-        port (int): port the ping server binds to.
+        port (int): port the vernier server binds to.
         loopback_samples (int): request count for the loopback probe.
-        loopback_warmup (int): warmup GETs discarded upfront.
+        loopback_warmup (int): warmup POSTs discarded upfront.
         n_con_usr (tuple[int, ...]): concurrent-user load levels for the handler-scaling probe.
         per_worker (int): requests per concurrent worker.
         ready_timeout_s (float): seconds to wait for uvicorn readiness.
@@ -1226,12 +1257,12 @@ def run(*,
     Args:
         timer_samples (int): back-to-back `perf_counter_ns` reads for the timer probe.
         jitter_samples (int): 1 ms sleep cycles for the jitter probe.
-        loopback_samples (int): GET /ping samples for the loopback probe.
-        loopback_warmup (int): warmup GETs discarded before the loopback probe.
+        loopback_samples (int): POST /invoke samples for the loopback probe.
+        loopback_warmup (int): warmup POSTs discarded before the loopback probe.
         n_con_usr (tuple[int, ...]): concurrent-user load levels (in-flight requests) for the handler-scaling probe.
         per_worker (Optional[int]): sequential requests per concurrent worker; when `None`, derived from `samples_per_level`.
         samples_per_level (int): target total samples per `n_con_usr` level when `per_worker` is derived.
-        port (int): loopback ping server port.
+        port (int): loopback vernier server port.
         ready_timeout_s (float): seconds to wait for uvicorn readiness.
         skip_jitter (bool): if True, skip the jitter probe.
         skip_loopback (bool): if True, skip both the loopback and handler-scaling probes.
@@ -1399,11 +1430,11 @@ def _build_argparser() -> argparse.ArgumentParser:
                           f"(default: {_DEFAULT_JITTER_SAMPLES})"))
     _p.add_argument("--loopback-samples", type=int,
                     default=_DEFAULT_LOOPBACK_SAMPLES,
-                    help=("GET /ping samples for the loopback probe "
+                    help=("POST /invoke samples for the loopback probe "
                           f"(default: {_DEFAULT_LOOPBACK_SAMPLES})"))
     _p.add_argument("--loopback-warmup", type=int,
                     default=_DEFAULT_LOOPBACK_WARMUP,
-                    help=("warmup GETs discarded before the loopback probe "
+                    help=("warmup POSTs discarded before the loopback probe "
                           f"(default: {_DEFAULT_LOOPBACK_WARMUP})"))
     _default_n_con_usr_csv = ",".join(str(_c) for _c in _DEFAULT_N_CON_USR)
 
@@ -1422,7 +1453,7 @@ def _build_argparser() -> argparse.ArgumentParser:
                           "when --per-worker is derived "
                           f"(default: {_DEFAULT_SAMPLES_PER_LEVEL})"))
     _p.add_argument("--port", type=int, default=_DEFAULT_PORT,
-                    help=("loopback ping server port "
+                    help=("loopback vernier server port "
                           f"(default: {_DEFAULT_PORT})"))
     _p.add_argument("--ready-timeout-s", type=float,
                     default=_DEFAULT_READY_TIMEOUT_S,
@@ -1532,9 +1563,12 @@ def _build_calib_observables(handler_scaling: Dict[str, Dict[str, float]],
 
     # zero-latency rows -> NaN so downstream divisions stay finite
     _r_safe = np.where(_r_np > 0.0, _r_np, np.nan)
-    _x = _n_np / _r_safe                              # X = n / R
-    _lam = _x                                         # steady state: lambda = X
-    _l_load = _n_np                                   # Little: L = X*R = n
+    # X = n / R
+    _x = _n_np / _r_safe
+    # steady-state arrival = throughput
+    _lam = _x
+    # Little's law: L = X*R = n at the level
+    _l_load = _n_np
     _r_service = _r_median_us * 1e-6
     _wq = np.maximum(_r_np - _r_service, 0.0)
 
@@ -1757,7 +1791,7 @@ def derive_calib_coefs(envelope: Dict[str, Any],
                        *,
                        payload_size_bytes: int = 0,
                        tag: str = _CALIB_DIM_TAG) -> Dict[str, Any]:
-    """*derive_calib_coefs()* public entry point: build the dimensional card from a calibration envelope using PyDASA.
+    """*derive_calib_coefs()* build the dimensional card from a calibration envelope using PyDASA.
 
     Routes the measured `handler_scaling` + `loopback` arrays through the PyDASA pipeline (Variable dicts -> Schema -> AnalysisEngine -> derive_coefs -> MonteCarloSimulation in DATA mode) so theta / sigma / eta / phi are computed by PyDASA's symbolic evaluator, not by hand-rolled arithmetic. Coefficient symbols carry the `_{<tag>}` subscript (default `_{CALIB}`).
 
@@ -1831,6 +1865,397 @@ def derive_calib_coefs(envelope: Dict[str, Any],
     }
     _coefs["meta"] = _meta
     return _coefs
+
+
+# ---------------------------------------------------------------------------
+# Route-B measured sweep: drive vernier across (c, K, mu_factor) cartesian
+# ---------------------------------------------------------------------------
+
+
+def _build_vernier_app_for_combo(c_srv: int,
+                                 K: int,
+                                 mu: float,
+                                 epsilon: float,
+                                 payload_size_bytes: int,
+                                 tag: str) -> FastAPI:
+    """*_build_vernier_app_for_combo()* sibling of `_build_ping_app` with explicit per-combo knobs.
+
+    The host-floor app reads `sweep_grid.{c, K}[0]` and forces `mu = epsilon = 0`. The sweep needs to override every knob per combo, so this helper accepts them as arguments instead.
+
+    Args:
+        c_srv (int): per-combo server-side parallel handlers (M/M/c/K c).
+        K (int): per-combo system capacity.
+        mu (float): per-combo service rate in req/s.
+        epsilon (float): per-combo Bernoulli failure rate.
+        payload_size_bytes (int): request body size echoed end-to-end.
+        tag (str): SvcSpec.name used as the LaTeX subscript on every CSV row.
+
+    Returns:
+        FastAPI: app with `/healthz` and `/invoke`.
+    """
+    _spec = SvcSpec(name=tag,
+                    role="atomic",
+                    port=int(_DEFAULT_PORT),
+                    mu=float(mu),
+                    epsilon=float(epsilon),
+                    c=int(c_srv),
+                    K=int(K),
+                    seed=0,
+                    mem_per_buffer=int(payload_size_bytes * K * SvcSpec.MEM_HEADROOM_FACTOR))
+    _app = make_base_app(f"calibration-vernier::{tag}")
+    mount_vernier_svc(_app, _spec, payload_size_bytes=payload_size_bytes)
+    return _app
+
+
+def _resolve_mu_anchor(envelope: Dict[str, Any],
+                       sweep_grid: Dict[str, Any]) -> Tuple[float, str]:
+    """*_resolve_mu_anchor()* pick the per-combo `mu = mu_factor * anchor` baseline from JSON config.
+
+    Resolution order: explicit `sweep_grid.mu_anchor_req_per_s` (absolute, host-independent) -> named `sweep_grid.mu_anchor_source` (currently only `"loopback.median_us"`) -> default `"loopback.median_us"`. Returns a (value, source-tag) pair so the caller can record provenance on every combo's `meta` block.
+
+    Args:
+        envelope (Dict[str, Any]): host calibration envelope; consulted only when the source is `"loopback.median_us"`.
+        sweep_grid (Dict[str, Any]): sweep grid (already resolved with config fallback).
+
+    Returns:
+        Tuple[float, str]: `(mu_anchor_req_per_s, source_tag)`. `source_tag` is `"explicit"` when `mu_anchor_req_per_s` was supplied, else the named source. Returns `(0.0, source_tag)` when the named source cannot be derived.
+    """
+    _explicit = sweep_grid.get("mu_anchor_req_per_s")
+    if _explicit is not None:
+        return float(_explicit), "explicit"
+    _src = str(sweep_grid.get("mu_anchor_source", "loopback.median_us"))
+    if _src == "loopback.median_us":
+        _loop = envelope.get("loopback") or {}
+        _r_us = float(_loop.get("median_us", 0.0))
+        if _r_us <= 0.0:
+            return 0.0, _src
+        return 1e6 / _r_us, _src
+    return 0.0, _src
+
+
+async def _post_one(client: httpx.AsyncClient,
+                    body: Dict[str, Any],
+                    rtts_ns: List[int]) -> None:
+    """*_post_one()* one POST `/invoke`; bracket the call with `perf_counter_ns` and append to the shared list."""
+    _t1 = time.perf_counter_ns()
+    try:
+        await client.post("/invoke", json=body)
+        rtts_ns.append(time.perf_counter_ns() - _t1)
+    except (httpx.HTTPError, ConnectionError, OSError):
+        # silent skip; the caller's stats reflect successful samples only
+        pass
+
+
+async def _drive_lambda_step(port: int,
+                             target_rate: float,
+                             window_s: float,
+                             body: Dict[str, Any]) -> Dict[str, float]:
+    """*_drive_lambda_step()* return latency stats after firing at `target_rate` for `window_s`.
+
+    Follows the absolute-deadline recipe documented in `.claude/skills/develop/async-rate-precision.md`: every request anchors on `_start + idx * interarrival` so the actual arrival rate tracks the target across the window. Each request runs as its own task; observed latencies reflect concurrent in-flight, not serialised arrivals.
+
+    Args:
+        port (int): vernier server port.
+        target_rate (float): target arrivals per second; scheduling anchor.
+        window_s (float): wall-clock probe window in seconds.
+        body (Dict[str, Any]): pre-built `SvcReq.model_dump()` reused per request.
+
+    Returns:
+        Dict[str, float]: percentile stats keyed identically to a `handler_scaling[<level>]` entry.
+    """
+    _interarrival = 1.0 / max(float(target_rate), 1e-6)
+    _base = f"http://127.0.0.1:{port}"
+    _rtts_ns: List[int] = []
+    _limits = httpx.Limits(max_connections=4096, max_keepalive_connections=4096)
+    _timeout = httpx.Timeout(_DEFAULT_HTTPX_TIMEOUT_S)
+    async with httpx.AsyncClient(base_url=_base,
+                                 limits=_limits,
+                                 timeout=_timeout) as _client:
+        _start = time.perf_counter()
+        _deadline = _start + float(window_s)
+        _idx = 0
+        _tasks: List[asyncio.Task[None]] = []
+        while True:
+            _now = time.perf_counter()
+            if _now >= _deadline:
+                break
+            _target_t = _start + _idx * _interarrival
+            _wait = _target_t - _now
+            if _wait > 0:
+                await asyncio.sleep(_wait)
+            _tasks.append(asyncio.create_task(
+                _post_one(_client, body, _rtts_ns)))
+            _idx += 1
+        # drain any in-flight tasks before the client closes
+        if _tasks:
+            await asyncio.gather(*_tasks, return_exceptions=True)
+
+    if not _rtts_ns:
+        return _stats_from_us_array(np.asarray([], dtype=np.float64))
+    _us = np.asarray(_rtts_ns, dtype=np.int64) / 1000.0
+    return _stats_from_us_array(_us)
+
+
+async def _drive_one_combo(c_srv: int,
+                           K: int,
+                           mu_combo: float,
+                           lambda_steps: int,
+                           lambda_factor_min: float,
+                           util_threshold: float,
+                           probe_window_s: float,
+                           payload_size_bytes: int,
+                           tag: str,
+                           port: int,
+                           lambda_min_req_per_s: Optional[float] = None,
+                           lambda_max_req_per_s: Optional[float] = None,
+                           ) -> Dict[str, Dict[str, float]]:
+    """*_drive_one_combo()* stand up vernier with the combo spec, ramp lambda, return synthetic handler_scaling.
+
+    Each lambda step keys the result by `int(round(target_rate * window_s))` (the count of arrivals dispatched in the probe window), so downstream `derive_calib_coefs` can read `n` per level the same way it reads `n_con_usr` from the host-floor block. Uvicorn lifecycle is fully contained: spawn, ready-poll, drive, shutdown.
+
+    Ramp endpoints clamp to the absolute accuracy band when `lambda_min_req_per_s` / `lambda_max_req_per_s` are supplied. Combos whose `mu*c` cannot reach the lower bound (clamped band collapses) skip with an empty result so the orchestrator can warn and move on.
+
+    Args:
+        c_srv (int): server-side parallelism (M/M/c/K c) for THIS combo.
+        K (int): system capacity for THIS combo.
+        mu_combo (float): service rate (req/s) for THIS combo.
+        lambda_steps (int): number of lambda points in the ramp.
+        lambda_factor_min (float): start of the ramp as a fraction of `mu_combo` (e.g. 0.05 -> 5%).
+        util_threshold (float): end of the ramp as a fraction of `mu_combo * c_srv` (e.g. 0.95 -> stops below saturation).
+        probe_window_s (float): wall-clock window per lambda step.
+        payload_size_bytes (int): per-request body size; drives `phi`.
+        tag (str): combo's LaTeX-subscript artifact name; encoding `CALIBc<c>K<K>m<int(mu_factor*100)>` (e.g. `CALIBc2K100m150` for `mu_factor=1.5`). Axes are concatenated without dots or underscores because sympy's LaTeX parser treats `.` as multiplication and `_` as a nested subscript marker.
+        port (int): TCP port for this combo's uvicorn (caller picks dynamically).
+        lambda_min_req_per_s (Optional[float]): absolute lower clamp on the ramp; when set, `_lam_lo = max(lambda_factor_min*mu, lambda_min_req_per_s)`.
+        lambda_max_req_per_s (Optional[float]): absolute upper clamp on the ramp; when set, `_lam_hi = min(util_threshold*mu*c, lambda_max_req_per_s)`.
+
+    Returns:
+        Dict[str, Dict[str, float]]: synthetic handler_scaling block, one entry per lambda step. Empty when the clamped band collapses (`_lam_hi <= _lam_lo`).
+    """
+    _app = _build_vernier_app_for_combo(c_srv=c_srv,
+                                        K=K,
+                                        mu=mu_combo, epsilon=0.0,
+                                        payload_size_bytes=payload_size_bytes,
+                                        tag=tag)
+    _server = _UvicornThread(_app, port)
+    _server.start()
+    _result: Dict[str, Dict[str, float]] = {}
+    try:
+        _server.wait_ready(timeout_s=_DEFAULT_READY_TIMEOUT_S)
+        _body = _build_probe_body(payload_size_bytes)
+        _lam_lo = float(lambda_factor_min) * float(mu_combo)
+        _lam_hi = float(util_threshold) * float(mu_combo) * float(c_srv)
+        # absolute accuracy-band clamps; trims the ramp into [lambda_min, lambda_max] so plotted points stay inside the trustworthy region
+        if lambda_min_req_per_s is not None:
+            _lam_lo = max(_lam_lo, float(lambda_min_req_per_s))
+        if lambda_max_req_per_s is not None:
+            _lam_hi = min(_lam_hi, float(lambda_max_req_per_s))
+        if _lam_hi <= _lam_lo:
+            return _result
+        _steps_n = max(int(lambda_steps), 1)
+        _lams = np.linspace(_lam_lo, _lam_hi, _steps_n)
+        for _lam in _lams:
+            _stats = await _drive_lambda_step(port=port,
+                                              target_rate=float(_lam),
+                                              window_s=float(probe_window_s),
+                                              body=_body)
+            # key by approximate arrival count so derive_calib_coefs sees an n-shaped axis
+            _level = max(int(round(float(_lam) * float(probe_window_s))), 1)
+            _result[str(_level)] = _stats
+    finally:
+        _server.shutdown()
+    return _result
+
+
+def _resolve_sweep_grid(sweep_grid: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """*_resolve_sweep_grid()* pick the explicit grid argument or fall back to JSON config."""
+    if sweep_grid is None:
+        return dict(_CALIB_CFG.get("sweep_grid", {}))
+    return dict(sweep_grid)
+
+
+def _run_sweep_in_dedicated_loop(orchestrator) -> Dict[str, Dict[str, Any]]:
+    """*_run_sweep_in_dedicated_loop()* execute the orchestrator on a fresh thread with its own event loop and return its result.
+
+    Mirrors `_run_probes_in_dedicated_loop` but is generic over the coroutine instead of pinned to `_run_async_probes`. Lets the sweep execute cleanly from a Jupyter cell where the ambient loop would otherwise block.
+
+    Args:
+        orchestrator: zero-arg async callable returning the sweep dict.
+
+    Returns:
+        Dict[str, Dict[str, Any]]: sweep result.
+
+    Raises:
+        Exception: re-raises any exception that fired inside the worker thread.
+    """
+    _result_box: List[Any] = [None]
+    _error_box: List[Optional[BaseException]] = [None]
+
+    def _worker() -> None:
+        try:
+            if sys.platform == "win32":
+                _loop = asyncio.ProactorEventLoop()
+            else:
+                _loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(_loop)
+                _result_box[0] = _loop.run_until_complete(orchestrator())
+            finally:
+                _loop.close()
+        except BaseException as _exc:
+            _error_box[0] = _exc
+
+    _t = threading.Thread(target=_worker, daemon=False)
+    _t.start()
+    _t.join()
+    _err = _error_box[0]
+    if _err is not None:
+        raise _err
+    _out = _result_box[0]
+    _result_box.clear()
+    _error_box.clear()
+    gc.collect()
+    return _out
+
+
+def run_calib_sweep(envelope: Dict[str, Any],
+                    sweep_grid: Optional[Dict[str, Any]] = None,
+                    *,
+                    write: bool = True,
+                    verbose: bool = True) -> Dict[str, Dict[str, Any]]:
+    """*run_calib_sweep()* drive vernier across `(c, K, mu_factor)` and derive the dim card per combo.
+
+    For each combo on `sweep_grid.c x sweep_grid.K x sweep_grid.mu_factor`: spin up a fresh vernier with the combo spec, ramp `lambda` from `lambda_factor_min*mu` up to `util_threshold*mu*c` across `lambda_steps` points, drive each step for `max_probe_window_s` seconds, aggregate latencies into a synthetic `handler_scaling`-shaped block, and feed that to the same derivation pipeline `derive_calib_coefs` uses. Returns nested `{combo_tag: per_combo_card}` matching the shape consumed by `src.view.dc_charts.plot_yoly_chart`. Inter-combo waits read `inter_trial_delay_s` from the same JSON config so port lifecycles are clean.
+
+    Per-combo `mu` resolves through `_resolve_mu_anchor`: explicit `sweep_grid.mu_anchor_req_per_s` first, then named `sweep_grid.mu_anchor_source` (defaults to `"loopback.median_us"`). Provenance is recorded on every per-combo `meta` block so plot legends can show which anchor each combo used.
+
+    Args:
+        envelope (Dict[str, Any]): host calibration envelope; carries `loopback.median_us` (used as the default mu anchor) and `host_profile` (for the output path).
+        sweep_grid (Optional[Dict[str, Any]]): cartesian grid; falls back to `data/config/method/calibration.json::sweep_grid` when None. Required keys: `mu_factor` (List[float]), `c` (List[int]), `K` (List[int]), `lambda_steps` (int), `lambda_factor_min` (float), `util_threshold` (float). Optional: `mu_anchor_req_per_s` (float), `mu_anchor_source` (str), `max_probe_window_s` (float).
+        write (bool): persist the result envelope under `data/results/experiment/calibration/<host>_<ts>_sweep.json`.
+        verbose (bool): print one progress line per combo.
+
+    Returns:
+        Dict[str, Dict[str, Any]]: nested `{combo_tag: per_combo_card}`. Each per-combo block carries the same keys as `derive_calib_coefs` returns (theta / sigma / eta / phi + c / mu / K / lambda / n_con_usr + meta). Empty dict when the envelope lacks `loopback`, the grid is empty, or the mu anchor cannot be resolved.
+    """
+    _grid = _resolve_sweep_grid(sweep_grid)
+    if not _grid:
+        return {}
+
+    _mu_anchor, _mu_source = _resolve_mu_anchor(envelope, _grid)
+    if _mu_anchor <= 0.0:
+        return {}
+
+    _payload_bytes = int(_DEFAULT_PAYLOAD_SIZE_BYTES)
+    _inter_trial_s = float(_DEFAULT_INTER_TRIAL_DELAY_S)
+    _probe_window_s = float(_grid.get("max_probe_window_s",
+                                      _DEFAULT_RATE_SWEEP_PROBE_S))
+    _mu_factors = [float(_v) for _v in _grid.get("mu_factor", [1.0])]
+    _cs = [int(_v) for _v in _grid.get("c", [1])]
+    _Ks = [int(_v) for _v in _grid.get("K", [50])]
+    _lambda_steps = int(_grid.get("lambda_steps", 20))
+    _lambda_factor_min = float(_grid.get("lambda_factor_min", 0.05))
+    _util_threshold = float(_grid.get("util_threshold", 0.95))
+    # absolute accuracy-band clamps (None -> no clamp); JSON keys are optional, default behaviour matches the pre-clamp ramp
+    _lambda_min_abs = _grid.get("lambda_min_req_per_s")
+    _lambda_max_abs = _grid.get("lambda_max_req_per_s")
+    if _lambda_min_abs is not None:
+        _lambda_min_abs = float(_lambda_min_abs)
+    if _lambda_max_abs is not None:
+        _lambda_max_abs = float(_lambda_max_abs)
+
+    _backlog = _DEFAULT_UVICORN_BACKLOG
+    _base_port = int(_DEFAULT_PORT)
+
+    async def _orchestrate() -> Dict[str, Dict[str, Any]]:
+        _out: Dict[str, Dict[str, Any]] = {}
+        _combo_idx = 0
+        _total = len(_cs) * len(_Ks) * len(_mu_factors)
+        for _c_val in _cs:
+            for _K_val in _Ks:
+                if _K_val < _c_val:
+                    continue
+                for _mu_factor in _mu_factors:
+                    _combo_idx += 1
+                    _mu_combo = float(_mu_factor) * float(_mu_anchor)
+                    # collapse axes into one sympy-safe identifier (no dots, no internal underscores; encoding rationale lives on `_drive_one_combo`)
+                    _mu_factor_tag = int(round(float(_mu_factor) * 100))
+                    _tag = f"CALIBc{_c_val}K{_K_val}m{_mu_factor_tag}"
+                    if verbose:
+                        print(f"  [{_combo_idx}/{_total}] {_tag} "
+                              f"mu={_mu_combo:.1f} req/s ...", flush=True)
+                    # one port per combo so consecutive lifecycles do not collide on TIME_WAIT
+                    _port = _base_port + _combo_idx
+                    _hs = await _drive_one_combo(
+                        c_srv=_c_val, K=_K_val, mu_combo=_mu_combo,
+                        lambda_steps=_lambda_steps,
+                        lambda_factor_min=_lambda_factor_min,
+                        util_threshold=_util_threshold,
+                        probe_window_s=_probe_window_s,
+                        payload_size_bytes=_payload_bytes,
+                        tag=_tag, port=_port,
+                        lambda_min_req_per_s=_lambda_min_abs,
+                        lambda_max_req_per_s=_lambda_max_abs)
+                    if not _hs:
+                        if verbose:
+                            print("      band collapsed (mu*c below lambda_min) -- skipping",
+                                  flush=True)
+                        continue
+                    # synthesise a per-combo envelope; loopback.median_us encodes mu_combo
+                    if _mu_combo > 0:
+                        _r_us = 1e6 / _mu_combo
+                    else:
+                        _r_us = 0.0
+                    _synth_env = {
+                        "handler_scaling": _hs,
+                        "loopback": {"median_us": _r_us},
+                        "args": {"uvicorn_backlog": int(_backlog)},
+                    }
+                    _card = derive_calib_coefs(_synth_env,
+                                               payload_size_bytes=_payload_bytes,
+                                               tag=_tag)
+                    if not _card:
+                        if verbose:
+                            print("      empty card -- skipping",
+                                  flush=True)
+                        continue
+                    # overlay combo-specific provenance on the meta block
+                    _meta = dict(_card.get("meta", {}))
+                    _meta.update({
+                        "mu_anchor_req_per_s": float(_mu_anchor),
+                        "mu_anchor_source": _mu_source,
+                        "mu_factor": float(_mu_factor),
+                        "c_srv": int(_c_val),
+                        "K_capacity": int(_K_val),
+                        "probe_window_s": float(_probe_window_s),
+                        "lambda_steps": int(_lambda_steps),
+                    })
+                    _card["meta"] = _meta
+                    _out[_tag] = _card
+                    # quiet window between combos: lets uvicorn release the port + TCP TIME_WAIT drain
+                    if _combo_idx < _total and _inter_trial_s > 0.0:
+                        await asyncio.sleep(_inter_trial_s)
+        return _out
+
+    _sweep = _run_sweep_in_dedicated_loop(_orchestrate)
+
+    if write and _sweep:
+        _profile = envelope.get("host_profile") or {}
+        _path = _build_output_path(_profile)
+        _sweep_path = _path.with_name(_path.stem + "_sweep" + _path.suffix)
+        _envelope_out: Dict[str, Any] = {
+            "host_profile": _profile,
+            "mu_anchor_req_per_s": float(_mu_anchor),
+            "mu_anchor_source": _mu_source,
+            "sweep_grid": _grid,
+            "combos": _sweep,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        _write_json(_sweep_path, _envelope_out)
+        if verbose:
+            print(f"  wrote: {_sweep_path}", flush=True)
+
+    return _sweep
 
 
 def main(argv: Optional[List[str]] = None) -> None:
