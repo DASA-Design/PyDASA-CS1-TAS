@@ -35,9 +35,9 @@
         },
         {
             "symbol": "sigma",
-            "expr_pattern": "{pi[0]} * {pi[6]}**(-1)",
+            "expr_pattern": "{pi[0]} * {pi[3]}**(-1)",
             "name": "Stall",
-            "description": "sigma = W*lambda/L - Little's-law consistency / blocking indicator"
+            "description": "sigma = W*lambda/K - Stall / blocking indicator (queueing share of capacity)"
         },
         {
             "symbol": "eta",

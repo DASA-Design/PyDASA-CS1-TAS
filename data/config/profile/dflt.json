@@ -3,6 +3,7 @@
     "adaptation": "baseline",
     "source": "Weyns & Calinescu 2015 [1] Table III (7-service TAS catalogue); topology and variable ranges from __OLD__/data/config/cs1/default_qn_model.csv and __OLD__/data/config/cs1/default_dim_variables.csv.",
     "notes": "13-artifact queueing network, baseline (no adaptation). TAS_1..TAS_6 are composite workflow stages; MAS_1..MAS_3 are Medical Analysis Services; AS_1..AS_3 are Alarm Services; DS_3 is the Drug Service. External arrivals enter at TAS_1 with lambda_z=345 req/s.",
+    "TODO_revisit_rates": "REVISIT mu (service rates) and lambda_z (arrival rate) before locking the comparison. The Camara/Weyns numbers (mu in [150, 1580] req/s, lambda_z=345) come from a Java/ReSeP stack; the FastAPI prototype caps at ~200 req/s sustained per `src.methods.calibration --rate-sweep --rate-sweep-target-loss 1.0`. With the seeded values the prototype is over-driven (~7 % effective-rate loss at lambda_z=345), so analytic vs experiment comparisons in 07-comparison.ipynb will be biased by client undershoot rather than measuring the actual DASA tech-agnostic claim. Two options: (a) scale lambda_z down to the prototype-sustainable rate while keeping mu ratios; (b) bump mu uniformly so the prototype headroom matches Camara's. Decide before running 06-yoly-experimental.ipynb at scale.",
     "artifacts": {
         "TAS_{1}": {
             "name": "TAS composite stage 1 (dispatch)",

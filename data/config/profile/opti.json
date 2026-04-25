@@ -3,6 +3,7 @@
     "adaptation": "aggregate",
     "source": "Optimal catalogue from __OLD__/data/config/cs1/optimal_qn_model.csv and __OLD__/data/config/cs1/optimal_dim_variables.csv. Baseline (dflt) routing and swap-source services (MAS_3, AS_3, DS_3) carried over from __OLD__/data/config/cs1/default_*.csv for scenario s1.",
     "notes": "Three after-adaptation scenarios. The `artifacts` block carries both dflt-variant and opti-variant entries for the three swap slots (MAS_3 vs MAS_4 at node 6, AS_3 vs AS_4 at node 9, DS_3 vs DS_1 at node 11). Each scenario's `_nodes` list names the 13 artifact keys active for that scenario, in routing-matrix order.",
+    "TODO_revisit_rates": "REVISIT mu (service rates) and lambda_z (arrival rate) before locking the comparison. Same concern as dflt.json: Camara/Weyns numbers (mu in [150, 1580] req/s, lambda_z=345) come from a Java/ReSeP stack; the FastAPI prototype caps at ~200 req/s sustained. The opti swap services (MAS_4 mu=880, AS_4 mu=210, DS_1 mu=250) need the same review as the dflt slots. Whatever rescaling is chosen for dflt.json must be applied symmetrically here so the s1/s2/aggregate scenarios remain comparable. Decide before running 06-yoly-experimental.ipynb at scale.",
     "artifacts": {
         "TAS_{1}": {
             "name": "TAS composite stage 1 (dispatch)",
