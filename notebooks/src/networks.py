@@ -6,7 +6,7 @@ Clean consolidated version reconciling CS-01A and Iter2 approaches.
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-from src.queueing import Queue
+from notebooks.src.queueing import Queue
 # from typing import Callable
 
 UTIL_THLD = 0.95  # Stop when utilization reaches 95.0%

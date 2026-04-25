@@ -1,10 +1,10 @@
-﻿import matplotlib.pyplot as plt
+﻿﻿import matplotlib.pyplot as plt
 from matplotlib import colormaps
 from matplotlib import colors as mcolors
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 # from mpl_toolkits.mplot3d import Axes3D
-from src.networks import find_key
+from notebooks.src.networks import find_key
 import numpy as np
 import os
 
@@ -616,7 +616,7 @@ def plot_yoly_arts_behaviour(title: str,
                                    edgecolors="black",
                                    linewidths=0.1,
                                    label=label,
-                                           rasterized=True)
+                                   rasterized=True)
 
                         if (K_val in K_ends and K_val not in lbl_K_vals):
                             mask_idx = np.where(mask)[0]
@@ -638,7 +638,7 @@ def plot_yoly_arts_behaviour(title: str,
                                edgecolors="black",
                                linewidths=0.1,
                                label=path_lbl,
-                                           rasterized=True)
+                               rasterized=True)
 
                 has_legend = True
                 plot_success = True
@@ -1009,7 +1009,7 @@ def plot_yoly_arts_charts(title: str,
                                                edgecolors="black",
                                                linewidths=0.1,
                                                label=label,
-                                           rasterized=True)
+                                               rasterized=True)
 
                                     if (K_val in K_ends and K_val not in lbl_K_vals):
                                         mask_idx = np.where(mask)[0]
@@ -1177,7 +1177,7 @@ def plot_yoly_arts_charts(title: str,
                                                edgecolors="black",
                                                linewidths=0.1,
                                                label=label,
-                                           rasterized=True)
+                                               rasterized=True)
 
                                     if K_val not in lbl_K_vals:
                                         mask_idx = np.where(mask)[0]
@@ -1373,7 +1373,7 @@ def plot_system_behaviour(title: str,
                            edgecolors="black",
                            linewidths=0.1,
                            label=path_lbl,
-                                           rasterized=True)
+                           rasterized=True)
 
             has_legend = True
 
@@ -1444,7 +1444,7 @@ def plot_system_behaviour(title: str,
                                edgecolors="black",
                                linewidths=0.1,
                                label=label,
-                                           rasterized=True)
+                               rasterized=True)
 
                     if K_val not in lbl_K_vals:
                         mask_idx = np.where(mask)[0]
@@ -1660,7 +1660,7 @@ def plot_yoly_chart(title: str,
                                    edgecolors="black",
                                    linewidths=0.2,
                                    label=label,
-                                           rasterized=True)
+                                   rasterized=True)
 
                         if (K_val in K_ends and K_val not in lbl_K_vals):
                             mask_idx = np.where(mask)[0]
@@ -1682,7 +1682,7 @@ def plot_yoly_chart(title: str,
                                edgecolors="black",
                                linewidths=0.2,
                                label=path_lbl,
-                                           rasterized=True)
+                               rasterized=True)
 
                 has_legend = True
 
@@ -1781,7 +1781,7 @@ def plot_yoly_chart(title: str,
                                    edgecolors="black",
                                    linewidths=0.2,
                                    label=label,
-                                           rasterized=True)
+                                   rasterized=True)
 
                         if K_val not in lbl_K_vals:
                             mask_idx = np.where(mask)[0]
