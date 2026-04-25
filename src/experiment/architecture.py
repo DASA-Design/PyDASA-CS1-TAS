@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Module networks.py
-==================
+Module experiment/architecture.py
+=================================
 
 Configuration-sweep helper for the experimental method's yoly-experimental notebook.
 
@@ -13,10 +13,10 @@ Only one sweep:
 
 Coefficients (same closed form as `src.dimensional.networks`):
 
-    - theta = L / K              (Occupancy)
-    - sigma = lambda * W / L     (Stall, Little's-law identity)
-    - eta   = chi * K / (mu * c) (Effective-yield)
-    - phi   = L / K              (Memory-use, collapses to theta in CS-01 TAS schema)
+    - theta = L / K                            (Occupancy)
+    - sigma = lambda * W / K                   (Stall, queueing share of capacity)
+    - eta   = chi * K / (mu * c)               (Effective-yield)
+    - phi   = (L * delta) / (K * delta)        (Memory-use; explicit byte arithmetic, reduces to L/K under constant delta)
 
 *IMPORTANT:* each sweep point is one full mesh launch + ramp; budget ~30 s
 per combo. Use a small grid (3 mu_factors x 2 c x 2 K = 12 combos minimum)
@@ -25,7 +25,6 @@ unless you have hours to spare.
 # native python modules
 from __future__ import annotations
 
-import asyncio
 import copy
 import tempfile
 from dataclasses import replace
@@ -158,10 +157,15 @@ def sweep_arch_exp(cfg: NetCfg,
 
     Returns:
         Dict[str, Dict[str, np.ndarray]]: nested `{artifact_key: per_artifact_sweep}`. Per-artifact dict shape matches `src.dimensional.networks.sweep_arch` so the same plotters consume both.
+
+    Raises:
+        ValueError: when `cfg` carries zero artifacts (no per-node entries to derive coefficients from).
+        KeyError: when `method_cfg` lacks one of the keys consumed by the inner `_run_async` (`ramp`, `seed`, `request_size_bytes`).
     """
-    # local import: src.methods.experiment depends on src.experiment, so
-    # importing it at module-top would create a circular import
-    from src.methods.experiment import _build_svc_df_from_logs, _run_async
+    # lazy-import to break the circular dep with src.methods.experiment; pull the Jupyter-safe runner so notebooks can call sweep_arch_exp under an ambient asyncio loop
+    from src.methods.experiment import (_build_svc_df_from_logs,
+                                        _run_async,
+                                        _run_async_safe)
 
     # resolve thresholds + grid knobs (kwarg wins over grid value when set)
     _util = float(sweep_grid.get("util_threshold", util_threshold))
@@ -182,9 +186,7 @@ def sweep_arch_exp(cfg: NetCfg,
                 if _K_int < _c_int:
                     continue
 
-                # rebuild cfg with the per-combo overrides; the launcher
-                # reads mu / c / K via ArtifactSpec properties so the
-                # mutated vars block is what the mesh actually deploys
+                # rebuild cfg with per-combo overrides; mutated vars block is what the mesh deploys
                 _cfg_combo = _override_cfg(cfg,
                                            mu_factor=float(_mf),
                                            c_int=_c_int,
@@ -194,20 +196,19 @@ def sweep_arch_exp(cfg: NetCfg,
                 with tempfile.TemporaryDirectory() as _tmp_str:
                     _log_dir = Path(_tmp_str)
                     try:
-                        _run_out = asyncio.run(_run_async(_cfg_combo,
-                                                          method_cfg,
-                                                          adp,
-                                                          _log_dir))
-                    except Exception:
-                        # mesh launch / ramp failure -> skip this combo
+                        _run_out = _run_async_safe(
+                            lambda: _run_async(_cfg_combo,
+                                               method_cfg,
+                                               adp,
+                                               _log_dir))
+                    except (RuntimeError, OSError, ConnectionError):
+                        # mesh launch / ramp failure -> skip this combo so genuine bugs still propagate
                         continue
                     _nds = _build_svc_df_from_logs(_cfg_combo,
                                                    _log_dir,
                                                    _run_out["duration_s"])
 
-                # combo-wide stability gate: drop the whole combo if any
-                # node saturated, mirroring the dimensional sweep's
-                # first-node-to-saturate convention
+                # combo-wide stability gate: drop the whole combo if any node saturated
                 if (_nds["rho"] >= _util).any():
                     continue
 
@@ -223,6 +224,12 @@ def sweep_arch_exp(cfg: NetCfg,
                     _W = float(_row["W"])
                     _eps = float(_row["epsilon"])
                     _mu = float(_a.mu)
+                    # per-artifact per-request payload (kB); 1 kB fallback when missing
+                    _d_sym = f"d_{{{_a.key}}}"
+                    if _d_sym in _a.vars:
+                        _delta_kB = float(_a.vars[_d_sym]["_setpoint"])
+                    else:
+                        _delta_kB = 1.0
 
                     # idle / failed measurements have no coefficient signal
                     if _lam <= 0 or _L <= 0:
@@ -230,9 +237,15 @@ def sweep_arch_exp(cfg: NetCfg,
 
                     _chi = _lam * (1.0 - _eps)
                     _theta = _L / _K_int
-                    _sigma = _lam * _W / _L
+                    _sigma = _lam * _W / float(_K_int)
                     _eta = _chi * _K_int / (_mu * _c_int)
-                    _phi = _L / _K_int
+                    # phi = M_act/M_buf with explicit delta; reduces to L/K under constant payload (sanity-check)
+                    _m_act = _L * _delta_kB
+                    _m_buf = _K_int * _delta_kB
+                    if _m_buf > 0:
+                        _phi = _m_act / _m_buf
+                    else:
+                        _phi = float("nan")
 
                     _k = _a.key
                     _per_art[_k][f"\\theta_{{{_k}}}"].append(_theta)

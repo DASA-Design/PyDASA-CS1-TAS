@@ -618,7 +618,7 @@ _DIM_COEF_SYMS = {
 DIM_GLOSSARY_DEFAULT = [
     "LEGEND",
     r"$\theta = \frac{L}{K}$: Occupancy (queue fill ratio)",
-    r"$\sigma = \frac{W\lambda}{L}$: Stall (Little's-law residual; blocking)",
+    r"$\sigma = \frac{W\lambda}{K}$: Stall (queueing share of capacity)",
     r"$\eta = \frac{\chi \cdot K}{\mu \cdot c}$: Effective-yield (utilisation headroom)",
     r"$\phi = \frac{M_{act}}{M_{buf}}$: Memory-usage (buffer fill)",
 ]

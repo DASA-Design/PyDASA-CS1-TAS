@@ -621,7 +621,7 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
         _ax.tick_params(**_TICK_STYLE)
         for _spine in _ax.spines.values():
             _spine.set_edgecolor(_TEXT_BLACK)
-        # sigma clusters at 1.0 (Little's-law identity); bump precision so ticks don't collapse to "1.0e+00"
+        # sigma ~ theta under Little's law (lambda*W = L); bump precision so small values don't collapse to "1.0e+00"
         if _x_key != "sigma":
             _x_axes = ["x"]
         else:
@@ -911,7 +911,7 @@ def plot_system_behaviour(coeff_data: Dict[str, Any],
     _style_3d_panes(_ax)
     _ax.grid(True, **_GRID_STY_3D)
     _apply_sci_format(_ax, axes_list=["x", "z"])
-    # sigma clusters at 1.0 (Little's-law); bump precision so ticks don't collapse to "1.0e+00"
+    # sigma ~ theta under Little's law (lambda*W = L); bump precision so small values don't collapse to "1.0e+00"
     _apply_sci_format(_ax, axes_list=["y"], sig=4)
     for _axis_name in ("x", "y", "z"):
         _ax.tick_params(axis=_axis_name, **_TICK_STY_3D_SINGLE)
@@ -1259,7 +1259,7 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
         _style_3d_panes(_ax)
         _ax.grid(True, **_GRID_STY_3D)
         _apply_sci_format(_ax, axes_list=["x", "z"])
-        # sigma clusters at 1.0 (Little's-law); bump precision so ticks don't collapse to "1.0e+00"
+        # sigma ~ theta under Little's law (lambda*W = L); bump precision so small values don't collapse to "1.0e+00"
         _apply_sci_format(_ax, axes_list=["y"], sig=4)
         for _axis_name in ("x", "y", "z"):
             _ax.tick_params(axis=_axis_name, **_TICK_STY_3D_GRID)
@@ -1385,7 +1385,7 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
             _ax.tick_params(**_TICK_STYLE)
             for _spine in _ax.spines.values():
                 _spine.set_edgecolor(_TEXT_BLACK)
-            # sigma clusters at 1.0 (Little's-law identity); bump precision so ticks don't collapse to "1.0e+00"
+            # sigma ~ theta under Little's law (lambda*W = L); bump precision so small values don't collapse to "1.0e+00"
             if _x_key != "sigma":
                 _x_axes = ["x"]
             else:

@@ -1788,7 +1788,7 @@ def derive_calib_sweep(envelope: Dict[str, Any],
 
     For each `(c, K)` combo on the grid, anchors `mu` on the envelope's measured `loopback.median_us` and `epsilon = 0` (the `/ping` service has no failure mode), then delegates to `src.dimensional.networks.sweep_artifact` to ramp `mu_factor` and `lambda` and solve M/M/c/K closed-form at every point. Each combo gets its own per-artifact entry in the returned nested dict, tagged `"<tag>_c<c>_K<K>"`, so the existing yoly plotters (`plot_arts_distributions`, `plot_yoly_arts_charts`, `plot_yoly_arts_behaviour`) can iterate render distinct clouds.
 
-    The shape mirrors `src.experiment.networks.sweep_arch_exp`'s output (nested `{artifact_key: {full_symbol: ndarray}}`), so all the multi-artifact view machinery from `06-yoly-experimental.ipynb` works here.
+    The shape mirrors `src.experiment.architecture.sweep_arch_exp`'s output (nested `{artifact_key: {full_symbol: ndarray}}`), so all the multi-artifact view machinery from `06-yoly-experimental.ipynb` works here.
 
     Args:
         envelope (Dict[str, Any]): calibration envelope (must carry `loopback.median_us`).
