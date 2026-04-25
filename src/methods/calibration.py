@@ -3,15 +3,15 @@
 Module methods/calibration.py
 =============================
 
-Per-host noise-floor characterisation method; sibling to `src.methods.analytic` / `stochastic` / `dimensional` / `experiment`, but its subject is the **host**, not the TAS architecture. Runs four baselines (timer resolution, scheduling jitter, loopback latency, empty-handler scaling over `n_con_usr`) and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
+Per-host noise-floor characterisation method; sibling to `src.methods.analytic` / `stochastic` / `dimensional` / `experiment`, but its subject is the host (not the TAS architecture). Runs four baselines (timer resolution, scheduling jitter, loopback latency, empty-handler scaling over `n_con_usr`) and writes a single JSON envelope to `data/results/experiment/calibration/<host>_<YYYYMMDD_HHMMSS>.json`.
 
 Every `experiment` run should reference the latest calibration JSON by timestamp in its run envelope (`baseline_ref`) so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
 
 Kept deliberately small and dependency-light:
 
-    - ctypes `timeBeginPeriod(1)` is inlined so this module stays free of heavy transitive imports that would warm the executor pool and perturb the measurements.
     - `time.perf_counter_ns()` throughout; integer arithmetic in the hot path, seconds only at JSON-write time.
     - FastAPI `/ping` runs in a background uvicorn thread so the loopback probe measures real TCP loopback, not ASGI in-process shortcuts.
+    - `winmm.timeBeginPeriod(1)` is wrapped around the probe block via a contextmanager so asyncio.sleep can resolve sub-15-ms intervals on Windows.
 
 Run::
 
@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import ctypes
 import gc
 import json
 import os
@@ -53,16 +54,13 @@ from typing import Any, Dict, List, Optional, Tuple
 # scientific stack
 import numpy as np
 
-# bring the repo root onto sys.path so ad-hoc script runs import cleanly
+# web stack
+import httpx
+import uvicorn
+from fastapi import FastAPI
+
 _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
-sys.path.insert(0, str(_ROOT))
-
-# HTTP + server stack: imported after the sys.path tweak so a fresh clone works
-import httpx  # noqa: E402
-import uvicorn  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-
 _CALIB_DIR = _ROOT / "data" / "results" / "experiment" / "calibration"
 
 
@@ -96,6 +94,11 @@ _DEFAULT_UVICORN_BACKLOG = int(_CALIB_CFG.get("uvicorn_backlog", 16384))
 _DEFAULT_HTTPX_TIMEOUT_S = float(_CALIB_CFG.get("httpx_timeout_s", 0))
 _DEFAULT_SKIP_JITTER = bool(_CALIB_CFG.get("skip_jitter", False))
 _DEFAULT_SKIP_LOOPBACK = bool(_CALIB_CFG.get("skip_loopback", False))
+# per-request body size (bytes) for the phi coefficient; 0 -> NaN, 131072 (128 kB) -> phi resolves to L/K
+_DEFAULT_PAYLOAD_SIZE_BYTES = int(_CALIB_CFG.get("payload_size_bytes", 0))
+# quiet windows between phase-4 levels + phase-5 trials; lets uvicorn drain before the next ramp (default 0.0 = legacy no-delay)
+_DEFAULT_INTER_LEVEL_DELAY_S = float(_CALIB_CFG.get("inter_level_delay_s", 0.0))
+_DEFAULT_INTER_TRIAL_DELAY_S = float(_CALIB_CFG.get("inter_trial_delay_s", 0.0))
 
 # rate-sweep: opt-in (each trial is a full experiment.run); enable via config or --rate-sweep
 _DEFAULT_SKIP_RATE_SWEEP = bool(_CALIB_CFG.get("skip_rate_sweep", True))
@@ -148,7 +151,6 @@ def _windows_timer_resolution(period_ms: int = 1):
         yield
         return
     try:
-        import ctypes
         _winmm = ctypes.WinDLL("winmm")
     except (OSError, AttributeError):
         yield
@@ -171,7 +173,6 @@ def snapshot_host_profile() -> Dict[str, Any]:
     _mem_gb: Optional[float] = None
     try:
         if sys.platform == "win32":
-            import ctypes
 
             class _MEMSTAT(ctypes.Structure):
                 _fields_ = [
@@ -191,7 +192,7 @@ def snapshot_host_profile() -> Dict[str, Any]:
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_stat))
             _total_phys = float(_stat.ullTotalPhys)
             _mem_gb = _total_phys / (1024 ** 3)
-    except Exception:
+    except (OSError, AttributeError):
         _mem_gb = None
 
     _hostname = socket.gethostname()
@@ -341,7 +342,7 @@ class _UvicornThread(threading.Thread):
                 _r = httpx.get(_url, timeout=0.5)
                 if _r.status_code == 200:
                     return
-            except Exception:
+            except (httpx.HTTPError, ConnectionError, OSError):
                 pass
             time.sleep(0.05)
             _msg = f"uvicorn did not become ready within {timeout_s} s"
@@ -418,6 +419,7 @@ async def measure_handler_scaling(port: int,
                                   warmup: int,
                                   per_worker: Optional[int] = None,
                                   samples_per_level: int = _DEFAULT_SAMPLES_PER_LEVEL,
+                                  inter_level_delay_s: float = _DEFAULT_INTER_LEVEL_DELAY_S,
                                   on_level_start: Optional[Any] = None,
                                   on_level_done: Optional[Any] = None) -> Dict[str, Dict[str, float]]:
     """*measure_handler_scaling()* loopback latency at increasing concurrent-user load levels.
@@ -503,6 +505,9 @@ async def measure_handler_scaling(port: int,
             # release per-level buffers before the next level allocates
             del _all, _arr, _us, _tasks, _lists
             gc.collect()
+            # quiet window between levels: lets uvicorn drain TCP backlog + tail responses
+            if inter_level_delay_s > 0.0:
+                await asyncio.sleep(float(inter_level_delay_s))
     return _result
 
 
@@ -617,19 +622,19 @@ def _parse_rates(arg: str) -> Tuple[float, ...]:
 def _batch_size_for(rate: float) -> int:
     """*_batch_size_for()* mirror the auto-batch derivation in `ClientSimulator._probe_at_rate`.
 
-    Reports the expected K at each target rate in the rate-sweep banner so the operator can correlate any loss with batch behaviour.
+    Returns the per-scheduler-tick **send batch size** (NOT the M/M/c/K system capacity). At a given target rate, the client wakes on a `_TARGET_TICK_S` cadence and fires `batch` back-to-back requests per wake to amortise per-iteration overhead. Reported in the rate-sweep banner so the operator can correlate any rate loss with batch behaviour.
 
     Args:
         rate (float): target rate in req/s.
 
     Returns:
-        int: K = round(TARGET_TICK_S / interarrival), clamped to >= 1.
+        int: batch = round(_TARGET_TICK_S / interarrival), clamped to >= 1.
     """
     if rate <= 0:
         return 1
     _interarrival = 1.0 / rate
-    _k = int(round(_TARGET_TICK_S / _interarrival))
-    return max(1, _k)
+    _batch = int(round(_TARGET_TICK_S / _interarrival))
+    return max(1, _batch)
 
 
 def _read_lambda_z_at(adaptation: str,
@@ -780,11 +785,11 @@ def _aggregate_rate_trials(trials: List[Dict[str, float]]
 
 
 def _print_rate_header(rate: float) -> None:
-    """*_print_rate_header()* one-line banner per rate (target, interarrival, K)."""
+    """*_print_rate_header()* one-line banner per rate (target, interarrival, send batch). The reported `batch` is the send-batch size per scheduler tick (NOT the M/M/c/K system capacity)."""
     _interarrival_ms = 1000.0 / rate
-    _k = _batch_size_for(rate)
+    _batch = _batch_size_for(rate)
     print(f"--- target rate {rate:>6.1f} req/s  "
-          f"(interarrival {_interarrival_ms:.2f} ms, K={_k}) ---",
+          f"(interarrival {_interarrival_ms:.2f} ms, batch={_batch}) ---",
           flush=True)
 
 
@@ -849,6 +854,7 @@ def run_rate_sweep(*,
                    entry_service: str = _DEFAULT_RATE_SWEEP_ENTRY_SERVICE,
                    with_lambda_z: bool = False,
                    calibrate: bool = False,
+                   inter_trial_delay_s: float = _DEFAULT_INTER_TRIAL_DELAY_S,
                    verbose: bool = True) -> Dict[str, Any]:
     """*run_rate_sweep()* drive the experiment mesh at N target rates, `trials_per_rate` trials each.
 
@@ -892,12 +898,20 @@ def run_rate_sweep(*,
     _aggregates: Dict[float, Dict[str, float]] = {}
     _per_trial: Dict[float, List[Dict[str, float]]] = {}
 
-    for _rate in _rates_list:
+    _delay = float(inter_trial_delay_s)
+
+    for _r_idx, _rate in enumerate(_rates_list):
+        # quiet window between rates (skip before the first rate to avoid an idle gap before any work runs)
+        if _r_idx > 0 and _delay > 0.0:
+            time.sleep(_delay)
         if verbose:
             print()
             _print_rate_header(_rate)
         _trials: List[Dict[str, float]] = []
         for _i in range(int(trials_per_rate)):
+            # quiet window between trials (skip before trial 0 of each rate)
+            if _i > 0 and _delay > 0.0:
+                time.sleep(_delay)
             _res = _run_single_rate_probe(
                 rate=_rate,
                 adaptation=adaptation,
@@ -1070,6 +1084,7 @@ async def _run_async_probes(*,
                             per_worker: Optional[int],
                             samples_per_level: int,
                             ready_timeout_s: float,
+                            inter_level_delay_s: float = _DEFAULT_INTER_LEVEL_DELAY_S,
                             on_phase_start: Optional[Any] = None,
                             on_level_start: Optional[Any] = None,
                             on_level_done: Optional[Any] = None) -> Dict[str, Any]:
@@ -1110,6 +1125,7 @@ async def _run_async_probes(*,
             warmup=loopback_warmup,
             per_worker=per_worker,
             samples_per_level=samples_per_level,
+            inter_level_delay_s=inter_level_delay_s,
             on_level_start=on_level_start,
             on_level_done=on_level_done,
         )
@@ -1143,6 +1159,9 @@ def run(*,
         rate_sweep_entry_service: str = _DEFAULT_RATE_SWEEP_ENTRY_SERVICE,
         rate_sweep_with_lambda_z: bool = False,
         rate_sweep_calibrate: bool = True,
+        payload_size_bytes: int = _DEFAULT_PAYLOAD_SIZE_BYTES,
+        inter_level_delay_s: float = _DEFAULT_INTER_LEVEL_DELAY_S,
+        inter_trial_delay_s: float = _DEFAULT_INTER_TRIAL_DELAY_S,
         write: bool = True,
         output: Optional[str] = None,
         verbose: bool = True) -> Dict[str, Any]:
@@ -1250,6 +1269,7 @@ def run(*,
                 per_worker=per_worker,
                 samples_per_level=samples_per_level,
                 ready_timeout_s=ready_timeout_s,
+                inter_level_delay_s=inter_level_delay_s,
                 on_phase_start=_on_phase,
                 on_level_start=_on_level_start,
                 on_level_done=_on_level_done,
@@ -1279,12 +1299,14 @@ def run(*,
             entry_service=rate_sweep_entry_service,
             with_lambda_z=rate_sweep_with_lambda_z,
             calibrate=rate_sweep_calibrate,
+            inter_trial_delay_s=inter_trial_delay_s,
             verbose=verbose,
         )
 
     # Route-B dimensional card from measured handler_scaling + loopback; phi stays NaN when payload_size_bytes=0
     if ("handler_scaling" in _envelope) and ("loopback" in _envelope):
-        _dim_card = derive_calib_coefs(_envelope, payload_size_bytes=0)
+        _dim_card = derive_calib_coefs(_envelope,
+                                       payload_size_bytes=payload_size_bytes)
         if _dim_card:
             _envelope["dimensional_card"] = _dim_card
 
@@ -1329,10 +1351,7 @@ def _build_argparser() -> argparse.ArgumentParser:
                     default=_DEFAULT_LOOPBACK_WARMUP,
                     help=("warmup GETs discarded before the loopback probe "
                           f"(default: {_DEFAULT_LOOPBACK_WARMUP})"))
-    _default_n_con_usr_tokens: List[str] = []
-    for _c in _DEFAULT_N_CON_USR:
-        _default_n_con_usr_tokens.append(str(_c))
-    _default_n_con_usr_csv = ",".join(_default_n_con_usr_tokens)
+    _default_n_con_usr_csv = ",".join(str(_c) for _c in _DEFAULT_N_CON_USR)
 
     _p.add_argument("--n-con-usr", type=str, default=None,
                     help=("comma-separated concurrent-user load levels "
@@ -1361,10 +1380,7 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help="run only the timer probe (fastest self-test)")
 
     # -- rate-sweep flags (opt-in; adds ~N_rates * trials * probe_s to wall time) --
-    _default_rates_tokens: List[str] = []
-    for _r in _DEFAULT_RATE_SWEEP_RATES:
-        _default_rates_tokens.append(str(_r))
-    _default_rates_csv = ",".join(_default_rates_tokens)
+    _default_rates_csv = ",".join(str(_r) for _r in _DEFAULT_RATE_SWEEP_RATES)
 
     if _DEFAULT_SKIP_RATE_SWEEP:
         _default_rate_sweep_state = "OFF"
@@ -1400,13 +1416,19 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help=("inject the seeded lambda_z at the entry service "
                           "into the rate-sweep rate list"))
 
+    _p.add_argument("--payload-size-bytes", type=int,
+                    default=_DEFAULT_PAYLOAD_SIZE_BYTES,
+                    help=("per-request body size for the dimensional card's "
+                          "phi coefficient (bytes); 0 leaves phi NaN "
+                          f"(default: {_DEFAULT_PAYLOAD_SIZE_BYTES})"))
+
     _p.add_argument("--output", type=str, default=None,
                     help=("override the output path; default is "
                           "data/results/experiment/calibration/<host>_<date>.json"))
     return _p
 
 
-# Route-B dimensional card; shape matches src.view.dc_charts.plot_yoly_chart
+# Route-B dimensional card; shape matches src.view.plot_yoly_chart
 _CALIB_DIM_TAG = "CALIB"
 
 
@@ -1489,14 +1511,7 @@ def _build_calib_observables(handler_scaling: Dict[str, Dict[str, float]],
     return _out
 
 
-# Variable schema for the calibration artifact. Trimmed to what the four
-# target coefficients (theta, sigma, eta, phi) reference. Memory variables use
-# `M_{a<tag>}` / `M_{b<tag>}` (a = active, b = buffer): sympy's parse_latex
-# treats multi-character roots (e.g. `MA_{X}`) as products of single letters
-# (`M*A`), which mangles aliases; keeping a single-letter root with the tag
-# folded into the subscript avoids that. q-suffixed forms (Lq, Wq) and the
-# nested-brace M_{act_{X}} layout are excluded for the same reason: their
-# coefficient expressions break sympy's LaTeX parser when MCS lambdifies them.
+# calibration-artifact variable schema; M_{a<tag>}/M_{b<tag>} chosen because sympy parses MA_{X} as M*A and breaks aliases; q-suffixed and nested-brace forms (Lq, Wq, M_{act_{X}}) excluded for the same parser reason
 _CALIB_VAR_SPECS: Tuple[Tuple[str, str, str, str, str, str], ...] = (
     # (short_key, latex_template, dims, units, cat, dist_type)
     ("lam", "\\lambda_{<TAG>}", "S*T^-1", "req/s", "IN", "uniform"),
@@ -1625,9 +1640,7 @@ def _run_calib_pipeline(vars_block: Dict[str, Dict[str, Any]],
     _eng = build_engine(tag, vars_block, _sch)
     _eng.run_analysis()
 
-    # Resolve runtime variable symbols and build target-coefficient expressions
-    # against base variables (no Pi-group indices) so the pipeline is robust
-    # against Buckingham's ordering shifts on a different variable set.
+    # explicit base-variable LaTeX expressions; no Pi-group indices so robust against Buckingham ordering shifts
     _lam = _calib_var_sym("lam", tag)
     _mu = _calib_var_sym("mu", tag)
     _chi = _calib_var_sym("chi", tag)
@@ -1643,8 +1656,8 @@ def _run_calib_pipeline(vars_block: Dict[str, Dict[str, Any]],
          f"\\frac{{{_L}}}{{{_K}}}",
          (_L, _K)),
         ("\\sigma", "Stall",
-         f"\\frac{{{_lam}*{_W}}}{{{_L}}}",
-         (_lam, _W, _L)),
+         f"\\frac{{{_lam}*{_W}}}{{{_K}}}",
+         (_lam, _W, _K)),
         ("\\eta", "Effective-yield",
          f"\\frac{{{_chi}*{_K}}}{{{_c}*{_mu}}}",
          (_chi, _K, _c, _mu)),
@@ -1662,8 +1675,7 @@ def _run_calib_pipeline(vars_block: Dict[str, Dict[str, Any]],
                              _variables=dict(_eng.variables),
                              _name=f"{tag} {_name} coefficient",
                              description=f"{_name} ({_full})")
-        # __post_init__ resets var_dims when _dim_col is empty; populate after
-        # construction so MonteCarloSimulation accepts the coefficient.
+        # Coefficient.__post_init__ resets var_dims when _dim_col is empty; populate after construction so MCS accepts it
         _coeff.var_dims = {_v: 0 for _v in _refs}
         _der[_full] = _coeff
 
@@ -1675,9 +1687,7 @@ def _run_calib_pipeline(vars_block: Dict[str, Dict[str, Any]],
         _cat="DATA",
     )
     _mcs.create_simulations()
-    # 0/0 in the phi expression when payload_size_bytes=0 surfaces as a
-    # RuntimeWarning from the lambdified function; the resulting NaNs are
-    # forced to NaN downstream regardless, so silence the noise.
+    # silence 0/0 RuntimeWarning when payload=0; downstream forces NaN regardless
     with np.errstate(divide="ignore", invalid="ignore"):
         _mcs.run_simulation(iters=max(int(n_levels), 1), mode="DATA")
 
@@ -1769,6 +1779,82 @@ def derive_calib_coefs(envelope: Dict[str, Any],
     return _coefs
 
 
+def derive_calib_sweep(envelope: Dict[str, Any],
+                       *,
+                       sweep_grid: Optional[Dict[str, Any]] = None,
+                       tag: str = _CALIB_DIM_TAG
+                       ) -> Dict[str, Dict[str, np.ndarray]]:
+    """*derive_calib_sweep()* run the analytic (Route A) `(mu, c, K, lambda)` sweep against the calibration service's measured operating point.
+
+    For each `(c, K)` combo on the grid, anchors `mu` on the envelope's measured `loopback.median_us` and `epsilon = 0` (the `/ping` service has no failure mode), then delegates to `src.dimensional.networks.sweep_artifact` to ramp `mu_factor` and `lambda` and solve M/M/c/K closed-form at every point. Each combo gets its own per-artifact entry in the returned nested dict, tagged `"<tag>_c<c>_K<K>"`, so the existing yoly plotters (`plot_arts_distributions`, `plot_yoly_arts_charts`, `plot_yoly_arts_behaviour`) can iterate render distinct clouds.
+
+    The shape mirrors `src.experiment.networks.sweep_arch_exp`'s output (nested `{artifact_key: {full_symbol: ndarray}}`), so all the multi-artifact view machinery from `06-yoly-experimental.ipynb` works here.
+
+    Args:
+        envelope (Dict[str, Any]): calibration envelope (must carry `loopback.median_us`).
+        sweep_grid (Optional[Dict[str, Any]]): sweep grid; falls back to `data/config/method/calibration.json::sweep_grid` when `None`. Required keys: `mu_factor`, `c`, `K`, `lambda_steps`, `lambda_factor_min`, `util_threshold`.
+        tag (str): base artifact subscript tag; per-combo tags are derived as `"<tag>_c<c>_K<K>"`.
+
+    Returns:
+        Dict[str, Dict[str, np.ndarray]]: nested `{combo_tag: per_combo_sweep}`. Each per-combo dict matches `sweep_artifact`'s return shape (LaTeX-subscripted `\\theta_{combo}`, `\\sigma_{combo}`, `\\eta_{combo}`, `\\phi_{combo}`, plus `c_{combo}`, `\\mu_{combo}`, `K_{combo}`, `\\lambda_{combo}`). Empty dict when the envelope has no usable `loopback` block or the grid is empty.
+    """
+    from src.dimensional.networks import sweep_artifact  # noqa: WPS433
+
+    _loop = envelope.get("loopback")
+    if not isinstance(_loop, dict):
+        return {}
+    _mu_us = float(_loop.get("median_us", 0.0))
+    if _mu_us <= 0.0:
+        return {}
+    _mu = 1e6 / _mu_us
+
+    if sweep_grid is None:
+        _grid = _CALIB_CFG.get("sweep_grid", {})
+    else:
+        _grid = dict(sweep_grid)
+    if not _grid:
+        return {}
+
+    # iterate (c, K) cartesian explicitly; sweep_artifact handles the inner (mu_factor x lambda_steps) ramp
+    _cs: List[int] = [int(_v) for _v in _grid.get("c", [1])]
+    _Ks: List[int] = [int(_v) for _v in _grid.get("K", [10])]
+
+    _out: Dict[str, Dict[str, np.ndarray]] = {}
+    for _c_val in _cs:
+        for _K_val in _Ks:
+            if _K_val < _c_val:
+                continue
+            _combo_tag = f"{tag}_c{_c_val}_K{_K_val}"
+            _vars: Dict[str, Dict[str, Any]] = {
+                f"\\mu_{{{_combo_tag}}}": {
+                    "_sym": f"\\mu_{{{_combo_tag}}}",
+                    "_fwk": "CUSTOM",
+                    "_dims": "S*T^-1",
+                    "_units": "req/s",
+                    "_setpoint": _mu,
+                },
+                f"\\epsilon_{{{_combo_tag}}}": {
+                    "_sym": f"\\epsilon_{{{_combo_tag}}}",
+                    "_fwk": "CUSTOM",
+                    "_dims": "S*T^-1",
+                    "_units": "n.a.",
+                    "_setpoint": 0.0,
+                },
+            }
+            # per-combo grid: pin c and K to a single value so sweep_artifact's inner cartesian collapses to mu_factor x lambda_steps
+            _combo_grid = dict(_grid)
+            _combo_grid["c"] = [_c_val]
+            _combo_grid["K"] = [_K_val]
+            _combo_sweep = sweep_artifact(_combo_tag, _vars, _combo_grid)
+            # skip combos where every lambda step was unstable (empty arrays)
+            _theta = _combo_sweep.get(f"\\theta_{{{_combo_tag}}}")
+            if _theta is None or len(_theta) == 0:
+                continue
+            _out[_combo_tag] = _combo_sweep
+
+    return _out
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     """*main()* CLI entry point; parses `argv` and delegates to `run()`.
 
@@ -1820,6 +1906,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         rate_sweep_trials=_args.rate_sweep_trials,
         rate_sweep_target_loss_pct=_args.rate_sweep_target_loss,
         rate_sweep_with_lambda_z=_args.rate_sweep_with_lambda_z,
+        payload_size_bytes=_args.payload_size_bytes,
         write=True,
         output=_args.output,
         verbose=True,

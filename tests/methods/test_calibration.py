@@ -7,20 +7,37 @@ Contract tests for the calibration method in `src.methods.calibration`. Focuses 
 
 **TestRateSweepHelpers**
     - `test_parse_rates_handles_whitespace_and_empty_fragments()` CSV parser contract mirrors `_parse_n_con_usr`.
-    - `test_batch_size_for_matches_target_tick()` K-batch formula tracks `_TARGET_TICK_S`.
+    - `test_batch_size_for_matches_target_tick()` send-batch formula tracks `_TARGET_TICK_S`.
     - `test_aggregate_rate_trials_stats_are_correct()` mean / lo / hi / mean_loss_pct maths.
     - `test_find_highest_sustainable_rate_walks_ascending()` calibrate helper picks the top passing rate.
 
 **TestRunRateSweepOrchestration**
     - `test_run_rate_sweep_no_recursion_into_calibration_gate()` when `run_rate_sweep` drives `experiment.run`, the call passes `skip_calibration=True` so the inner run never re-enters the calibration gate.
     - `test_run_with_skip_rate_sweep_true_skips_block()` top-level `run()` with `skip_rate_sweep=True` does not populate the envelope's `rate_sweep` key and does not import the experiment module.
+
+**TestCalibDimCard**
+    - `test_returns_empty_when_blocks_missing()` no `handler_scaling` or no `loopback` -> empty dict.
+    - `test_keys_match_dc_charts_shape()` LaTeX-subscripted keys plug into `src.view.plot_yoly_chart`.
+    - `test_mu_derived_from_loopback_median()` `mu = 1e6 / loopback.median_us` reflected in the meta block.
+    - `test_pipeline_routes_through_pydasa()` meta flags PyDASA's `MonteCarloSimulation(mode=DATA)` produced the arrays.
+    - `test_theta_and_eta_maths_are_correct()` hand-computed n=10 row locks the formulas (theta = L/K, eta = X*K/(mu*c)).
+    - `test_phi_is_nan_without_payload()` phi is NaN for `payload_size_bytes == 0` (degenerate-memory case).
+    - `test_phi_computes_when_payload_supplied()` constant payload -> phi == theta row-by-row.
+    - `test_run_envelope_carries_dimensional_card()` `run()` attaches the block when handler+loopback are present.
+
+**TestCalibSweep**
+    - `test_returns_empty_when_loopback_missing()` no `loopback` -> empty dict.
+    - `test_returns_empty_when_grid_missing()` explicit empty grid -> empty dict.
+    - `test_one_entry_per_c_K_combo()` nested dict carries one entry per (c, K) cartesian combo, tagged `<base>_c<c>_K<K>`.
+    - `test_per_combo_keys_match_yoly_chart_shape()` every per-combo block carries the LaTeX-subscripted keys the multi-artifact plotters consume.
+    - `test_per_combo_arrays_align()` every coefficient + context array within one combo block shares the same length.
 """
 # native python modules
 from __future__ import annotations
 
 import math
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 # scientific stack
 import pandas as pd
@@ -43,12 +60,12 @@ class TestRateSweepHelpers:
         assert cal._parse_rates("  ,  50  ,  ,  ") == (50.0,)
 
     def test_batch_size_for_matches_target_tick(self) -> None:
-        """*test_batch_size_for_matches_target_tick()* K formula tracks the 20 ms target tick."""
-        # tick = 0.020 s; K = round(tick / interarrival)
+        """*test_batch_size_for_matches_target_tick()* send-batch formula tracks the 20 ms target tick. Note: this batch is the per-tick send count, NOT the M/M/c/K system capacity."""
+        # tick = 0.020 s; batch = round(tick / interarrival); 20/20=1, 20/10=2, 20/2=10
         assert cal._batch_size_for(0) == 1
-        assert cal._batch_size_for(50) == 1          # 20 ms / 20 ms = 1
-        assert cal._batch_size_for(100) == 2         # 20 ms / 10 ms = 2
-        assert cal._batch_size_for(500) == 10        # 20 ms / 2 ms = 10
+        assert cal._batch_size_for(50) == 1
+        assert cal._batch_size_for(100) == 2
+        assert cal._batch_size_for(500) == 10
 
     def test_aggregate_rate_trials_stats_are_correct(self) -> None:
         """*test_aggregate_rate_trials_stats_are_correct()* mean / lo / hi / mean_loss_pct match hand-computed values."""
@@ -84,12 +101,13 @@ class TestRateSweepHelpers:
 class TestRunRateSweepOrchestration:
     """**TestRunRateSweepOrchestration** orchestration contract: no-recursion guard + opt-in gate."""
 
-    def test_run_rate_sweep_no_recursion_into_calibration_gate(self,
-                                                               monkeypatch):
+    def test_run_rate_sweep_no_recursion_into_calibration_gate(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """*test_run_rate_sweep_no_recursion_into_calibration_gate()* the inner `experiment.run` is always invoked with `skip_calibration=True` so the rate sweep never re-enters its own gate."""
-        _calls = []
+        _calls: List[Dict[str, Any]] = []
 
-        def _fake_probe(**kwargs):
+        def _fake_probe(**kwargs: Any) -> Dict[str, Any]:
             _calls.append(kwargs)
             # mimic experiment.run's client_effective_rate + nodes frame
             _rate = float(kwargs["rate"])
@@ -116,12 +134,15 @@ class TestRunRateSweepOrchestration:
         assert "calibrated_rate" in _out
 
         # no-recursion guard: _run_single_rate_probe owns skip_calibration=True; assert it got the right knobs
-        assert len(_calls) == 4  # 2 rates * 2 trials
+        # 2 rates x 2 trials = 4 calls
+        assert len(_calls) == 4
         for _c in _calls:
             assert _c["adaptation"] == cal._DEFAULT_RATE_SWEEP_ADAPTATION
             assert _c["cascade_mode"] == cal._DEFAULT_RATE_SWEEP_CASCADE_MODE
 
-    def test_run_with_skip_rate_sweep_true_skips_block(self, monkeypatch):
+    def test_run_with_skip_rate_sweep_true_skips_block(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """*test_run_with_skip_rate_sweep_true_skips_block()* top-level `run()` with the default `skip_rate_sweep=True` does NOT populate the envelope's `rate_sweep` key and does NOT import `src.methods.experiment`."""
         # ensure a clean slate for the experiment-module import check
         sys.modules.pop("src.methods.experiment", None)
@@ -142,11 +163,11 @@ class TestRunRateSweepOrchestration:
 
 
 class TestCalibDimCard:
-    """**TestCalibDimCard** Route-B dimensional-card derivation contract: coefficients come from measurements (loopback + handler_scaling), output shape plugs into `src.view.dc_charts.plot_yoly_chart`."""
+    """**TestCalibDimCard** Route-B dimensional-card derivation contract: coefficients come from measurements (loopback + handler_scaling), output shape plugs into `src.view.plot_yoly_chart`."""
 
     def _envelope(self, *,
                   loopback_median_us: float = 1000.0,
-                  handler: Dict[str, Dict[str, float]] = None,
+                  handler: Optional[Dict[str, Dict[str, float]]] = None,
                   backlog: int = 16384) -> Dict[str, Any]:
         """*_envelope()* craft a minimal calibration envelope with just the blocks the dim card needs."""
         if handler is None:
@@ -241,3 +262,71 @@ class TestCalibDimCard:
         _stripped = dict(_env)
         _stripped.pop("loopback", None)
         assert cal.derive_calib_coefs(_stripped) == {}
+
+
+class TestCalibSweep:
+    """**TestCalibSweep** Route-A sweep contract: `derive_calib_sweep` walks the `(c, K)` cartesian explicitly and runs an inner `(mu_factor, lambda)` sweep per combo, returning a nested `{combo_tag: {symbol: ndarray}}` dict shaped for the multi-artifact plotters (`src.view.plot_yoly_arts_charts` / `plot_arts_distributions` / `plot_yoly_arts_behaviour`)."""
+
+    def _envelope(self) -> Dict[str, Any]:
+        """*_envelope()* minimal envelope with the loopback block the sweep needs."""
+        return {"loopback": {"median_us": 1000.0}}
+
+    def test_returns_empty_when_loopback_missing(self) -> None:
+        """*test_returns_empty_when_loopback_missing()* no `loopback` -> empty dict (no crash)."""
+        assert cal.derive_calib_sweep({}) == {}
+        assert cal.derive_calib_sweep({"loopback": None}) == {}
+        assert cal.derive_calib_sweep({"loopback": {"median_us": 0.0}}) == {}
+
+    def test_returns_empty_when_grid_missing(self) -> None:
+        """*test_returns_empty_when_grid_missing()* explicit empty grid -> empty dict."""
+        assert cal.derive_calib_sweep(self._envelope(), sweep_grid={}) == {}
+
+    def test_one_entry_per_c_K_combo(self) -> None:
+        """*test_one_entry_per_c_K_combo()* nested dict carries one entry per (c, K) cartesian combo, each tagged `<base>_c<c>_K<K>`."""
+        _grid = {
+            "mu_factor": [1.0],
+            "c": [1, 2],
+            "K": [50, 100],
+            "lambda_steps": 5,
+            "lambda_factor_min": 0.05,
+            "util_threshold": 0.95,
+        }
+        _sweep = cal.derive_calib_sweep(self._envelope(), sweep_grid=_grid)
+        assert set(_sweep.keys()) == {
+            "CALIB_c1_K50", "CALIB_c1_K100",
+            "CALIB_c2_K50", "CALIB_c2_K100",
+        }
+
+    def test_per_combo_keys_match_yoly_chart_shape(self) -> None:
+        """*test_per_combo_keys_match_yoly_chart_shape()* every per-combo block carries the LaTeX-subscripted keys the multi-artifact plotters consume."""
+        _grid = {
+            "mu_factor": [1.0],
+            "c": [1],
+            "K": [50],
+            "lambda_steps": 5,
+            "lambda_factor_min": 0.05,
+            "util_threshold": 0.95,
+        }
+        _sweep = cal.derive_calib_sweep(self._envelope(), sweep_grid=_grid)
+        _combo = "CALIB_c1_K50"
+        assert _combo in _sweep
+        _block = _sweep[_combo]
+        for _prefix in ("\\theta", "\\sigma", "\\eta", "\\phi",
+                        "c", "\\mu", "K", "\\lambda"):
+            _key = f"{_prefix}_{{{_combo}}}"
+            assert _key in _block, f"missing {_key} in {_combo}"
+
+    def test_per_combo_arrays_align(self) -> None:
+        """*test_per_combo_arrays_align()* every coefficient + context array within one combo block shares the same length."""
+        _grid = {
+            "mu_factor": [1.0, 2.0],
+            "c": [1],
+            "K": [50, 200],
+            "lambda_steps": 4,
+            "lambda_factor_min": 0.1,
+            "util_threshold": 0.95,
+        }
+        _sweep = cal.derive_calib_sweep(self._envelope(), sweep_grid=_grid)
+        for _combo, _block in _sweep.items():
+            _lens = {len(_v) for _v in _block.values()}
+            assert len(_lens) == 1, f"{_combo}: misaligned arrays {_lens}"
