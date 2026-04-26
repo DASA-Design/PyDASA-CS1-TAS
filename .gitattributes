@@ -6,6 +6,7 @@
 *.tex   text eol=crlf
 *.md    text eol=crlf
 *.json  text eol=crlf
+*.ipynb text eol=crlf
 *.py    text eol=crlf
 *.bib   text eol=crlf
 *.yml   text eol=crlf
@@ -39,4 +40,3 @@
 *.otf      binary
 *.woff     binary
 *.woff2    binary
-*.ipynb    binary
