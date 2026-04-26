@@ -1,0 +1,74 @@
+# Repository-level line-ending contract.
+#
+# Every text file checks out with CRLF on Windows AND on Linux/macOS so the
+# working copy is identical across collaborators. Git stores the file with the
+# declared eol, so `git diff` does not show phantom line-ending changes when an
+# editor saves a file.
+#
+# This file overrides every developer's local `core.autocrlf` setting -- it is
+# the single source of truth for line endings in this repo.
+#
+# CRLF EVERYWHERE. The repo currently has no `.sh`, `.bash`, `.zsh`, or
+# `Makefile`. If any are added in future, they MUST be either kept as CRLF
+# (and only run on Windows) or have a `* eol=lf` override added explicitly --
+# POSIX bash and POSIX make break on CRLF.
+
+# Default: treat as text, auto-detect, normalise to CRLF on every checkout
+* text=auto eol=crlf
+
+# Source code
+*.py    text eol=crlf
+*.ipynb text eol=crlf
+*.json  text eol=crlf
+*.toml  text eol=crlf
+*.yaml  text eol=crlf
+*.yml   text eol=crlf
+*.cfg   text eol=crlf
+*.ini   text eol=crlf
+
+# Docs / prose
+*.md       text eol=crlf
+*.markdown text eol=crlf
+*.rst      text eol=crlf
+*.txt      text eol=crlf
+*.tex      text eol=crlf
+
+# Web / config
+*.html text eol=crlf
+*.css  text eol=crlf
+*.js   text eol=crlf
+*.svg  text eol=crlf
+
+# Tabular data
+*.csv text eol=crlf
+*.tsv text eol=crlf
+
+# Hidden config files at repo root
+.gitignore     text eol=crlf
+.gitattributes text eol=crlf
+.editorconfig  text eol=crlf
+.flake8        text eol=crlf
+
+# Binary assets -- never line-ending-touched
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.tar  binary
+*.bin  binary
+*.whl  binary
+*.so   binary
+*.dll  binary
+*.pyc  binary
+*.pyd  binary
+
+# Office formats (binary even when ZIP-based)
+*.docx binary
+*.xlsx binary
+*.pptx binary
+*.odt  binary
+*.ods  binary
