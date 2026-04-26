@@ -1,6 +1,16 @@
 {
     "base_port": 8001,
     "host": "127.0.0.1",
+    "deployment": "local",
+    "hosts": {
+        "client": "127.0.0.10",
+        "composite": "127.0.0.20",
+        "atomic": "127.0.0.30"
+    },
+    "network": {
+        "transport": "loopback_aliases",
+        "notes": "Single-host honest bench by default; LAN deployment overrides hosts to real IPs and sets transport='wired_ethernet'."
+    },
     "healthz_timeout_s": 10,
     "duration_s": 60,
     "warmup_s": 2,
