@@ -441,11 +441,17 @@ async def _run_concurrent_worker(client: httpx.AsyncClient,
                                  url: str,
                                  n: int,
                                  body: Dict[str, Any]) -> List[int]:
-    """*_run_concurrent_worker()* one task: issue `n` sequential POSTs of `body`, return RTT ns list."""
+    """*_run_concurrent_worker()* one task; issues `n` sequential POSTs of `body` and returns the per-request RTT in nanoseconds.
+
+    Transient connection errors (ReadError, ConnectionError, OSError, etc.) are swallowed so a single dropped connection at high `n_con_usr` does not abort the whole `asyncio.gather` cascade. The caller's stats reflect successful samples only; the dropped count surfaces via the per-level `samples` figure being below the requested total.
+    """
     _out: List[int] = []
     for _ in range(int(n)):
         _t1 = time.perf_counter_ns()
-        await client.post(url, json=body)
+        try:
+            await client.post(url, json=body)
+        except (httpx.HTTPError, ConnectionError, OSError):
+            continue
         _t2 = time.perf_counter_ns()
         _out.append(_t2 - _t1)
     return _out
