@@ -3,13 +3,7 @@
 Module experiment.py
 ====================
 
-Architectural experiment orchestrator: method 4 of the CS-01 TAS pipeline.
-
-Spins up a FastAPI microservice mesh that mirrors the TAS topology, drives a deterministic-rate client ramp through `TAS_{1}`, collects per-invocation logs per service, and produces the standard envelope shape (per-node DataFrame + network aggregate + R1 / R2 / R3 verdict).
-
-The experiment validates DASA's technology-agnosticism: the analytic / dimensional predictions should hold on a completely independent stack. It does NOT reproduce the original authors' ReSeP / Java TAS numbers.
-
-Output paths split by deployment (`local` / `loopback_aliased` / `remote`); see `notes/distribute.md` §4.3.
+Method 4 of the CS-01 TAS pipeline; FastAPI mesh + ramped client through `TAS_{1}`, emits the standard envelope (per-node df + network aggregate + R1/R2/R3 verdict). Output split by deployment (`local` / `loopback_aliased` / `remote`).
 
 Public API:
     - `run(adp, prf, scn, wrt, method_cfg=None, skip_calibration=False, verbose=True, dpl=None, launcher_role=None)` standard orchestrator contract.
@@ -51,9 +45,13 @@ from src.experiment.client import ClientSimulator
 from src.experiment.client import build_ramp_cfg
 from src.experiment.launcher import ExperimentLauncher
 from src.experiment.services import derive_seed
-from src.io import (NetCfg, calibration_age_hours, calibration_band_us,
-                    calibration_floor_us, load_latest_calibration,
-                    load_method_cfg, load_profile)
+from src.io import (NetCfg,
+                    calibration_age_hours,
+                    calibration_band_us,
+                    calibration_floor_us,
+                    load_latest_calibration,
+                    load_method_cfg,
+                    load_profile)
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -69,41 +67,32 @@ _CALIB_STALE_HOURS: float = 24.0
 def _resolve_baseline(*,
                       skip: bool,
                       verbose: bool = True) -> Optional[Dict[str, Any]]:
-    """*_resolve_baseline()* load the most recent calibration for this host.
-
-    Enforces the pre-run calibration gate: every run must reference a recent noise-floor calibration for the host so measured latencies can be reported as `value - loopback_median +/- jitter_p99`.
+    """*_resolve_baseline()* load the most recent host calibration; enforces the pre-run noise-floor gate.
 
     Args:
-        skip (bool): if True, bypass the gate entirely and return `None`. A loud warning is printed so downstream consumers know reported numbers are un-adjusted.
-        verbose (bool): when False, suppress the stale / skip warnings (used by tests and non-interactive callers).
+        skip (bool): bypass the gate; returns `None` with a loud warning.
+        verbose (bool): when False, suppress stale / skip warnings.
 
     Returns:
         Optional[Dict[str, Any]]: parsed calibration envelope, or `None` when skipped.
 
     Raises:
-        RuntimeError: when `skip` is False and no calibration file exists for the current host under `data/results/experiment/calibration/`.
+        RuntimeError: when `skip=False` and no calibration file exists for the current host.
     """
     if skip:
         if verbose:
-            print("WARNING: --skip-calibration set; experiment results will "
-                  "NOT be adjusted against a host noise floor. Raw latencies "
-                  "include host overhead and are NOT directly comparable to "
-                  "other runs.")
+            _msg = "WARNING: --skip-calibration; raw latencies are not host-adjusted."
+            print(_msg)
         return None
+
     _env = load_latest_calibration()
     if _env is None:
-        raise RuntimeError(
-            "No calibration envelope found for this host under "
-            "data/results/experiment/calibration/. Run "
-            "`python -m src.methods.calibration` before the experiment, "
-            "or pass skip_calibration=True (CLI: --skip-calibration) to "
-            "bypass the gate with a warning.")
+        _msg = "No host calibration; run `python -m src.methods.calibration` "
+        _msg += "or pass --skip-calibration."
+        raise RuntimeError(_msg)
     _age = calibration_age_hours(_env)
     if verbose and _age > _CALIB_STALE_HOURS:
-        print(f"WARNING: calibration is {_age:.1f} h old "
-              f"(stale threshold = {_CALIB_STALE_HOURS:.0f} h). "
-              "Consider re-running `python -m src.methods.calibration` "
-              "if background load / thermals on this host may have changed.")
+        print(f"WARNING: calibration {_age:.1f} h old (>{_CALIB_STALE_HOURS:.0f} h); consider re-running.")
     return _env
 
 
@@ -182,19 +171,20 @@ def _build_svc_df_from_logs(cfg: NetCfg,
                             duration_s: float) -> pd.DataFrame:
     """*_build_svc_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs via operational analysis (Denning & Buzen 1978).
 
-    Every quantity is a direct measurement over the observation window `T`;
-    no Markovian assumption (Poisson arrivals, exponential service, steady
-    state, ergodicity) is required. The operational identities used (cf.
-    `notes/operational_analysis.md` Table I):
+    Every quantity is a direct measurement over the observation window `T`; no Markovian assumption (Poisson arrivals, exponential service, steady state, ergodicity) is required. The operational identities used (cf. `notes/operational_analysis.md` Table I):
 
         - **lambda** = `A / T` (arrival rate from logged invocations)
         - **X** (throughput) = `C / T` (completion rate)
-        - **U** (utilisation) = `B / (T * c)` where `B = sum(end_ts - start_ts)` is busy time across `c` server slots; identity `U = X * S` holds.
-        - **S** (service time) = `B / C`
-        - **R** (response time, alias `W`) = mean(`end_ts - recv_ts`)
+        - **U_local** (alias `rho`) = `B_local / (T * c)` where `B_local = sum(local_end_ts - start_ts)` is local busy time excluding any downstream dispatch await; the M/M/c/K-comparable utilisation.
+        - **R_local** (alias `W`) = mean(`local_end_ts - recv_ts`); local response time used for analytic / stochastic / dimensional cross-checks.
         - **Wq** (queue wait) = mean(`start_ts - recv_ts`); positive only when admission gating (`SvcCtx.sem`) makes requests wait.
-        - **n_bar** (alias `L`) = `X * R`            (Little's law)
-        - **n_bar_q** (alias `Lq`) = `X * Wq`        (Little's law on queue)
+        - **L** = `X * W`            (Little's law on local response time)
+        - **Lq** = `X * Wq`          (Little's law on queue wait)
+        - **U_total** (alias `rho_total`) = `B_total / (T * c)` where `B_total = sum(end_ts - start_ts)` includes the full downstream subtree; matches the client-perceived end-to-end utilisation.
+        - **W_total** = mean(`end_ts - recv_ts`); client-perceived end-to-end response time used for Camara R2 (response time <= 26 ms) validation.
+        - **L_total** = `X * W_total`            (system-wide in-flight by Little's law)
+
+    Terminal atomics never publish `mark_local_end()` so `local_end_ts == end_ts` for them; local and total views coincide. Composites and dispatching atomics publish `mark_local_end()` right before the dispatch await, so `local_end_ts < end_ts` and the two views differ by the downstream wait.
 
     Two failure modes stay separated:
 
@@ -224,6 +214,9 @@ def _build_svc_df_from_logs(cfg: NetCfg,
         _Lq = 0.0
         _W = 0.0
         _Wq = 0.0
+        _rho_total = 0.0
+        _L_total = 0.0
+        _W_total = 0.0
         _eps = 0.0
         _bfr = 0.0
 
@@ -262,26 +255,31 @@ def _build_svc_df_from_logs(cfg: NetCfg,
             else:
                 _bfr = 0.0
 
-            # timing from successful completions only (failed ones have no meaningful response time)
+            # timing from successful completions only (failed ones have no meaningful response time). The local view (`rho / L / W`) brackets only the local work via `local_end_ts` and is the M/M/c/K-comparable observable; the total view (`rho_total / L_total / W_total`) brackets the whole subtree via `end_ts` and matches the client-perceived end-to-end response time used for Camara R2 validation. For terminal atomics that never dispatch, `local_end_ts == end_ts` so the two views coincide.
             _succ = _completed[_completed["success"]]
             if len(_succ) > 0 and duration_s > 0:
                 _start = pd.to_numeric(_succ["start_ts"], errors="coerce")
+                _local_end = pd.to_numeric(_succ["local_end_ts"], errors="coerce")
                 _end = pd.to_numeric(_succ["end_ts"], errors="coerce")
                 _recv = pd.to_numeric(_succ["recv_ts"], errors="coerce")
 
-                # response time R = mean(end - recv), queue wait Wq = mean(start - recv)
-                _W = float(np.nanmean(_end - _recv))
+                # local response time R_local = mean(local_end - recv); queue wait Wq = mean(start - recv); total response time R_total = mean(end - recv)
+                _W = float(np.nanmean(_local_end - _recv))
                 _Wq = float(np.nanmean(_start - _recv))
+                _W_total = float(np.nanmean(_end - _recv))
 
-                # operational U = B / (T*c); identity U = X*S holds by construction (no PASTA needed)
-                _B = float(np.nansum(_end - _start))
+                # operational U = B / (T*c). Local B excludes downstream dispatch wait; total B includes it. Identity U = X*S holds for both with the matching service-time interpretation; no PASTA needed.
+                _B_local = float(np.nansum(_local_end - _start))
+                _B_total = float(np.nansum(_end - _start))
                 _c = max(int(_a.c), 1)
-                _rho = _B / (duration_s * _c)
+                _rho = _B_local / (duration_s * _c)
+                _rho_total = _B_total / (duration_s * _c)
 
                 # X = C / T; use in Little's law so failed completions don't inflate L
                 _X = len(_succ) / duration_s
                 _L = _X * _W
                 _Lq = _X * _Wq
+                _L_total = _X * _W_total
 
         _rows.append({
             "node": _idx,
@@ -297,6 +295,9 @@ def _build_svc_df_from_logs(cfg: NetCfg,
             "Lq": _Lq,
             "W": _W,
             "Wq": _Wq,
+            "rho_total": _rho_total,
+            "L_total": _L_total,
+            "W_total": _W_total,
             "epsilon": _eps,
             "buffer_reject_rate": _bfr,
         })
@@ -468,7 +469,7 @@ def run(adp: Optional[str] = None,
 
     Enforces the per-host calibration gate: a noise-floor calibration for the current host must exist under `data/results/experiment/calibration/` before the run starts, or `skip_calibration=True` must be set to bypass with a warning. The resolved baseline is attached to the result envelope as the `baseline` block so downstream reporting can apply the `reported = measured - loopback_median +/- jitter_p99` convention.
 
-    Output paths split by deployment axis (`notes/distribute.md` §4.3): `data/results/experiment/<deployment>/<scenario>/<profile>/...`. The `<deployment>` segment is one of `local` / `loopback_aliased` / `remote`.
+    Output paths: `data/results/experiment/<deployment>/<scenario>/<profile>/...` with `<deployment>` in `local` / `loopback_aliased` / `remote`.
 
     Args:
         adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`.
@@ -628,22 +629,20 @@ def _write_results(cfg: NetCfg,
                    run_out: Dict[str, Any],
                    baseline: Optional[Dict[str, Any]] = None,
                    deployment: str = "local") -> Dict[str, str]:
-    """*_write_results()* serialise the experiment outputs to the deployment + scenario scoped directory.
-
-    Output path: `<results>/<deployment>/<scenario>/<profile>.json` (the deployment axis matches `notes/distribute.md` §4.3).
+    """*_write_results()* serialise the run envelope to `<results>/<deployment>/<scenario>/<profile>.json`.
 
     Args:
         cfg (NetCfg): resolved profile + scenario.
-        method_cfg (Dict[str, Any]): experiment method config, copied verbatim into the envelope so the run is self-describing on disk.
+        method_cfg (Dict[str, Any]): method config; copied verbatim into the envelope.
         nds (pd.DataFrame): per-service metrics frame.
         net (pd.DataFrame): network aggregate (one row).
         req (dict): R1 / R2 / R3 verdict dict.
         run_out (Dict[str, Any]): async runtime output (probes, saturation, counts).
-        baseline (Optional[Dict[str, Any]]): calibration summary block from `_build_baseline_block`; persisted so the `reported = measured - loopback_median +/- jitter_p99` convention is reproducible later.
-        deployment (str): deployment axis segment (`local` / `loopback_aliased` / `remote`); inserted into the output path and into the persisted JSON.
+        baseline (Optional[Dict[str, Any]]): calibration summary block from `_build_baseline_block`.
+        deployment (str): `local` / `loopback_aliased` / `remote`; segment in the output path.
 
     Returns:
-        Dict[str, str]: on-disk paths keyed by `profile` and `requirements`, relative to the repo root.
+        Dict[str, str]: on-disk paths keyed by `profile` and `requirements`.
     """
     _out_dir = _RESULTS_DIR / deployment / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)

@@ -99,7 +99,7 @@ def _wait_remote_health(registry: SvcRegistry,
                         verbose: bool = True) -> None:
     """*_wait_remote_health()* poll `/healthz` on every NON-local service until it answers 200 or `timeout_s` fires.
 
-    The launcher's own `UvicornThread.wait_ready` covers local services; this helper covers the remote ones. Together they form the whole-mesh health barrier (`notes/distribute.md` §4.2 risk row "Health barrier hangs because remote machine is not up yet" — bumped to 60 s by default).
+    The launcher's own `UvicornThread.wait_ready` covers local services; this helper covers the remote ones. Together they form the whole-mesh health barrier (60 s default to absorb remote startup).
 
     Args:
         registry (SvcRegistry): populated registry.

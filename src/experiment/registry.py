@@ -3,7 +3,7 @@
 Module registry.py
 ==================
 
-Resolve service-name to HTTP URL using the layout declared in `data/config/method/experiment.json::service_registry`. The registry is built once at experiment startup and shared across the composite services, the client simulator, and the launcher's health barrier. Per-deployment host resolution (`local` / `loopback_aliased` / `remote`) lives in `_pick_host`; see `notes/distribute.md` §3 for the rule.
+Resolve service-name to HTTP URL using the layout declared in `data/config/method/experiment.json::service_registry`. The registry is built once at experiment startup and shared across the composite services, the client simulator, and the launcher's health barrier. Per-deployment host resolution (`local` / `loopback_aliased` / `remote`) lives in `_pick_host`.
 
 Public API:
     - `SvcRegistry(host, base_port, table, host_overrides)` maps names to URLs.

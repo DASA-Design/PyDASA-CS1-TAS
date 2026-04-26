@@ -19,7 +19,7 @@
     "inter_trial_delay_s": 0.3,
     "rate_sweep": {
         "adaptation": "baseline",
-        "rates": [10, 50, 100, 200, 300, 320],
+        "rates": [10, 50, 100, 200, 280, 300, 320],
         "trials_per_rate": 11,
         "min_samples_per_kind": 32,
         "max_probe_window_s": 2.0,

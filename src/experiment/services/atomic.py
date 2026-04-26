@@ -27,7 +27,9 @@ from src.experiment.services.base import (ExtFwdFn,
                                           SvcReq,
                                           SvcResp,
                                           SvcSpec)
-from src.experiment.services.instruments import logger, mark_admit_time
+from src.experiment.services.instruments import (logger,
+                                                 mark_admit_time,
+                                                 mark_local_end)
 
 
 PickTargetFn = Callable[[SvcCtx, SvcReq], Optional[str]]
@@ -78,14 +80,9 @@ def mount_atomic_svc(app: FastAPI,
 
     @logger(_ctx)
     async def _handler(req: SvcReq) -> SvcResp:
-        # 1. simulate service time under admission control. The semaphore
-        #    has `spec.c` permits, so concurrent in-service is capped at c
-        #    and any excess arrival waits here -- the wait time becomes
-        #    measurable Wq downstream. Held only around the local work,
-        #    NOT around the dispatch, so composite chains do not deadlock.
+        # 1. admission gate; held around local work only so composite chains do not deadlock.
         async with _ctx.sem:
-            # publish post-admit timestamp + admitted concurrency so
-            # @logger can compute Wq = start_ts - recv_ts
+            # post-admit timestamp + admitted concurrency for `@logger` Wq.
             mark_admit_time(_ctx.c_in_use)
 
             _svc = _ctx.draw_svc_time()
@@ -99,7 +96,7 @@ def mount_atomic_svc(app: FastAPI,
                                success=False,
                                message="bernoulli failure")
 
-        # 3. pick target; None means terminal (permit already released)
+        # 3. pick target; terminal branch leaves `local_end_ts` defaulted to `end_ts`.
         _target = pick_target(_ctx, req)
         if _target is None:
             return SvcResp(request_id=req.request_id,
@@ -107,7 +104,8 @@ def mount_atomic_svc(app: FastAPI,
                            success=True,
                            message="terminal")
 
-        # 4. dispatch to the picked target
+        # 4. dispatch; `mark_local_end()` brackets local B from the downstream await.
+        mark_local_end()
         _inner = await dispatch(_target, req)
         return SvcResp(request_id=req.request_id,
                        service_name=spec.name,

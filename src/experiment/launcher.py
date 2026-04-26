@@ -12,9 +12,9 @@ Composite flavours wired per the `role` field in `experiment.json`:
 
 No hardcoded workflow; the routing matrix is the only wiring source.
 
-The shared `httpx.AsyncClient` routes through a `_MultiASGITransport` that dispatches per port. Every port -> app entry registers synchronously during `__aenter__` before the client handles any traffic, so no post-hoc transport mutation can race callers.
+Shared `httpx.AsyncClient` over `_MultiASGITransport`; per-port apps register in `__aenter__` before any traffic flows.
 
-Deployment modes (see `notes/distribute.md`): `local` (today's ASGI fast path), `loopback_aliased` (single-host honest bench via `127.0.0.X` aliases), `remote` (real LAN). The ASGI launcher implements `local` only; non-local modes raise `NotImplementedError` until `src.scripts.launch_services` ships in distribute G5.
+Deployment modes: `local` (ASGI), `loopback_aliased` (`127.0.0.X` aliases), `remote` (LAN). Only `local` is implemented; non-local raises `NotImplementedError` until `src.scripts.launch_services` ships.
 """
 # native python modules
 from __future__ import annotations
@@ -109,7 +109,7 @@ def pick_bind_addr(deployment: str,
                    override: Optional[str] = None) -> str:
     """*pick_bind_addr()* return the uvicorn bind address for `deployment`.
 
-    Auto-flip rule (per `notes/distribute.md` §4.5):
+    Auto-flip rule:
 
         - `local` -> `127.0.0.1` (kernel loopback fast path; ~3 ms floor).
         - `loopback_aliased` -> `0.0.0.0` (each service must accept connections from a different `127.0.0.X` alias on the same machine).
@@ -133,10 +133,7 @@ def local_services_for_role(launcher_role: str,
                             registry: SvcRegistry) -> List[str]:
     """*local_services_for_role()* return the registry names this launcher is responsible for spawning.
 
-    Reads `_LAUNCHER_ROLE_BUCKETS` to map the role string to a set of
-    `service_registry` roles, then filters the registry table to those
-    roles. The empty list (`launcher_role=...` unrecognised) is returned
-    so the caller fails fast on a typo.
+    Maps `launcher_role` via `_LAUNCHER_ROLE_BUCKETS` and filters `registry.table`; empty list on unrecognised role.
 
     Args:
         launcher_role (str): one of `"all"` / `"client"` / `"composite"` / `"atomic"` / `"composite-atomic"`.
@@ -174,9 +171,14 @@ def _build_specs_from_cfg(cfg: NetCfg,
                           ) -> Dict[str, SvcSpec]:
     """*_build_specs_from_cfg()* build one `SvcSpec` per artifact by pulling `(mu, epsilon, c, K)` from the profile JSON and `(role, port)` from the registry.
 
-    `root_seed` is the single seed from `experiment.json::seed`. It is folded with each service's name via `derive_seed` so every service has a stable, independent RNG stream; one knob in JSON controls every stochastic draw in the apparatus.
+    Args:
+        cfg (NetCfg): the resolved profile + scenario.
+        registry (SvcRegistry): the populated registry for service role + port lookup.
+        root_seed (int): the seed for random number generation.
+        avg_request_size_bytes (int): the expected payload size per kind. folded per service via `derive_seed`.`avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`).
 
-    `avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`). The per-service buffer budget is `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` (1.5x headroom absorbs Pydantic + FastAPI framing overhead without having to physically re-measure the body bytes). The value lives on `SvcSpec.mem_per_buffer` so downstream analysis can derive the memory-usage coefficient.
+    Returns:
+        Dict[str, SvcSpec]: one spec per artifact key in the profile; missing registry entries are skipped with a warning. The seed is derived per service from the root seed and service name for stable independent RNG streams; the memory budget per buffer is `K * avg_request_size_bytes * 1.5` sized for the memory-usage coefficient.
     """
     _specs: Dict[str, SvcSpec] = {}
     _headroom = SvcSpec.MEM_HEADROOM_FACTOR
@@ -325,12 +327,18 @@ class ExperimentLauncher:
             self.kind_to_target, self.kind_weights = _build_router_kind_map(
                 self.cfg, _routers[0])
 
-        # step-3 transport: empty port map filled synchronously before any HTTP traffic flows
+        # step-3 transport: ASGI ignores Limits in `local`; the cap and 30-s read timeout become load-bearing under loopback_aliased / remote (distribute G5).
         self._transport = _MultiASGITransport({})
-        self.client = httpx.AsyncClient(transport=self._transport,
-                                        timeout=httpx.Timeout(10.0))
+        self.client = httpx.AsyncClient(
+            transport=self._transport,
+            limits=httpx.Limits(max_connections=4096,
+                                max_keepalive_connections=2048),
+            timeout=httpx.Timeout(connect=5.0,
+                                  read=30.0,
+                                  write=10.0,
+                                  pool=10.0))
 
-        # step-4 build: TAS uses `build_tas` (one app, 6 components, `mount_composite_svc`); third-party uses `build_third_party` (`mount_atomic_svc`); both share one `HttpForward`
+        # step-4 build: TAS via `build_tas`, third-party via `build_third_party`; one shared `HttpForward`.
         _forward = HttpForward(self.client, self.registry)
         _port_to_app: Dict[int, FastAPI] = {}
 

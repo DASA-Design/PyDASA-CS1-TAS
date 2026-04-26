@@ -41,9 +41,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class SvcSpec:
-    """**SvcSpec** immutable per-service knobs.
-
-    Declares the inputs that shape emergent queue behaviour: service rate, failure rate, concurrency ceiling, capacity, seed, memory budget. Downstream models (analytic, stochastic, dimensional) read these values together with measured timestamps to quantify what actually emerged at runtime.
+    """**SvcSpec** immutable per-service knobs. Carries `(mu, epsilon, c, K, seed, mem_per_buffer)` consumed by every method.
     """
 
     # LaTeX-subscript key (e.g. `TAS_{1}`)
@@ -78,25 +76,24 @@ class SvcSpec:
 
     @property
     def buffer_budget_bytes(self) -> int:
-        """Declared memory budget in bytes; 0 when undeclared."""
+        """*buffer_budget_bytes* Declared memory budget in bytes; 0 when undeclared.
+
+        Returns:
+            int: `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` from the profile, sized for the memory-usage coefficient; 0 when undeclared.
+        """
         return int(self.mem_per_buffer)
 
     @property
     def c_srv(self) -> int:
         """*c_srv* alias for `c` that reads as "service-side parallel handlers".
 
-        Exists so downstream prose / plots can distinguish service-side
-        `c_srv` from client-side `n_con_usr` (concurrent-user load) without
-        renaming the wire-schema field `c` that profile JSONs + PyDASA
-        already depend on. No new semantics; identical value.
+        Exists so downstream prose / plots can distinguish service-side `c_srv` from client-side `n_con_usr` (concurrent-user load) without renaming the wire-schema field `c` that profile JSONs + PyDASA already depend on. No new semantics; identical value.
         """
         return int(self.c)
 
 
 def derive_seed(root_seed: int, service_name: str) -> int:
-    """*derive_seed()* stable 64-bit per-service seed from `(root, name)`.
-
-    Folds the UTF-8 bytes of the service name through FNV-1a and XORs in the root seed. Stable across Python processes, distinct per service, distinct per root. One JSON knob (`experiment.json::seed`) then controls every stochastic draw in the apparatus.
+    """*derive_seed()* stable 64-bit per-service seed from `(root, name)` FNV-1a over the UTF-8 service name XORed with `root_seed`; stable across processes.
 
     Args:
         root_seed (int): single seed from `experiment.json::seed`.
@@ -153,12 +150,18 @@ class SvcResp(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# frozen CSV schema; column order is a breaking-change contract for downstream re-estimators
+# frozen CSV schema; column order is a breaking-change contract. `local_end_ts` excludes the downstream dispatch await (equals `end_ts` for terminals).
 LOG_COLUMNS = (
-    "request_id", "service_name", "kind",
-    "recv_ts", "start_ts", "end_ts",
+    "request_id",
+    "service_name",
+    "kind",
+    "recv_ts",
+    "start_ts",
+    "local_end_ts",
+    "end_ts",
     "c_used_at_start",
-    "success", "status_code",
+    "success",
+    "status_code",
     "size_bytes",
 )
 
@@ -171,9 +174,7 @@ LOG_COLUMNS = (
 class SvcCtx:
     """**SvcCtx** mutable per-service state.
 
-    Carries the spec (so rows carry `service_name`), a bounded log buffer (where `@logger` appends rows), a seeded RNG (so service-time and Bernoulli draws stay reproducible under the single config seed), the bound request handler (set by `mount_atomic_svc` after the handler is built, so composite callers can dispatch siblings in-process), and an asyncio.Semaphore initialised with `spec.c` permits so the `@logger` decorator can gate concurrent admission and measure real Wq / rho instead of asyncio's natural concurrency.
-
-    The log is a `collections.deque` with `maxlen=LOG_BUFFER_MAXLEN`; any append past that cap silently drops the OLDEST row (deque semantics) and increments `dropped_count`. A healthy run asserts `dropped_count == 0` at shutdown; a non-zero value signals the buffer was sized too small for the workload and measurements are incomplete.
+    Carries `spec`, bounded log deque, seeded RNG, bound `handler`, and `spec.c`-permit semaphore. Log overflow silently drops the oldest row and bumps `dropped_count` (must be 0 at shutdown).
     """
 
     # immutable per-service knobs
@@ -209,10 +210,7 @@ class SvcCtx:
     def record_row(self, row: Dict[str, Any]) -> None:
         """*record_row()* append a log row; count a drop if the deque was already full.
 
-        Called from `@logger` instead of `self.log.append(...)` so the
-        overflow path is observable. `deque(maxlen=...)` silently drops the
-        left-most element on append when full; we detect the drop by
-        checking `len(self.log) == self.log.maxlen` before the append.
+        Called from `@logger` instead of `self.log.append(...)` so the overflow path is observable. `deque(maxlen=...)` silently drops the left-most element on append when full; we detect the drop by checking `len(self.log) == self.log.maxlen` before the append.
 
         Args:
             row (Dict[str, Any]): one CSV row in the `LOG_COLUMNS` shape.
@@ -222,9 +220,7 @@ class SvcCtx:
         self.log.append(row)
 
     def drain(self) -> List[Dict[str, Any]]:
-        """*drain()* swap the current log buffer for a fresh empty one and return the old contents.
-
-        Cheap O(1) rebind so a producer appending during the swap cannot race the consumer. Used by `ExperimentLauncher.drain_all()` between probe steps; `flush_log` still reads `self.log` directly for the final disk write at replicate end.
+        """*drain()* swap the current log buffer for a fresh empty one and return the old contents. O(1) rebind; safe under concurrent appends.
 
         Returns:
             List[Dict[str, Any]]: every row buffered since the previous drain (or construction); the deque is reset to empty with the same `maxlen`.
@@ -237,9 +233,7 @@ class SvcCtx:
     def c_in_use(self) -> int:
         """*c_in_use* number of permits currently held (server slots busy).
 
-        `Semaphore._value` is the public-but-implementation-detail count of
-        free permits; capacity minus free = in-use. Used by `@logger` to
-        sample the PASTA observation `c_used_at_start`.
+        `Semaphore._value` is the public-but-implementation-detail count of free permits; capacity minus free = in-use. Used by `@logger` to sample the PASTA observation `c_used_at_start`.
         """
         _free = int(getattr(self.sem, "_value", 0))
         _cap = max(int(self.spec.c), 1)
@@ -258,13 +252,7 @@ class SvcCtx:
     def flush_log(self,
                   csv_path: Path,
                   columns: tuple[str, ...] = LOG_COLUMNS) -> int:
-        """*flush_log()* write every buffered row to `csv_path` and clear the buffer.
-
-        Always overwrites the target file so the on-disk header matches the
-        current `LOG_COLUMNS` schema. Append-mode would silently misalign
-        rows when an older CSV with a different column set lives at the
-        same path (the user's CSVs from a stale schema would shift every
-        new field one column to the right under pandas).
+        """*flush_log()* write every buffered row to `csv_path` and clear the buffer. Overwrites (not appends) so a stale-schema CSV at the same path can never misalign new rows.
 
         Args:
             csv_path (Path): target CSV; parent directory is created if missing.

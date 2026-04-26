@@ -30,7 +30,7 @@ class TestJourneySchemaLocked:
         """*test_column_order_and_set()* pin the exact `LOG_COLUMNS` tuple; any change to this test signals a breaking schema change for downstream re-estimators."""
         assert LOG_COLUMNS == (
             "request_id", "service_name", "kind",
-            "recv_ts", "start_ts", "end_ts",
+            "recv_ts", "start_ts", "local_end_ts", "end_ts",
             "c_used_at_start",
             "success", "status_code",
             "size_bytes",
@@ -38,7 +38,7 @@ class TestJourneySchemaLocked:
 
     def test_contains_every_downstream_needed_column(self):
         """*test_contains_every_downstream_needed_column()* every column the downstream re-estimators read must be present in the schema."""
-        _needed = {"recv_ts", "start_ts", "end_ts",
+        _needed = {"recv_ts", "start_ts", "local_end_ts", "end_ts",
                    "success", "status_code", "size_bytes"}
         assert _needed <= set(LOG_COLUMNS)
 
