@@ -38,7 +38,9 @@ Under Little's law (λW = L), `σ_new ≡ θ` on closed-form solves. On prototyp
 
 **Jupyter-safe asyncio dispatch** added to `src/methods/experiment.py::_run_async_safe` (worker-thread `ProactorEventLoop`/`SelectorEventLoop` when an ambient loop is detected; falls back to `asyncio.run` when none). Lets `_RUN_RATE_SWEEP = True` work in `00-calibration.ipynb` without the `RuntimeError: asyncio.run() cannot be called from a running event loop`.
 
-**Calibration completion.** Per-host JSON now carries `dimensional_card` (PyDASA-routed) + `rate_sweep` (calibrated_rate=200 req/s for `DESKTOP-INKGBK6`) + 128 kB payload threading from JSON config. `src.io.load_dim_card` accessor lazy-derives the card when not pre-baked. `derive_calib_sweep` (Route A predicted) returns nested `{combo_tag: per_combo_block}`; notebook overlays all 12 `(c, K)` combos in a single `plot_yoly_chart` via `scenarios={...}`. K grid trimmed to `[50, 100, 200, 500]` because the closed-form solver overflows at larger K + c.
+**Calibration completion.** Per-host JSON now carries `dimensional_card` (PyDASA-routed) + `rate_sweep` (calibrated_rate=200 req/s for `DESKTOP-INKGBK6`) + 128 kB payload threading from JSON config. `src.io.load_dim_card` accessor lazy-derives the card when not pre-baked.
+
+**Route-A predicted sweep removed (2026-04-25).** `derive_calib_sweep` (closed-form M/M/c/K via `src.dimensional.networks.sweep_artifact`) was deleted along with `TestCalibSweep` (5 cases) and notebook section 6c. Calibration must be measurement, not theory; mixing `loopback.median_us` with M/M/c/K projection contradicted the calibration contract. The `sweep_grid` block in `data/config/method/calibration.json` is preserved because `_build_ping_app` reads `sweep_grid.{c, K}[0]` to seed the vernier service spec; the unused fields stay dormant until `scale-2.md` lands a CSV-driven sweep.
 
 **Test count after the campaign.** 107+ tests across `tests/dimensional/`, `tests/methods/test_calibration.py`, `tests/methods/test_experiment.py`, `tests/io/test_tooling.py`, `tests/experiment/test_architecture.py` all green. The audit applied ≈80 individual fix items across ≈20 src + tests files.
 
