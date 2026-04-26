@@ -163,7 +163,7 @@ Short 2–3-letter prefixes identify the source plotter. These are used in both 
 | `yab_` | `plot_yoly_arts_behaviour` | **y**oly **a**rtifact **b**ehaviour (3×N 3D grid) |
 | `yac_` | `plot_yoly_arts_charts` | **y**oly **a**rtifact **c**harts (3×N 2D grid) |
 
-Also detailed in [notes/workflow.md §2](notes/workflow.md).
+Also detailed in [notes/workflow.md](notes/workflow.md).
 
 ### Yoly subfolder layout
 
