@@ -69,7 +69,6 @@ import numpy as np
 
 # web stack
 import httpx
-import uvicorn
 from fastapi import FastAPI
 
 # local modules
@@ -78,6 +77,7 @@ from src.experiment.services import (SvcReq,
                                      SvcSpec,
                                      make_base_app,
                                      mount_vernier_svc)
+from src.experiment.uvicorn_thread import UvicornThread
 
 _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
@@ -349,57 +349,8 @@ def _build_ping_app() -> FastAPI:
     return _app
 
 
-class _UvicornThread(threading.Thread):
-    """Daemon thread that runs a uvicorn server on `127.0.0.1:port`.
-
-    Exposes `.wait_ready()` so the caller can block until the server's `/healthz` endpoint answers, and `.shutdown()` to stop cleanly.
-
-    Attributes:
-        _server: Underlying `uvicorn.Server` instance.
-        _port: TCP port the server is bound to.
-    """
-
-    def __init__(self, app: FastAPI, port: int,
-                 backlog: int = _DEFAULT_UVICORN_BACKLOG) -> None:
-        super().__init__(daemon=True)
-        # large backlog so high n_con_usr levels aren't refused at the kernel socket queue
-        _config = uvicorn.Config(app,
-                                 host="127.0.0.1",
-                                 port=int(port),
-                                 log_level="error",
-                                 access_log=False,
-                                 backlog=int(backlog))
-        self._server = uvicorn.Server(_config)
-        self._port = int(port)
-
-    def run(self) -> None:
-        """*run()* thread entry point; blocks until `shutdown()` is called."""
-        self._server.run()
-
-    def wait_ready(self, timeout_s: float = 5.0) -> None:
-        """*wait_ready()* poll `/healthz` until it returns 200 or the timeout fires."""
-        _start = time.perf_counter()
-        _timeout = float(timeout_s)
-        _deadline = _start + _timeout
-        _url = f"http://127.0.0.1:{self._port}/healthz"
-        while True:
-            _now = time.perf_counter()
-            if _now >= _deadline:
-                break
-            try:
-                _r = httpx.get(_url, timeout=0.5)
-                if _r.status_code == 200:
-                    return
-            except (httpx.HTTPError, ConnectionError, OSError):
-                pass
-            time.sleep(0.05)
-            _msg = f"uvicorn did not become ready within {timeout_s} s"
-        raise RuntimeError(_msg)
-
-    def shutdown(self) -> None:
-        """*shutdown()* tell uvicorn to exit; joins the thread."""
-        self._server.should_exit = True
-        self.join(timeout=5.0)
+# `UvicornThread` was extracted to `src.experiment.uvicorn_thread` so the calibration probe, the experiment launcher, and the launch_services script share one lifecycle. The legacy `_UvicornThread` alias keeps existing code paths unchanged.
+_UvicornThread = UvicornThread
 
 
 def _stats_from_us_array(us_arr: np.ndarray) -> Dict[str, float]:
