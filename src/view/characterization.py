@@ -43,7 +43,7 @@ _STAT_NAMES = {
 }
 
 # neutral ordinal palette; percentile rank, not signed delta, so sequential-not-diverging
-_NEUTRAL_BAR = "#7E5BC9"
+_NEUTRAL_BAR = "#7445DA"
 _PCTL_GRADIENT = (cm.Purples(0.45), cm.Purples(0.70), cm.Purples(0.92))
 
 

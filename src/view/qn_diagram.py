@@ -76,8 +76,8 @@ _SUPTITLE_STYLE = dict(fontsize=16, fontweight="bold")
 # pastel blue for a metric that decreased, pastel orange for one that
 # increased. Interpretation (good / bad) is a domain concern and is
 # left to the caller; the colour rule here is sign-only.
-_BAR_BLUE = "#427ABE"    # decrease (negative delta)
-_BAR_ORANGE = "#F0AB7E"  # increase (positive delta)
+_BAR_BLUE = "#33ACD1"    # decrease (negative delta)
+_BAR_ORANGE = "#EDD175"  # increase (positive delta)
 
 # colourmaps
 _TOPOLOGY_CMAP = cm.coolwarm
