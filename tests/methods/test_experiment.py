@@ -270,7 +270,8 @@ class TestResultEnvelope:
                                  verbose=False)
         assert "profile" in _result["paths"]
 
-        _path = tmp_path / "experiment" / "baseline" / "dflt.json"
+        # output path now includes the deployment axis (default `local`)
+        _path = (tmp_path / "experiment" / "local" / "baseline" / "dflt.json")
         assert _path.exists()
         _doc = json.loads(_path.read_text(encoding="utf-8"))
         assert _doc["method"] == "experiment"
@@ -345,3 +346,61 @@ class TestCalibrationGate:
         assert _base["jitter_p99_us"] == pytest.approx(1300.0)
         assert _base["baseline_ref"] is not None
         assert _base["baseline_ref"].endswith(_path.name)
+
+
+class TestDeploymentAxis:
+    """**TestDeploymentAxis** `run()` exposes a `dpl` parameter; result envelope and output paths split by deployment mode."""
+
+    def test_default_deployment_is_local(self, tmp_path, monkeypatch):
+        """*test_default_deployment_is_local()* with no `dpl` arg and no method_cfg override, the run defaults to `local` mode."""
+        from src.methods import experiment as _mod
+        monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")
+        _res = run_experiment(adp="baseline", wrt=False,
+                              method_cfg=_QUICK_CFG,
+                              skip_calibration=True, verbose=False)
+        assert _res["deployment"] == "local"
+        assert _res["launcher_role"] == "all"
+
+    def test_explicit_dpl_local_is_accepted(self, tmp_path, monkeypatch):
+        """*test_explicit_dpl_local_is_accepted()* passing `dpl="local"` explicitly produces the same envelope shape as the default."""
+        from src.methods import experiment as _mod
+        monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")
+        _res = run_experiment(adp="baseline", wrt=False,
+                              method_cfg=_QUICK_CFG,
+                              skip_calibration=True, verbose=False,
+                              dpl="local")
+        assert _res["deployment"] == "local"
+
+    def test_invalid_dpl_raises_value_error(self):
+        """*test_invalid_dpl_raises_value_error()* unrecognised `dpl` raises `ValueError` with a list of valid modes."""
+        with pytest.raises(ValueError, match="not recognised"):
+            run_experiment(adp="baseline", wrt=False,
+                           method_cfg=_QUICK_CFG,
+                           skip_calibration=True, verbose=False,
+                           dpl="not-a-mode")
+
+    def test_non_local_dpl_raises_not_implemented(self, tmp_path,
+                                                   monkeypatch):
+        """*test_non_local_dpl_raises_not_implemented()* `dpl='loopback_aliased'` propagates `NotImplementedError` from the launcher gate (until distribute G5 lands the real-uvicorn path)."""
+        from src.methods import experiment as _mod
+        monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")
+        with pytest.raises(NotImplementedError):
+            run_experiment(adp="baseline", wrt=False,
+                           method_cfg=_QUICK_CFG,
+                           skip_calibration=True, verbose=False,
+                           dpl="loopback_aliased")
+
+    def test_output_path_includes_deployment_segment(self, tmp_path,
+                                                     monkeypatch):
+        """*test_output_path_includes_deployment_segment()* `wrt=True` writes under `<results>/local/<scenario>/<profile>.json` (deployment axis appears between results root and scenario)."""
+        from src.methods import experiment as _mod
+        monkeypatch.setattr(_mod, "_ROOT", tmp_path)
+        monkeypatch.setattr(_mod, "_RESULTS_DIR", tmp_path / "experiment")
+        _res = run_experiment(adp="baseline", wrt=True,
+                              method_cfg=_QUICK_CFG,
+                              skip_calibration=True, verbose=False,
+                              dpl="local")
+        _path = tmp_path / "experiment" / "local" / "baseline" / "dflt.json"
+        assert _path.exists()
+        # paths key reflects the deployment-segmented path
+        assert "local" in _res["paths"]["profile"]

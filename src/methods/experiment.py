@@ -9,14 +9,18 @@ Spins up a FastAPI microservice mesh that mirrors the TAS topology, drives a det
 
 The experiment validates DASA's technology-agnosticism: the analytic / dimensional predictions should hold on a completely independent stack. It does NOT reproduce the original authors' ReSeP / Java TAS numbers.
 
+Output paths split by deployment (`local` / `loopback_aliased` / `remote`); see `notes/distribute.md` §4.3.
+
 Public API:
-    - `run(adp, prf, scn, wrt, method_cfg=None)` standard orchestrator contract.
+    - `run(adp, prf, scn, wrt, method_cfg=None, skip_calibration=False, verbose=True, dpl=None, launcher_role=None)` standard orchestrator contract.
     - `main()` CLI entry point.
 
 CLI::
 
     python -m src.methods.experiment --adaptation baseline
     python -m src.methods.experiment --adaptation s1 --profile opti
+    python -m src.methods.experiment --deployment loopback_aliased
+    python -m src.methods.experiment --deployment remote --launcher-role client
 """
 # native python modules
 from __future__ import annotations
@@ -54,6 +58,9 @@ from src.io import (NetCfg, calibration_age_hours, calibration_band_us,
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
+
+# deployment modes recognised by the experiment runner; mirrors the SvcRegistry / ExperimentLauncher enum
+_VALID_DEPLOYMENTS = ("local", "loopback_aliased", "remote")
 
 # Hours after which a calibration is considered stale (warning only)
 _CALIB_STALE_HOURS: float = 24.0
@@ -300,8 +307,10 @@ def _build_svc_df_from_logs(cfg: NetCfg,
 async def _run_async(cfg: NetCfg,
                      method_cfg: Dict[str, Any],
                      adp: str,
-                     log_dir: Path) -> Dict[str, Any]:
-    """*_run_async()* drive one adaptation end-to-end: launch mesh, snapshot effective config (FR-3.3), run ramp, flush logs.
+                     log_dir: Path,
+                     dpl: str = "local",
+                     launcher_role: str = "all") -> Dict[str, Any]:
+    """*_run_async()* drive one adaptation end-to-end through the launch -> snapshot -> ramp -> flush sequence.
 
     Args:
         cfg (NetCfg): resolved profile + scenario.
@@ -319,14 +328,16 @@ async def _run_async(cfg: NetCfg,
     with _windows_timer_resolution(1):
         async with ExperimentLauncher(cfg=cfg,
                                       method_cfg=method_cfg,
-                                      adaptation=adp) as _lnc:
-            # client config derived from method_cfg + launcher's kind-weights (which the launcher computed from the profile's routing matrix)
+                                      adaptation=adp,
+                                      deployment=dpl,
+                                      launcher_role=launcher_role) as _lnc:
+            # client config derived from method_cfg + launcher's kind-weights
             _seed = int(method_cfg["seed"])
             _sizes_by_kind = dict(method_cfg.get("request_size_bytes", {}))
-            # scalar fallback kept for back-compat with tests that don't define a full sizes-by-kind map; defaults to the analyse_request size
+            # scalar fallback for tests with no sizes-by-kind map; default = analyse_request size
             _req_size = int(_sizes_by_kind.get("analyse_request", 256))
 
-            # FR-3.5: invert rho_grid to rates via Jackson solver; rates and rho_grid are mutually exclusive (validate_ramp enforces)
+            # rho_grid -> rates via Jackson solver; rates and rho_grid are mutually exclusive (validate_ramp enforces)
             _ramp_block = dict(method_cfg["ramp"])
             _rho_grid_meta: List[Dict[str, Any]] = []
             if _ramp_block.get("rho_grid"):
@@ -350,7 +361,7 @@ async def _run_async(cfg: NetCfg,
             )
             _sim = ClientSimulator(_lnc.client, _lnc.registry, _client_cfg)
 
-            # FR-3.3: emit config.json BEFORE the ramp starts so if the run crashes the snapshot still reflects what was about to run
+            # emit config.json BEFORE the ramp starts so a crash leaves the snapshot describing what was about to run
             _td = dict(method_cfg.get("request_size_bytes", {}))
             _lnc.snapshot_config(log_dir,
                                  extras={
@@ -363,11 +374,10 @@ async def _run_async(cfg: NetCfg,
 
             _ramp_out = await _sim.run_ramp()
             _counts = _lnc.flush_logs(log_dir)
-            # P1.2: surface any log-buffer overflow so a non-zero count
-            # can fail loudly at the top-level envelope layer.
+            # surface log-buffer overflow so the top-level envelope can fail loudly on non-zero
             _drops = _lnc.collect_drop_counts()
 
-    # FR-3.5: if the ramp was driven from a rho_grid, thread the per-point metadata back into each probe record so downstream analysis knows which rho-target each probe was anchored to
+    # thread rho_grid per-point metadata back into each probe so downstream knows which rho-target it was anchored to
     if _rho_grid_meta:
         for _probe, _meta in zip(_ramp_out["probes"], _rho_grid_meta):
             _probe.update(_meta)
@@ -451,25 +461,32 @@ def run(adp: Optional[str] = None,
         wrt: bool = True,
         method_cfg: Optional[Dict[str, Any]] = None,
         skip_calibration: bool = False,
-        verbose: bool = True) -> Dict[str, Any]:
+        verbose: bool = True,
+        dpl: Optional[str] = None,
+        launcher_role: Optional[str] = None) -> Dict[str, Any]:
     """*run()* execute the architectural experiment for one (profile, scenario) pair.
 
     Enforces the per-host calibration gate: a noise-floor calibration for the current host must exist under `data/results/experiment/calibration/` before the run starts, or `skip_calibration=True` must be set to bypass with a warning. The resolved baseline is attached to the result envelope as the `baseline` block so downstream reporting can apply the `reported = measured - loopback_median +/- jitter_p99` convention.
+
+    Output paths split by deployment axis (`notes/distribute.md` §4.3): `data/results/experiment/<deployment>/<scenario>/<profile>/...`. The `<deployment>` segment is one of `local` / `loopback_aliased` / `remote`.
 
     Args:
         adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`.
         prf (Optional[str]): profile stem (`dflt` / `opti`).
         scn (Optional[str]): explicit scenario name.
-        wrt (bool): if True, write artifacts under `data/results/experiment/<scenario>/`. Defaults to True.
+        wrt (bool): if True, write artifacts under `data/results/experiment/<deployment>/<scenario>/`. Defaults to True.
         method_cfg (Optional[Dict[str, Any]]): inline config override; used by `_QUICK_CFG` tests to skip the JSON read.
         skip_calibration (bool): when True, bypass the calibration gate; a warning is printed and `baseline.applied` is False on the result.
         verbose (bool): when False, suppress the calibration stale / skip warnings; metric output is unaffected.
+        dpl (Optional[str]): deployment mode override; `None` reads `method_cfg["deployment"]` (default `"local"`). Recognised: `"local"` / `"loopback_aliased"` / `"remote"`. Non-local modes require the real-uvicorn launcher (`notes/distribute.md` G5); the in-process ASGI launcher only supports `local` until then.
+        launcher_role (Optional[str]): subset of services this driver is responsible for spawning; `None` reads `method_cfg["launcher_role"]` (default `"all"`). Recognised: `"all"` / `"client"` / `"composite"` / `"atomic"` / `"composite-atomic"`.
 
     Returns:
-        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `client_effective_rate`, `log_drop_counts`, `replicates`, `baseline`, `paths`.
+        Dict[str, Any]: result envelope with `config`, `method_config`, `nodes`, `network`, `requirements`, `probes`, `saturation_rate`, `stopped_reason`, `client_effective_rate`, `log_drop_counts`, `replicates`, `baseline`, `paths`, `deployment`.
 
     Raises:
         RuntimeError: when `skip_calibration` is False and no calibration exists for the current host.
+        ValueError: when `dpl` is not one of the recognised deployment modes.
     """
     _baseline_env = _resolve_baseline(skip=skip_calibration, verbose=verbose)
     _baseline_block = _build_baseline_block(_baseline_env)
@@ -481,7 +498,21 @@ def run(adp: Optional[str] = None,
         _mcfg = load_method_cfg("experiment")
     _adp = adp or "baseline"
 
-    # FR-3.8: per-replicate seed = derive_seed(root, "rep_<k>"); R=1 keeps flat log-dir layout
+    # deployment + launcher_role: explicit param > method_cfg > default
+    if dpl is not None:
+        _dpl = str(dpl)
+    else:
+        _dpl = str(_mcfg.get("deployment", "local"))
+    if _dpl not in _VALID_DEPLOYMENTS:
+        raise ValueError(
+            f"dpl={_dpl!r} not recognised; valid modes are "
+            f"{_VALID_DEPLOYMENTS}")
+    if launcher_role is not None:
+        _role = str(launcher_role)
+    else:
+        _role = str(_mcfg.get("launcher_role", "all"))
+
+    # per-replicate seed derived from root_seed + 'rep_<k>'; R=1 keeps flat log-dir layout
     _replications = int(_mcfg.get("replications", 1))
     _root_seed = int(_mcfg.get("seed", 0))
     _replicates: List[Dict[str, Any]] = []
@@ -495,7 +526,8 @@ def run(adp: Optional[str] = None,
         _rep_mcfg["seed"] = _rep_seed
 
         if wrt:
-            _base_dir = _RESULTS_DIR / _cfg.scenario / _cfg.profile
+            # deployment axis splits the artifact tree: local/, loopback_aliased/, remote/
+            _base_dir = _RESULTS_DIR / _dpl / _cfg.scenario / _cfg.profile
             if _replications == 1:
                 _log_dir = _base_dir
             else:
@@ -504,7 +536,9 @@ def run(adp: Optional[str] = None,
             _run_out = _run_async_safe(lambda: _run_async(_cfg,
                                                           _rep_mcfg,
                                                           _adp,
-                                                          _log_dir))
+                                                          _log_dir,
+                                                          _dpl,
+                                                          _role))
             _nds = _build_svc_df_from_logs(_cfg,
                                            _log_dir,
                                            _run_out["duration_s"])
@@ -515,7 +549,9 @@ def run(adp: Optional[str] = None,
                     lambda: _run_async(_cfg,
                                        _rep_mcfg,
                                        _adp,
-                                       _log_dir))
+                                       _log_dir,
+                                       _dpl,
+                                       _role))
                 _nds = _build_svc_df_from_logs(_cfg,
                                                _log_dir,
                                                _run_out["duration_s"])
@@ -541,7 +577,7 @@ def run(adp: Optional[str] = None,
             "log_dir": _rep_log_dir,
         })
 
-    # top-level fields point at replicate 0 for back-compat with consumers that expect the flat envelope shape. Cross-replicate aggregation lives downstream in 06-comparison.ipynb per FR-3.8.
+    # top-level fields = replicate 0 for back-compat with flat-envelope consumers; cross-replicate aggregation lives in 07-comparison.ipynb
     _first = _replicates[0]
 
     _paths: Dict[str, str] = {}
@@ -554,7 +590,8 @@ def run(adp: Optional[str] = None,
         _paths = _write_results(_cfg, _mcfg, _first["nodes"],
                                 _first["network"], _first["requirements"],
                                 _run_out_first,
-                                baseline=_baseline_block)
+                                baseline=_baseline_block,
+                                deployment=_dpl)
 
     _ans = {
         "config": _cfg,
@@ -570,6 +607,8 @@ def run(adp: Optional[str] = None,
         "replicates": _replicates,
         "baseline": _baseline_block,
         "paths": _paths,
+        "deployment": _dpl,
+        "launcher_role": _role,
     }
 
     # P1.2 invariant: log-buffer overflow == lost observations; warn loud so the operator notices
@@ -587,8 +626,11 @@ def _write_results(cfg: NetCfg,
                    net: pd.DataFrame,
                    req: dict,
                    run_out: Dict[str, Any],
-                   baseline: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-    """*_write_results()* serialise the experiment outputs to the scenario-scoped directory.
+                   baseline: Optional[Dict[str, Any]] = None,
+                   deployment: str = "local") -> Dict[str, str]:
+    """*_write_results()* serialise the experiment outputs to the deployment + scenario scoped directory.
+
+    Output path: `<results>/<deployment>/<scenario>/<profile>.json` (the deployment axis matches `notes/distribute.md` §4.3).
 
     Args:
         cfg (NetCfg): resolved profile + scenario.
@@ -597,15 +639,16 @@ def _write_results(cfg: NetCfg,
         net (pd.DataFrame): network aggregate (one row).
         req (dict): R1 / R2 / R3 verdict dict.
         run_out (Dict[str, Any]): async runtime output (probes, saturation, counts).
-        baseline (Optional[Dict[str, Any]]): calibration summary block produced by `_build_baseline_block`; written into the per-run JSON so the file is self-describing and the `reported = measured - loopback_median +/- jitter_p99` convention is reproducible after the fact.
+        baseline (Optional[Dict[str, Any]]): calibration summary block from `_build_baseline_block`; persisted so the `reported = measured - loopback_median +/- jitter_p99` convention is reproducible later.
+        deployment (str): deployment axis segment (`local` / `loopback_aliased` / `remote`); inserted into the output path and into the persisted JSON.
 
     Returns:
         Dict[str, str]: on-disk paths keyed by `profile` and `requirements`, relative to the repo root.
     """
-    _out_dir = _RESULTS_DIR / cfg.scenario
+    _out_dir = _RESULTS_DIR / deployment / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
 
-    # strip the per-probe `records` (list of InvocationRecord dataclasses) from the embedded envelope; they are not JSON-serialisable in bulk and per-service CSVs already cover the same data
+    # strip per-probe `records` (not JSON-serialisable; per-service CSVs cover the same data)
     _probes_out: List[Dict[str, Any]] = []
     for _p in run_out["probes"]:
         _slim = {_k: _v for _k, _v in _p.items() if _k != "records"}
@@ -617,6 +660,7 @@ def _write_results(cfg: NetCfg,
         "label": cfg.label,
         "method": "experiment",
         "method_config": method_cfg,
+        "deployment": deployment,
         "baseline": baseline or {"applied": False,
                                  "baseline_ref": None,
                                  "loopback_median_us": 0.0,
@@ -650,7 +694,7 @@ def main() -> None:
     Parses flags, calls `run()`, and prints a one-screen summary plus the paths of any written files.
 
     Side Effects:
-        Prints summary lines to stdout. When `--no-write` is NOT set, writes `<scenario>/<profile>.json` and `<scenario>/requirements.json` under `data/results/experiment/`, and per-service CSV logs in the same scenario directory.
+        Prints summary lines to stdout. When `--no-write` is NOT set, writes `<deployment>/<scenario>/<profile>.json` and `<deployment>/<scenario>/requirements.json` under `data/results/experiment/`, plus per-service CSV logs in the same scenario directory.
     """
     _parser = argparse.ArgumentParser(
         description="Architectural experiment for CS-01 TAS.")
@@ -674,6 +718,18 @@ def main() -> None:
                          help=("bypass the pre-run calibration gate; "
                                "a warning is printed and the baseline "
                                "is NOT subtracted from reported latencies"))
+    _parser.add_argument("--deployment",
+                         choices=list(_VALID_DEPLOYMENTS),
+                         default=None,
+                         help=("deployment mode override; defaults to "
+                               "method_cfg['deployment'] (typically 'local'). "
+                               "Non-local modes require launch_services.py."))
+    _parser.add_argument("--launcher-role",
+                         choices=["all", "client", "composite", "atomic",
+                                  "composite-atomic"],
+                         default=None,
+                         help=("subset of services this driver spawns; "
+                               "only meaningful in non-local deployments"))
 
     _args = _parser.parse_args()
 
@@ -681,7 +737,9 @@ def main() -> None:
                   prf=_args.profile,
                   scn=_args.scenario,
                   wrt=not _args.no_write,
-                  skip_calibration=_args.skip_calibration)
+                  skip_calibration=_args.skip_calibration,
+                  dpl=_args.deployment,
+                  launcher_role=_args.launcher_role)
 
     _cfg = _result["config"]
     _net = _result["network"].iloc[0]

@@ -11,6 +11,20 @@ small client load through `TAS_{1}`, and asserts that:
     - The launcher derives `kind_weights` from TAS_{1}'s routing-matrix row.
     - A tiny baseline ramp-probe returns enough samples end-to-end + logs the analyse path.
     - `flush_logs()` writes one CSV per deployed service.
+
+**TestLauncherDeploymentHelpers**
+    - `test_pick_bind_addr_local()` `local` -> `127.0.0.1`.
+    - `test_pick_bind_addr_loopback_aliased()` -> `0.0.0.0`.
+    - `test_pick_bind_addr_remote()` -> `0.0.0.0`.
+    - `test_pick_bind_addr_override()` explicit override returned verbatim.
+    - `test_local_services_for_role_all()` `"all"` -> every service.
+    - `test_local_services_for_role_buckets()` `"client"` / `"composite"` / `"atomic"` / `"composite-atomic"` filter to expected sets.
+    - `test_local_services_for_role_unknown_returns_empty()` typo bucket -> empty list.
+
+**TestLauncherDeploymentGate**
+    - `test_local_mode_populates_local_services_with_all()` default `local` mode lists every service.
+    - `test_loopback_aliased_raises_until_g5()` non-local deployment raises `NotImplementedError` with a pointer to G5.
+    - `test_remote_raises_until_g5()` same gate as `loopback_aliased`.
 """
 # native python modules
 from pathlib import Path
@@ -23,7 +37,10 @@ from src.experiment.client import (CascadeCfg,
                                    ClientCfg,
                                    ClientSimulator,
                                    RampCfg)
-from src.experiment.launcher import ExperimentLauncher
+from src.experiment.launcher import (ExperimentLauncher,
+                                     local_services_for_role,
+                                     pick_bind_addr)
+from src.experiment.registry import SvcRegistry
 from src.io import load_method_cfg, load_profile
 
 
@@ -156,3 +173,96 @@ class TestLauncherE2E:
         # expect at least one CSV file for the entry service
         _files = list(tmp_path.glob("TAS_*.csv"))
         assert len(_files) >= 1
+
+
+class TestLauncherDeploymentHelpers:
+    """**TestLauncherDeploymentHelpers** pure helpers: `pick_bind_addr` + `local_services_for_role`."""
+
+    def test_pick_bind_addr_local(self):
+        """*test_pick_bind_addr_local()* `local` deployment binds the kernel loopback fast path."""
+        assert pick_bind_addr("local") == "127.0.0.1"
+
+    def test_pick_bind_addr_loopback_aliased(self):
+        """*test_pick_bind_addr_loopback_aliased()* `loopback_aliased` binds `0.0.0.0` so each `127.0.0.X` alias is reachable."""
+        assert pick_bind_addr("loopback_aliased") == "0.0.0.0"
+
+    def test_pick_bind_addr_remote(self):
+        """*test_pick_bind_addr_remote()* `remote` binds `0.0.0.0` so LAN clients can reach the service."""
+        assert pick_bind_addr("remote") == "0.0.0.0"
+
+    def test_pick_bind_addr_override(self):
+        """*test_pick_bind_addr_override()* explicit `--bind` override wins over auto-flip."""
+        assert pick_bind_addr("remote", override="127.0.0.1") == "127.0.0.1"
+
+    def test_local_services_for_role_all(self, _method_cfg):
+        """*test_local_services_for_role_all()* `"all"` returns every service in the registry."""
+        _reg = SvcRegistry.from_config(_method_cfg)
+        _names = local_services_for_role("all", _reg)
+        assert len(_names) == len(_reg.table)
+
+    def test_local_services_for_role_buckets(self, _method_cfg):
+        """*test_local_services_for_role_buckets()* each bucket returns the expected role subset."""
+        _reg = SvcRegistry.from_config(_method_cfg)
+        # client bucket = composite_client only
+        _client = set(local_services_for_role("client", _reg))
+        for _n in _client:
+            assert _reg.table[_n].role == "composite_client"
+        # composite bucket = composite_medical / _alarm / _drug
+        _comp = set(local_services_for_role("composite", _reg))
+        for _n in _comp:
+            assert _reg.table[_n].role.startswith("composite_")
+            assert _reg.table[_n].role != "composite_client"
+        # atomic bucket = atomic only
+        _atomic = set(local_services_for_role("atomic", _reg))
+        for _n in _atomic:
+            assert _reg.table[_n].role == "atomic"
+        # composite-atomic = composite (without client) ∪ atomic
+        _ca = set(local_services_for_role("composite-atomic", _reg))
+        assert _ca == (_comp | _atomic)
+        # client and composite-atomic partition all services with composite_client members on top
+        assert (_client | _ca) == set(_reg.list_names())
+
+    def test_local_services_for_role_unknown_returns_empty(self, _method_cfg):
+        """*test_local_services_for_role_unknown_returns_empty()* typo / unrecognised role -> empty list (caller fails fast)."""
+        _reg = SvcRegistry.from_config(_method_cfg)
+        assert local_services_for_role("not-a-role", _reg) == []
+
+
+class TestLauncherDeploymentGate:
+    """**TestLauncherDeploymentGate** the `__aenter__` enum gate: only `local` is implemented in this PR; non-local raises with a pointer to G5."""
+
+    @pytest.mark.asyncio
+    async def test_local_mode_populates_local_services_with_all(
+            self, _method_cfg, _profile_cfg):
+        """*test_local_mode_populates_local_services_with_all()* default `local` deployment + `launcher_role='all'` lists every service in `local_services`."""
+        async with ExperimentLauncher(cfg=_profile_cfg,
+                                      method_cfg=_method_cfg,
+                                      adaptation="baseline") as _lnc:
+            assert _lnc.resolved_deployment == "local"
+            assert _lnc.resolved_launcher_role == "all"
+            assert len(_lnc.local_services) == len(_lnc.registry.table)
+
+    @pytest.mark.asyncio
+    async def test_loopback_aliased_raises_until_g5(
+            self, _method_cfg, _profile_cfg):
+        """*test_loopback_aliased_raises_until_g5()* `loopback_aliased` deployment is accepted at construction but `__aenter__` raises until the real-uvicorn launcher script lands (distribute G5)."""
+        with pytest.raises(NotImplementedError) as _exc:
+            async with ExperimentLauncher(cfg=_profile_cfg,
+                                          method_cfg=_method_cfg,
+                                          adaptation="baseline",
+                                          deployment="loopback_aliased"):
+                pass
+        assert "loopback_aliased" in str(_exc.value)
+        assert "launch_services" in str(_exc.value)
+
+    @pytest.mark.asyncio
+    async def test_remote_raises_until_g5(self, _method_cfg, _profile_cfg):
+        """*test_remote_raises_until_g5()* `remote` deployment shares the same gate as `loopback_aliased`."""
+        with pytest.raises(NotImplementedError) as _exc:
+            async with ExperimentLauncher(cfg=_profile_cfg,
+                                          method_cfg=_method_cfg,
+                                          adaptation="baseline",
+                                          deployment="remote"):
+                pass
+        assert "remote" in str(_exc.value)
+        assert "launch_services" in str(_exc.value)

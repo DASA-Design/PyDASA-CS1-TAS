@@ -5,14 +5,16 @@ Module launcher.py
 
 Assembles the full architectural-experiment mesh. The profile JSON is the single source of truth for DASA knobs (mu, epsilon, c, K, routing); the method JSON (`experiment.json`) carries only deployment plumbing (ports, ramp, request sizes, role tagging).
 
-Two composite flavours wired per the `role` field in `experiment.json`:
+Composite flavours wired per the `role` field in `experiment.json`:
 
-    - `"composite_router"` (TAS_{1}): uses `make_composite_router`. Its kind -> target map + the client's kind-weights both come from TAS_{1}'s routing-matrix row in the profile JSON.
-    - `"composite"` (TAS_{2..6}): uses `make_composite_service` with the adaptation pattern. Equivalents list comes from the composite's routing-matrix row in declaration (column-index) order.
+    - `composite_client` (TAS_{1}, TAS_{5}, TAS_{6}): TAS_{1} routes by request kind via `mount_composite_svc`'s `kind_to_target` table; TAS_{5} and TAS_{6} are terminal.
+    - `composite_medical/alarm/drug` (TAS_{2..4}): dispatch siblings in-process via the shared `_handlers` dict from `mount_composite_svc`.
 
-No hardcoded workflow; the routing matrix is the ONLY wiring source.
+No hardcoded workflow; the routing matrix is the only wiring source.
 
-The shared `httpx.AsyncClient` routes through a `_MultiASGITransport` dispatching per port. All port->app entries register BEFORE the client handles any traffic (two-pass construction avoids post-hoc transport mutation; the shared `_port_to_app` dict on `_MultiASGITransport` gets each composite entry added synchronously during startup, then the client becomes reachable to callers only when `__aenter__` returns).
+The shared `httpx.AsyncClient` routes through a `_MultiASGITransport` that dispatches per port. Every port -> app entry registers synchronously during `__aenter__` before the client handles any traffic, so no post-hoc transport mutation can race callers.
+
+Deployment modes (see `notes/distribute.md`): `local` (today's ASGI fast path), `loopback_aliased` (single-host honest bench via `127.0.0.X` aliases), `remote` (real LAN). The ASGI launcher implements `local` only; non-local modes raise `NotImplementedError` until `src.scripts.launch_services` ships in distribute G5.
 """
 # native python modules
 from __future__ import annotations
@@ -46,6 +48,7 @@ class _MultiASGITransport(httpx.AsyncBaseTransport):
     """*_MultiASGITransport* dispatches per-port ASGI apps from a single httpx client."""
 
     def __init__(self, port_to_app: Dict[int, FastAPI]):
+        """*__init__()* wrap each `(port, app)` pair in a dedicated `httpx.ASGITransport`."""
         self._transports: Dict[int, httpx.ASGITransport] = {
             _port: httpx.ASGITransport(app=_app)
             for _port, _app in port_to_app.items()
@@ -53,6 +56,7 @@ class _MultiASGITransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(
             self, request: httpx.Request) -> httpx.Response:
+        """*handle_async_request()* route the request to the per-port transport; return HTTP 404 when no app is registered for the URL's port."""
         _port = request.url.port
         if _port is None:
             _t = None
@@ -64,8 +68,91 @@ class _MultiASGITransport(httpx.AsyncBaseTransport):
         return await _t.handle_async_request(request)
 
     async def aclose(self) -> None:
+        """*aclose()* close every per-port ASGI transport in declaration order."""
         for _t in self._transports.values():
             await _t.aclose()
+
+
+# --- deployment helpers ---------------------------------------------------
+
+
+# launcher_role -> set of service-registry roles that bucket spawns locally
+_LAUNCHER_ROLE_BUCKETS: Dict[str, Tuple[str, ...]] = {
+    "all": (
+        "composite_client",
+        "composite_medical",
+        "composite_alarm",
+        "composite_drug",
+        "atomic"
+    ),
+    "client": (
+        "composite_client",
+    ),
+    "composite": (
+        "composite_medical",
+        "composite_alarm",
+        "composite_drug"
+    ),
+    "atomic": (
+        "atomic",
+    ),
+    "composite-atomic": (
+        "composite_medical",
+        "composite_alarm",
+        "composite_drug",
+        "atomic"
+    )
+}
+
+
+def pick_bind_addr(deployment: str,
+                   override: Optional[str] = None) -> str:
+    """*pick_bind_addr()* return the uvicorn bind address for `deployment`.
+
+    Auto-flip rule (per `notes/distribute.md` §4.5):
+
+        - `local` -> `127.0.0.1` (kernel loopback fast path; ~3 ms floor).
+        - `loopback_aliased` -> `0.0.0.0` (each service must accept connections from a different `127.0.0.X` alias on the same machine).
+        - `remote` -> `0.0.0.0` (each service must accept connections from a different LAN host).
+
+    Args:
+        deployment (str): the configured `deployment` mode.
+        override (Optional[str]): explicit `--bind` override; when set, returned verbatim.
+
+    Returns:
+        str: the bind address uvicorn should listen on.
+    """
+    if override is not None:
+        return str(override)
+    if deployment == "local":
+        return "127.0.0.1"
+    return "0.0.0.0"
+
+
+def local_services_for_role(launcher_role: str,
+                            registry: SvcRegistry) -> List[str]:
+    """*local_services_for_role()* return the registry names this launcher is responsible for spawning.
+
+    Reads `_LAUNCHER_ROLE_BUCKETS` to map the role string to a set of
+    `service_registry` roles, then filters the registry table to those
+    roles. The empty list (`launcher_role=...` unrecognised) is returned
+    so the caller fails fast on a typo.
+
+    Args:
+        launcher_role (str): one of `"all"` / `"client"` / `"composite"` / `"atomic"` / `"composite-atomic"`.
+        registry (SvcRegistry): the populated registry.
+
+    Returns:
+        List[str]: service names this launcher spawns; empty when the role string is unrecognised.
+    """
+    _allowed_roles = _LAUNCHER_ROLE_BUCKETS.get(launcher_role, ())
+    if not _allowed_roles:
+        return []
+    _names: List[str] = []
+    for _name, _entry in registry.table.items():
+        if _entry.role in _allowed_roles:
+            _names.append(_name)
+    return _names
 
 
 # --- derivation helpers: specs + routing ---------------------------------
@@ -89,7 +176,7 @@ def _build_specs_from_cfg(cfg: NetCfg,
 
     `root_seed` is the single seed from `experiment.json::seed`. It is folded with each service's name via `derive_seed` so every service has a stable, independent RNG stream; one knob in JSON controls every stochastic draw in the apparatus.
 
-    `avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`). The per-service buffer budget is `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` (1.5x headroom absorbs Pydantic + FastAPI framing overhead without having to physically re-measure the body bytes). The value lives on `SvcSpec.mem_per_buffer` so downstream analysis can derive the memory-usage coefficient; no admission-time enforcement is applied here (FR-2.4 was dropped).
+    `avg_request_size_bytes` is the expected payload size per kind (from `method_cfg["request_size_bytes"]`). The per-service buffer budget is `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` (1.5x headroom absorbs Pydantic + FastAPI framing overhead without having to physically re-measure the body bytes). The value lives on `SvcSpec.mem_per_buffer` so downstream analysis can derive the memory-usage coefficient.
     """
     _specs: Dict[str, SvcSpec] = {}
     _headroom = SvcSpec.MEM_HEADROOM_FACTOR
@@ -161,13 +248,17 @@ class ExperimentLauncher:
         cfg (NetCfg): resolved profile + scenario.
         method_cfg (Dict[str, Any]): loaded `experiment.json`.
         adaptation (str): one of `"baseline"`, `"s1"`, `"s2"`, `"aggregate"`.
-        base_port_override (int): override `method_cfg["base_port"]`; 0 means "use the config value". Useful for parallel test runs.
+        base_port_override (int): override `method_cfg["base_port"]`; 0 reads the config value. Useful for parallel test runs.
+        deployment (Optional[str]): override `method_cfg["deployment"]`; `None` reads JSON. Values: `"local"` / `"loopback_aliased"` / `"remote"`. Non-local raises `NotImplementedError` from `__aenter__` until distribute G5 ships the real-uvicorn launcher.
+        launcher_role (Optional[str]): override `method_cfg["launcher_role"]`; defaults to `"all"`. Selects which services this process spawns; ignored in `local` mode (which always spawns everything).
     """
 
     cfg: NetCfg
     method_cfg: Dict[str, Any]
     adaptation: str
     base_port_override: int = 0
+    deployment: Optional[str] = None
+    launcher_role: Optional[str] = None
 
     # populated on __aenter__
     registry: Optional[SvcRegistry] = None
@@ -177,11 +268,42 @@ class ExperimentLauncher:
     _transport: Optional[_MultiASGITransport] = None
     kind_weights: Dict[str, float] = field(default_factory=dict)
     kind_to_target: Dict[str, str] = field(default_factory=dict)
+    # service names this launcher is responsible for spawning; populated on __aenter__
+    local_services: List[str] = field(default_factory=list)
+
+    @property
+    def resolved_deployment(self) -> str:
+        """*resolved_deployment()* effective deployment mode after the constructor / JSON fallback chain."""
+        if self.deployment is not None:
+            return str(self.deployment)
+        return str(self.method_cfg.get("deployment", "local"))
+
+    @property
+    def resolved_launcher_role(self) -> str:
+        """*resolved_launcher_role()* effective launcher_role; defaults to `"all"`."""
+        if self.launcher_role is not None:
+            return str(self.launcher_role)
+        return str(self.method_cfg.get("launcher_role", "all"))
 
     async def __aenter__(self) -> "ExperimentLauncher":
-        # 1. registry + per-artifact specs. The single `experiment.json::seed` is folded with each service name so every service has a stable, independent RNG seed derived from the one config knob. `mem_per_buffer = K * avg_request_size * 1.5` is baked into each spec so the memory-usage coefficient is derivable downstream (no admission-time enforcement; FR-2.4 dropped).
+        """*__aenter__()* assemble the mesh in 4 steps: (1) registry + specs from JSON; (2) detect the entry router and derive its kind map; (3) build the shared httpx client over an empty port map; (4) build every service app and register port -> app on the transport before returning."""
+        # explicit `deployment` arg overrides the JSON; thread to SvcRegistry's per-service host resolution
+        _resolved_method_cfg = dict(self.method_cfg)
+        _resolved_method_cfg["deployment"] = self.resolved_deployment
         self.registry = SvcRegistry.from_config(
-            self.method_cfg, base_port_override=self.base_port_override)
+            _resolved_method_cfg, base_port_override=self.base_port_override)
+        # populate local_services from launcher_role; `local` mode lists every entry
+        self.local_services = local_services_for_role(
+            self.resolved_launcher_role, self.registry)
+        # non-local modes need real uvicorn TCP (distribute G5); ASGI path is local-only
+        if self.resolved_deployment != "local":
+            raise NotImplementedError(
+                f"deployment={self.resolved_deployment!r} requires the "
+                "real-uvicorn launcher (see `notes/distribute.md` G5); "
+                "the in-process ASGI launcher only supports "
+                "deployment='local'. Run `python -m src.scripts.launch_services` "
+                "on each host instead.")
+        # one experiment.json::seed folded per service name yields stable independent RNG streams; mem_per_buffer = K * avg_request_size * 1.5 sized for the memory-usage coefficient
         _root_seed = int(self.method_cfg.get("seed", 0))
         _avg_size = _compute_avg_req_size(
             self.method_cfg.get("request_size_bytes", {}))
@@ -189,7 +311,7 @@ class ExperimentLauncher:
                                            root_seed=_root_seed,
                                            avg_request_size_bytes=_avg_size)
 
-        # 2. identify the client-facing entry router (TAS_{1} by convention) and derive its kind weights / kind-to-target map from its routing-matrix row. Among composite_client roles (TAS_{1}, TAS_{5}, TAS_{6}), the entry is the one with a non-empty outbound row; TAS_{5} and TAS_{6} are terminal.
+        # TAS_{1} is the entry router (composite_client with a non-empty outbound row); TAS_{5} / TAS_{6} are terminal
         def _is_entry_router(_name: str) -> bool:
             _entry = self.registry.table[_name]
             if _entry.role != "composite_client":
@@ -203,16 +325,16 @@ class ExperimentLauncher:
             self.kind_to_target, self.kind_weights = _build_router_kind_map(
                 self.cfg, _routers[0])
 
-        # 3. transport + shared client built against an initially empty port map. Every service registers its port -> app mapping into the transport synchronously before any HTTP traffic flows.
+        # step-3 transport: empty port map filled synchronously before any HTTP traffic flows
         self._transport = _MultiASGITransport({})
         self.client = httpx.AsyncClient(transport=self._transport,
                                         timeout=httpx.Timeout(10.0))
 
-        # 4. build every service. The TAS target system is ONE FastAPI app hosting six embedded atomic handlers (TAS_{1..6}), built via `build_tas` over `mount_composite_svc`. Third-party services (MAS / AS / DS) are built via `build_third_party` over `mount_atomic_svc`. Both paths use the same `HttpForward` instance for cross-service HTTP hops.
+        # step-4 build: TAS uses `build_tas` (one app, 6 components, `mount_composite_svc`); third-party uses `build_third_party` (`mount_atomic_svc`); both share one `HttpForward`
         _forward = HttpForward(self.client, self.registry)
         _port_to_app: Dict[int, FastAPI] = {}
 
-        # 4a. collect the six TAS component specs + their routing rows
+        # step-4a: collect the six TAS component specs + their routing rows
         _tas_specs: Dict[str, SvcSpec] = {}
         _tas_rows: Dict[str, List[Tuple[str, float]]] = {}
         for _name, _spec in self.specs.items():
@@ -220,13 +342,13 @@ class ExperimentLauncher:
                 _tas_specs[_name] = _spec
                 _tas_rows[_name] = _read_routing_row(self.cfg, _name)
 
-        # 4b. one TAS app; every TAS component gets its own `SvcCtx` attached via `mount_composite_svc`, exposed as `{name: SvcCtx}` on `app.state.tas_components`.
+        # step-4b: one TAS app; per-component `SvcCtx` exposed at `app.state.tas_components`
         if _tas_specs:
             _tas_app = build_tas(_tas_specs,
                                  _tas_rows,
                                  self.kind_to_target,
                                  _forward)
-            # register each TAS_{i} logical name -> the same FastAPI app; the registry's `build_invoke_url()` returns distinct `/TAS_<i>/invoke` paths so each component's route routes correctly.
+            # every TAS_{i} maps to the same app; `build_invoke_url` returns distinct `/TAS_<i>/invoke` paths
             _tas_port: Optional[int] = None
             for _name in _tas_specs:
                 self.apps[_name] = _tas_app
@@ -236,7 +358,7 @@ class ExperimentLauncher:
                 self._transport._transports[_tas_port] = httpx.ASGITransport(
                     app=_tas_app)
 
-        # 4c. third-party services; one app per port
+        # step-4c: third-party services, one app per port
         for _name, _spec in self.specs.items():
             if _name.startswith("TAS_"):
                 continue
@@ -250,6 +372,7 @@ class ExperimentLauncher:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
+        """*__aexit__()* close the shared httpx client and every per-port ASGI transport."""
         if self.client is not None:
             await self.client.aclose()
         if self._transport is not None:
@@ -312,7 +435,7 @@ class ExperimentLauncher:
             _app = self.apps.get(_name)
             if _app is None:
                 continue
-            # The TAS app exposes its six member contexts via `app.state.tas_components`; a third-party app exposes its single context via `app.state.ctx`.
+            # TAS app: per-component contexts at `app.state.tas_components`; third-party: single context at `app.state.ctx`
             _components = getattr(_app.state, "tas_components", None)
             if _components is not None and _name in _components:
                 _ctx = _components[_name]
@@ -320,7 +443,7 @@ class ExperimentLauncher:
                 _ctx = getattr(_app.state, "ctx", None)
                 if _ctx is None:
                     continue
-            # The same context object may surface under multiple specs (the TAS app is shared across TAS_{1..6}), so flush each context once.
+            # TAS app is shared across TAS_{1..6}; flush each context object once
             if id(_ctx) in _flushed:
                 continue
             _flushed.add(id(_ctx))
@@ -341,11 +464,11 @@ class ExperimentLauncher:
                         output_dir: Path,
                         *,
                         extras: Optional[Dict[str, Any]] = None) -> Path:
-        """*snapshot_config()* write `config.json` capturing the effective controlled values applied to THIS cell.
+        """*snapshot_config()* write `config.json` capturing the effective controlled values for THIS cell.
 
-        This is the FR-3.3 snapshot: downstream analysis joins on what actually ran, not on the source profile. Captures:
+        Pins what actually ran for downstream analysis to join on, post any CLI / scenario overrides. Captures:
 
-            - per-artifact `(role, port, mu, epsilon, c, K, seed, mem_per_buffer)` as resolved by the launcher, post any CLI / scenario overrides.
+            - per-artifact `(role, port, mu, epsilon, c, K, seed, mem_per_buffer)` as resolved by the launcher.
             - adaptation / profile / scenario labels.
             - routing matrix + `lambda_z` vector.
             - kind_to_target + kind_weights derived at launcher startup.
