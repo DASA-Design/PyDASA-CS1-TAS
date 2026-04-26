@@ -293,7 +293,7 @@ class TestCalibrationGate:
         from src.io import tooling as _cal
         monkeypatch.setattr(_cal, "_CALIB_DIR", tmp_path / "calibration")
         with pytest.raises(RuntimeError,
-                           match="No calibration envelope found"):
+                           match="No host calibration"):
             run_experiment(adp="baseline", wrt=False,
                            method_cfg=_QUICK_CFG, verbose=False)
 

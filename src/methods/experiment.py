@@ -492,7 +492,8 @@ def run(adp: Optional[str] = None,
     _baseline_env = _resolve_baseline(skip=skip_calibration, verbose=verbose)
     _baseline_block = _build_baseline_block(_baseline_env)
 
-    _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
+    _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn,
+                        source="specs")
     if method_cfg is not None:
         _mcfg = method_cfg
     else:

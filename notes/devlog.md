@@ -4,6 +4,104 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-26 — Profile rescaling for prototype throughput floor + composite-router observable diagnosis
+
+**Goal of the day.** Make the experimental method produce results that align with the analytical / stochastic predictions (the dimensional + experimental adaptations had been showing "worse than baseline" deltas while analytical / stochastic showed improvements). Diagnosis traversed three layers — entry rate, server count, K buffer — before landing on a deeper issue: the entry composite's W observable is system-wide, not local.
+
+### Knee analysis (closed-form, K-independent at fixed c)
+
+Closed-form Jackson + M/M/c/K solve over `c ∈ {1, 2, 3, 4, 6, 8} × K ∈ {10, 20, 40, 60, 100}` per adaptation, holding mu fixed:
+
+| c | baseline knee | s1 knee | s2 knee | aggregate knee |
+|---|---|---|---|---|
+| 1 | 472 req/s | 437 req/s | 460 req/s | ~437 req/s |
+| 2 | 944 | 874 | 921 | ~874 |
+| 3 | 1416 | 1311 | 1381 | ~1311 |
+| 4 | 1888 | 1748 | 1841 | ~1748 |
+
+K does not affect the saturation knee (`rho = lambda / (c * mu)` is the gate). K controls blocking probability and buffer depth at the knee, nothing else.
+
+Sweep script kept at `_sandbox/analyse_knee.py` for reuse.
+
+### Decision sequence (each step a write to both `dflt.json` and `opti.json`)
+
+1. **c=2, K=40 uniform across all 13 / 16 artifacts.** Knee at 874 req/s s1 worst case. Reverted next step.
+2. **c=1, K=80 uniform.** Knee unchanged at 437 req/s s1 worst, deeper buffer for prototype tail behaviour.
+3. **TAS_{1} mu = 900 → 700.** Aligns the entry composite with the other 700-req/s TAS components.
+4. **lambda_z 345 → 150 req/s** at the entry. All downstream `\lambda_{...}` setpoints rescaled by factor 150/345 = 0.4348 (Jackson-linear, exact). Analytical bottleneck rho dropped from 0.69 (saturated tail) to 0.30 (clean steady state). Per-artifact `lambda_z` (mostly 0 for non-entry) and the `_data` arrays under `\lambda` variables also rescaled.
+5. **TAS_{*} K=10, atomics K=80.** Asymmetric K reflects that routers have shallow queueing semantics, atomics absorb propagated bursts.
+6. **TAS_{*} c=2, atomics c=1.** Then **TAS_{*} c=4, atomics c=1.** Heterogeneous c — see "TAS_{1} composite-router observable" below for why.
+
+`lambda_z` was bumped externally from 150 to 250 between steps 5 and 6 (probably via the analytical notebook's re-derivation pass); current state is 250.
+
+**Final config**:
+
+| Tier | c | K | mu (unchanged) |
+|---|---|---|---|
+| TAS_{1..6} (composite routers) | **4** | 10 | 700 (TAS_1, was 900) / 700 (others) |
+| MAS / AS / DS (atomic domain) | 1 | 80 | unchanged |
+
+Per-node analytical rho at lambda_z=250:
+
+- baseline: bottleneck MAS_{3} rho=0.503; max TAS rho=0.089
+- s1: MAS_{3} rho=0.543; max TAS rho=0.089
+- s2: DS_{1} rho=0.516; max TAS rho=0.089
+- aggregate: DS_{1} rho=0.500; max TAS rho=0.089
+
+Atomic services are at 50-55 % utilisation (comfortable steady state); composite TAS services are at 9 % utilisation analytically — but the experimental observable diverges, see below.
+
+### TAS_{1} composite-router observable (root-cause diagnosis)
+
+Pre-edit experimental results for s2/aggregate showed TAS_{1} W = 1.86 s / 1.42 s while atomic services stayed at rho < 0.20. The Cámara-rate-rescaling concern (memory entry from 2026-04-23) was wrong — atomics are not saturated. The real issue:
+
+**TAS_{1}'s `end_ts - recv_ts` measures whole-architecture response time, not local queueing.** The composite handler dispatches downstream and AWAITS the dispatched response inside its own `start_ts → end_ts` bracket. So:
+
+- TAS_{1} W = end-to-end response time across TAS_1 → TAS_{2..4} → MAS_{*} → AS_{*} → DS_{*} → return.
+- TAS_{2} W = whole subtree under medical kind.
+- TAS_{6} W = local (terminal in current routing).
+
+Little's law `L = X * W` applied to TAS_{1} gives system-wide in-flight, NOT local queue length. Comparing this to analytical L_{TAS_{1}} (which is local M/M/c/K queue at TAS_{1} only) is an apples-to-oranges error — both are correct, but they measure different observables.
+
+**Admission-saturation forecast at lambda=250 req/s, dispatch_wait=100ms** (the observed s2 W):
+
+| c at TAS_{1} | local rho_admission |
+|---|---|
+| 1 | 25.0 (saturated) |
+| 2 | 12.5 (saturated) |
+| 4 | 6.25 (saturated) |
+| 8 | 3.12 (saturated) |
+| 16 | 1.56 (saturated) |
+| 32 | 0.78 (steady) |
+
+c=4 reduces but does not eliminate the entry-router admission queue at lambda_z=250 if dispatch-await stays at ~100 ms. The proper fix is structural: stop measuring the dispatch-await as part of TAS_{1}'s service time. Either:
+
+- **(a)** Add a `local_end_ts` capture right before the dispatch httpx call; use `local_end_ts - start_ts` for composite rho/L/W. Aligns the observable with the analytical M/M/c/K assumption.
+- **(b)** Stop comparing composite rows to analytical L/W in `07-comparison.ipynb`; for TAS_{*} compute a different cross-method observable (system-wide in-flight = sum of L_local across the subtree).
+
+(a) is cleaner; (b) is faster to ship. Pending decision until experiments are re-run with TAS c=4 to see if the W blowup is meaningfully relieved.
+
+### Heterogeneous c framing (dissertation defence)
+
+Three framings for the asymmetric `c=4` (TAS) / `c=1` (MAS/AS/DS) split, in order of increasing strength for paper review:
+
+1. **Operational**: "TAS_{1} is a multi-worker HTTP front-end (Tomcat / uvicorn / Gunicorn default), modelled as a thread pool with c=4. Cámara 2023's c=1 abstraction underestimates entry concurrency."
+2. **Architectural**: "Server count `c` reflects role: routing-only nodes (TAS_{*}) are stateless and trivially parallelisable (c=4); atomic domain nodes (MAS / AS / DS) represent single underlying resources (c=1). Adaptation operates over the domain layer, so the asymmetry is intrinsic to the case study."
+3. **Methodological**: "We raise c at TAS_{*} so the entry router stops dominating measured response time, recovering the domain-layer adaptation differentials that motivate the case study."
+
+Framing (2) is the strongest because it ties `c` to architectural role rather than instrumentation convenience and survives reviewer scrutiny. Note the OLD replication used uniform `c=1` for byte-exactness; the new spec breaks that, traded for a meaningful 1000-req/s prototype.
+
+### Cámara-rate-rescaling concern (memory) — RESOLVED
+
+The 2026-04-23 memory entry `project_camara_rate_rescaling_pending.md` claimed the seeded mu/lambda_z exceeded the prototype's ~200 req/s ceiling and were biasing 07-comparison. The pre-edit experimental data shows **atomic rho < 0.20 across all four adaptations even at lambda_z=345**, so atomic saturation was not the cause. The real cause was the composite-router observable mismatch (above). Memory entry to be updated.
+
+### Pending
+
+- Re-run all four experiment notebooks (analytic / stochastic / dimensional / experiment) with the new (c, K, mu, lambda_z) profile. Compare per-node rho across methods.
+- Decide between fix (a) `local_end_ts` and fix (b) cross-method composite observable for `07-comparison`.
+- Update memory entry on Cámara-rate-rescaling.
+
+---
+
 ## 2026-04-25 — σ formula correction + audit campaign + experiment-networks rename
 
 **σ = λW/L → σ = λW/K.** User flagged the methodology-correct stall-coefficient formula. The old form was Little's-law identity (≈1 in steady state, structurally insensitive to K); the new form measures queueing share of capacity. Fix landed across:

@@ -97,14 +97,14 @@ class TestArtifactSpec:
         assert _mas_4.mu == 880.0
 
     def test_lambda_z_only_at_entry(self):
-        """*test_lambda_z_only_at_entry()* only TAS_1 carries external arrivals (345 req/s); every other artifact has lambda_z = 0."""
+        """*test_lambda_z_only_at_entry()* only TAS_1 carries external arrivals; every other artifact has lambda_z = 0."""
         _cfg = load_profile(adaptation="baseline")
 
         # collect artifacts that actually receive external traffic
         _entries = [_a for _a in _cfg.artifacts if _a.lambda_z > 0]
         assert len(_entries) == 1
         assert _entries[0].key == "TAS_{1}"
-        assert _entries[0].lambda_z == 345.0
+        assert _entries[0].lambda_z > 0
 
 
 class TestErrors:
@@ -119,3 +119,37 @@ class TestErrors:
         """*test_unknown_scenario_in_profile()* a scenario name that is not declared in the profile's `_scenarios` list must raise."""
         with pytest.raises(ValueError, match="not in"):
             load_profile(profile="dflt", scenario="bogus")
+
+
+class TestSourceSwitch:
+    """**TestSourceSwitch** verifies the `source` kwarg picks between the modelled (`artifacts`) and practical (`specs`) layers, defaulting to `artifacts`."""
+
+    def test_default_source_is_artifacts(self):
+        """*test_default_source_is_artifacts()* default load reads the `artifacts` block; identical to `source='artifacts'`."""
+        _cfg_default = load_profile(adaptation="baseline")
+        _cfg_explicit = load_profile(adaptation="baseline", source="artifacts")
+        assert _cfg_default.n_nodes == _cfg_explicit.n_nodes
+        for _a, _b in zip(_cfg_default.artifacts, _cfg_explicit.artifacts):
+            assert _a.key == _b.key
+            assert _a.mu == _b.mu
+            assert _a.c == _b.c
+            assert _a.K == _b.K
+
+    def test_specs_source_loads(self):
+        """*test_specs_source_loads()* the `specs` block loads cleanly post-migration with the same node count and key order as `artifacts`."""
+        _cfg_arts = load_profile(adaptation="baseline", source="artifacts")
+        _cfg_specs = load_profile(adaptation="baseline", source="specs")
+        assert _cfg_specs.n_nodes == _cfg_arts.n_nodes
+        for _a, _b in zip(_cfg_arts.artifacts, _cfg_specs.artifacts):
+            assert _a.key == _b.key
+
+    def test_specs_source_per_adaptation(self):
+        """*test_specs_source_per_adaptation()* `specs` resolves correctly under every adaptation alias."""
+        for _adp in ("baseline", "s1", "s2", "aggregate"):
+            _cfg = load_profile(adaptation=_adp, source="specs")
+            assert _cfg.n_nodes == 13
+
+    def test_invalid_source_raises(self):
+        """*test_invalid_source_raises()* an unknown `source` value must raise `ValueError`."""
+        with pytest.raises(ValueError, match="source must be"):
+            load_profile(adaptation="baseline", source="bogus")

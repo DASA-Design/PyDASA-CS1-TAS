@@ -324,7 +324,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _cfg = load_profile(adaptation=_args.adaptation,
                         profile=_args.profile,
-                        scenario=_args.scenario)
+                        scenario=_args.scenario,
+                        source="specs")
     _root_seed = int(_mcfg.get("seed", 0))
     _sizes = dict(_mcfg.get("request_size_bytes", {}))
     _avg_size = 0

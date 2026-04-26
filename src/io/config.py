@@ -250,42 +250,49 @@ def _read_profile(profile_stem: str) -> Dict[str, Any]:
 
 def load_profile(adaptation: Optional[str] = None,
                  profile: Optional[str] = None,
-                 scenario: Optional[str] = None,) -> NetCfg:
+                 scenario: Optional[str] = None,
+                 source: str = "artifacts") -> NetCfg:
     """*load_profile()* load a resolved `NetCfg` for one `(profile, scenario)` pair.
 
     Args:
         adaptation (Optional[str]): one of `baseline`, `s1`, `s2`, `aggregate`. Maps to `(profile, scenario)` via `_ADAPTATION_TO_SOURCE`.
         profile (Optional[str]): profile file stem (`dflt` or `opti`); overrides `adaptation`'s implied profile when paired with `scenario`.
         scenario (Optional[str]): explicit scenario name within the profile. Defaults to the profile's `environments._setpoint` when absent.
+        source (str): top-level key to read per-node specs from. `"artifacts"` (default) reads the modelled / theoretical layer consumed by analytic / stochastic / dimensional. `"specs"` reads the practical / deployment layer used by the experiment runner; this layer can diverge on `c`, `K`, `port`, `mem_per_buffer` without contaminating the model's predictions.
 
     Raises:
-        ValueError: when the scenario is not declared in the profile, or when the routing matrix shape does not match the node count.
+        ValueError: when the scenario is not declared in the profile, when `source` is not `"artifacts"` or `"specs"`, or when the routing matrix shape does not match the node count.
 
     Returns:
         NetCfg: resolved artifacts plus the aligned routing matrix for the requested scenario.
     """
-    # resolve user args into a concrete (profile, scenario) pair
+    if source not in ("artifacts", "specs"):
+        raise ValueError(
+            f"source must be 'artifacts' or 'specs'; got {source!r}")
+
     _profile, _scenario = _resolve_source(adaptation, profile, scenario)
 
-    # load the raw envelope and pick out its environments block
     _doc = _read_profile(_profile)
     _env = _doc["environments"]
 
-    # reject scenarios that are not declared in the profile
     if _scenario not in _env["_scenarios"]:
         _msg = f"scenario {_scenario!r} not in {_profile}.json "
         _msg += f"(available: {_env['_scenarios']})"
         raise ValueError(_msg)
 
-    # unpack the per-scenario pieces
+    if source not in _doc:
+        raise ValueError(
+            f"profile {_profile}.json has no top-level {source!r} block; "
+            "schema migration may be incomplete.")
+
     _node_keys = _env["_nodes"][_scenario]
     _routing = np.array(_env["_routs"][_scenario], dtype=float)
     _label = _env["_labels"].get(_scenario, "")
 
-    # resolve each positional slot to a concrete ArtifactSpec
+    _block = _doc[source]
     _artifacts: List[ArtifactSpec] = []
     for _key in _node_keys:
-        _a = _doc["artifacts"][_key]
+        _a = _block[_key]
         _artifacts.append(ArtifactSpec(_key,
                                        _a["name"],
                                        _a["type"],
