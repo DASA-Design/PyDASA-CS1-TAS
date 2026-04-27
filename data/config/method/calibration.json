@@ -31,8 +31,8 @@
     },
     "sweep_grid": {
         "mu_factor": [0.5, 1.0, 1.5, 2.0],
-        "c": [2, 4, 8],
-        "K": [100, 200, 400],
+        "c": [4, 8, 16],
+        "K": [128, 256, 512],
         "lambda_steps": 10,
         "lambda_factor_min": 0.05,
         "util_threshold": 0.95,
