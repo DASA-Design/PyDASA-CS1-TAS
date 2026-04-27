@@ -2082,7 +2082,7 @@ def run_calib_sweep(envelope: Dict[str, Any],
                     verbose: bool = True) -> Dict[str, Dict[str, Any]]:
     """*run_calib_sweep()* drive vernier across `(c, K, mu_factor)` and derive the dim card per combo.
 
-    For each combo on `sweep_grid.c x sweep_grid.K x sweep_grid.mu_factor`: spin up a fresh vernier with the combo spec, ramp `lambda` from `lambda_factor_min*mu` up to `util_threshold*mu*c` across `lambda_steps` points, drive each step for `max_probe_window_s` seconds, aggregate latencies into a synthetic `handler_scaling`-shaped block, and feed that to the same derivation pipeline `derive_calib_coefs` uses. Returns nested `{combo_tag: per_combo_card}` matching the shape consumed by `src.view.dc_charts.plot_yoly_chart`. Inter-combo waits read `inter_trial_delay_s` from the same JSON config so port lifecycles are clean.
+    For each combo on `sweep_grid.c x sweep_grid.K x sweep_grid.mu_factor`: spin up a fresh vernier with the combo spec, ramp `lambda` from `lambda_factor_min*mu` up to `util_threshold*mu*c` across `lambda_steps` points, drive each step for `max_probe_window_s` seconds, aggregate latencies into a synthetic `handler_scaling`-shaped block, and feed that to the same derivation pipeline `derive_calib_coefs` uses. Returns nested `{combo_tag: per_combo_card}` matching the shape consumed by `src.view.plot_yoly_chart`. Inter-combo waits read `inter_trial_delay_s` from the same JSON config so port lifecycles are clean.
 
     Per-combo `mu` resolves through `_resolve_mu_anchor`: explicit `sweep_grid.mu_anchor_req_per_s` first, then named `sweep_grid.mu_anchor_source` (defaults to `"loopback.median_us"`). Provenance is recorded on every per-combo `meta` block so plot legends can show which anchor each combo used.
 
