@@ -4,6 +4,73 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-26 (continued) — Schema split (artifacts vs specs), local_end_ts column, lambda_z restored
+
+Three structural changes landed late on 2026-04-26, all on top of the profile-rescaling work captured in the previous entry.
+
+### Schema split: `artifacts` (frozen model) + `specs` (adjustable deployment)
+
+Both `data/config/profile/{dflt,opti}.json` now carry parallel top-level blocks:
+
+- **`artifacts`** — frozen theoretical model. Cámara 2023 canonical values. Consumed by analytic / stochastic / dimensional. Locked.
+- **`specs`** — adjustable practical layer. Same node keys + variable structure. Consumed by `experiment.run` and `src/scripts/launch_services.py`. Free to diverge from `artifacts` on `c`, `K`, `port`, `mem_per_buffer` for prototype-fidelity tuning without contaminating the model.
+
+`src/io/config.py::load_profile(adaptation, profile, scenario, source="artifacts")` gains a `source` kwarg. Default `"artifacts"` keeps every analytic / stochastic / dimensional call bit-identical. `experiment.py:495` and `launch_services.py:325` switched to `source="specs"`.
+
+Initial state: deep-copy parity (artifacts → specs at migration time, 2026-04-26). Future divergence is operator-driven.
+
+Tests: `tests/io/test_config.py::TestSourceSwitch` (4 cases, all green). Pre-existing `test_lambda_z_only_at_entry` and `test_reads_setpoint_value` loosened from hardcoded 345 to `> 0` to absorb the lambda_z editing history.
+
+**Dissertation framing.** "We separate **modelled artifact** specifications (the system DASA reasons about: mu, epsilon, c, K, lambda_z, routing) from **practical deployment** specifications (the runtime configuration the prototype actually uses: c_deployed, K_deployed, port, memory). The split lets the prototype be tuned for measurement fidelity (e.g., raising entry-router c to remove admission saturation) without contaminating the model's predictions. R1/R2/R3 verdicts apply to the modelled topology; experimental error is measured as the gap between the prototype's behaviour at the deployed configuration and the model's prediction at the modelled configuration."
+
+### `local_end_ts` column — composite-router observable fix
+
+`LOG_COLUMNS` bumped from 10 to 11 columns:
+
+```
+request_id, service_name, kind,
+recv_ts, start_ts, local_end_ts, end_ts,
+c_used_at_start,
+success, status_code,
+size_bytes
+```
+
+New `mark_local_end()` API in `src/experiment/services/instruments.py` (paired with a `_local_end_var` contextvar). `mount_atomic_svc` calls it right after admission release + eps + target pick, immediately before `await dispatch(...)`. Terminals don't call it; `@logger` defaults `local_end_ts = end_ts` for them.
+
+`_build_svc_df_from_logs` now produces two views per node:
+
+- **Local** (default `rho` / `L` / `W` columns): from `local_end_ts - start_ts`. M/M/c/K-comparable. Used by analytic / stochastic / dimensional cross-checks.
+- **Total** (parallel `rho_total` / `L_total` / `W_total`): from `end_ts - start_ts`. Client-perceived end-to-end. Used for Cámara R2 validation.
+
+For atomic / terminal nodes the two views coincide. For composite routers (TAS_{*}) they differ by the dispatch-await time.
+
+**Why.** Pre-bump, `end_ts - start_ts` for composite routers included the whole downstream subtree's processing time because the handler awaits the dispatched response inside its own bracket. That made TAS_{1}'s W = end-to-end response time across the entire architecture, producing the spurious "TAS_{1}.L blew up to 200" pattern. The Cámara-rate-rescaling memory entry (2026-04-23) attributing this to atomic saturation was wrong; atomic max rho stayed under 0.20 across all four adaptations even at lambda_z = 345. Fixed entry now in `memory/project_camara_rate_rescaling_pending.md` reflects the resolution.
+
+213/213 experiment tests green post-change.
+
+### `lambda_z = 345 req/s` restored (Cámara canonical)
+
+After cycling through 250 / 200 / 150 during the morning's diagnosis, `lambda_z` is restored to the published Cámara 2023 value of **345 req/s** at `TAS_{1}` in **both layers** (artifacts + specs). The user authorised this as an explicit exception to the "artifacts is frozen" rule because the canonical published value is the right anchor for the model layer.
+
+All downstream `\lambda_{...}` setpoints rescaled proportionally by 345/250 = 1.38 across both layers.
+
+### Memory + CLAUDE.md sync
+
+- New memory entry `project_artifacts_specs_split.md` (full migration record).
+- New memory entry `project_local_end_ts_observable.md` (schema bump + composite-router observable diagnosis).
+- Updated `project_camara_rate_rescaling_pending.md` (RESOLVED).
+- Updated `project_qn_config_conventions.md` (lambda_z=345 + two-layer schema note).
+- Updated `MEMORY.md` index (3 new pointers, 2 description rewrites).
+- Updated CLAUDE.md "Data Convention" bullets: schema split, lambda_z=345, 11-column LOG_COLUMNS with local_end_ts, two-view operational metrics.
+
+### Pending
+
+- User-side: re-run `01-04` notebooks at the artifacts layer for sanity (no code change needed; default `source="artifacts"`).
+- User-side: re-run `05-experimental.ipynb` at the specs layer to populate the new `local_end_ts` and `_total` columns; then iterate on `specs` divergence from artifacts to relieve TAS_{1} entry-router admission (likely `specs.TAS_{1}.c = 16` or higher to deliver 250 req/s without saturation).
+- Re-deriving the analytic JSON's `\W` / `\L` / `\Wq` / `\Lq` setpoints from the queue solver after `lambda_z` rescaling (currently `λW ≠ L` at the JSON seeds, so `test_sigma_close_to_theta_under_little` is failing; running 01-analytic regenerates them).
+
+---
+
 ## 2026-04-26 — Profile rescaling for prototype throughput floor + composite-router observable diagnosis
 
 **Goal of the day.** Make the experimental method produce results that align with the analytical / stochastic predictions (the dimensional + experimental adaptations had been showing "worse than baseline" deltas while analytical / stochastic showed improvements). Diagnosis traversed three layers — entry rate, server count, K buffer — before landing on a deeper issue: the entry composite's W observable is system-wide, not local.
