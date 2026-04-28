@@ -76,14 +76,11 @@ class TestRateSweepHelpers:
         assert cal._batch_size_for(500) == 10
 
     def test_aggregate_rate_trials_stats_are_correct(self) -> None:
-        """*test_aggregate_rate_trials_stats_are_correct()* mean / lo / hi / mean_loss_pct match hand-computed values."""
+        """*test_aggregate_rate_trials_stats_are_correct()* mean / lo / hi / mean_loss_pct match hand-computed values. Trial dicts are the ping/echo shape (target / effective / gap / loss_pct); the legacy `entry_lambda` field is no longer produced."""
         _agg = cal._aggregate_rate_trials([
-            {"target": 100.0, "effective": 99.0,
-             "entry_lambda": 98.5, "gap": 1.0, "loss_pct": 1.0},
-            {"target": 100.0, "effective": 100.5,
-             "entry_lambda": 99.0, "gap": -0.5, "loss_pct": -0.5},
-            {"target": 100.0, "effective": 97.0,
-             "entry_lambda": 96.5, "gap": 3.0, "loss_pct": 3.0},
+            {"target": 100.0, "effective": 99.0, "gap": 1.0, "loss_pct": 1.0},
+            {"target": 100.0, "effective": 100.5, "gap": -0.5, "loss_pct": -0.5},
+            {"target": 100.0, "effective": 97.0, "gap": 3.0, "loss_pct": 3.0},
         ])
         assert _agg["n"] == 3
         assert _agg["target"] == pytest.approx(100.0)
@@ -91,7 +88,7 @@ class TestRateSweepHelpers:
         assert _agg["lo"] == pytest.approx(97.0)
         assert _agg["hi"] == pytest.approx(100.5)
         assert _agg["mean_loss_pct"] == pytest.approx(1.1667, abs=1e-3)
-        assert _agg["mean_entry_lambda"] == pytest.approx(98.0, abs=1e-3)
+        assert "mean_entry_lambda" not in _agg
 
     def test_find_highest_sustainable_rate_walks_ascending(self) -> None:
         """*test_find_highest_sustainable_rate_walks_ascending()* returns the highest rate whose `mean_loss_pct` is at or below the threshold; `None` when no rate passes."""
@@ -107,25 +104,27 @@ class TestRateSweepHelpers:
 
 
 class TestRunRateSweepOrchestration:
-    """**TestRunRateSweepOrchestration** orchestration contract: no-recursion guard + opt-in gate."""
+    """**TestRunRateSweepOrchestration** orchestration contract: ping/echo vernier driver, opt-in gate, no TAS coupling."""
 
-    def test_run_rate_sweep_no_recursion_into_calibration_gate(
+    def test_run_rate_sweep_drives_ping_vernier(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """*test_run_rate_sweep_no_recursion_into_calibration_gate()* the inner `experiment.run` is always invoked with `skip_calibration=True` so the rate sweep never re-enters its own gate."""
-        _calls: List[Dict[str, Any]] = []
+        """*test_run_rate_sweep_drives_ping_vernier()* the orchestrator stands up one vernier, loops rates x trials via `_drive_lambda_step`, and aggregates achieved rates into the result envelope. Verifies the rate sweep is decoupled from `experiment.run` / TAS profiles."""
+        _trials_returned: Dict[float, List[Dict[str, float]]] = {
+            100.0: [{"target": 100.0, "effective": 99.0, "gap": 1.0, "loss_pct": 1.0}] * 2,
+            200.0: [{"target": 200.0, "effective": 198.0, "gap": 2.0, "loss_pct": 1.0}] * 2,
+        }
 
-        def _fake_probe(**kwargs: Any) -> Dict[str, Any]:
-            _calls.append(kwargs)
-            # mimic experiment.run's client_effective_rate + nodes frame
-            _rate = float(kwargs["rate"])
-            _effective = _rate * 0.98
-            _entry_lam = _rate * 0.97
-            _entry_row = {"key": "TAS_{1}", "lambda": _entry_lam}
-            _nodes = pd.DataFrame([_entry_row])
-            return {"client_effective_rate": _effective, "nodes": _nodes}
+        async def _fake_async_runner(**kwargs: Any) -> Dict[float, List[Dict[str, float]]]:
+            # confirm the orchestrator passes the vernier-driver kwargs through; presence of these keys means we are NOT calling the legacy TAS path
+            assert "rates" in kwargs
+            assert "trials_per_rate" in kwargs
+            assert "window_s" in kwargs
+            assert "port" in kwargs
+            assert "payload_size_bytes" in kwargs
+            return _trials_returned
 
-        monkeypatch.setattr(cal, "_run_single_rate_probe", _fake_probe)
+        monkeypatch.setattr(cal, "_run_rate_sweep_async", _fake_async_runner)
 
         _out = cal.run_rate_sweep(
             rates=(100.0, 200.0),
@@ -134,18 +133,18 @@ class TestRunRateSweepOrchestration:
             verbose=False,
         )
 
-        # confirm orchestration shape
+        # confirm orchestration shape; the new envelope drops adaptation / entry_service / cascade
         assert _out["rates"] == [100.0, 200.0]
         assert _out["trials_per_rate"] == 2
         assert set(_out["aggregates"].keys()) == {"100.0", "200.0"}
-        # calibrate=True records the highest passing rate
         assert "calibrated_rate" in _out
-
-        # no-recursion guard: 2 rates x 2 trials = 4 calls; each must carry the rate-sweep adaptation + cascade mode
-        assert len(_calls) == 4
-        for _c in _calls:
-            assert _c["adaptation"] == cal._DEFAULT_RATE_SWEEP_ADAPTATION
-            assert _c["cascade_mode"] == cal._DEFAULT_RATE_SWEEP_CASCADE_MODE
+        assert "adaptation" not in _out
+        assert "entry_service" not in _out
+        assert "cascade" not in _out
+        # aggregates carry mean / lo / hi / mean_loss_pct / n; no legacy mean_entry_lambda
+        for _agg in _out["aggregates"].values():
+            assert "mean_entry_lambda" not in _agg
+            assert {"target", "mean", "lo", "hi", "mean_loss_pct", "n"} <= set(_agg.keys())
 
     def test_run_with_skip_rate_sweep_true_skips_block(
         self, monkeypatch: pytest.MonkeyPatch,

@@ -8,7 +8,7 @@ Per-host noise-floor characterisation. Sibling to `src.methods.analytic` / `stoc
 Three public entry points share this module:
 
     - `run(...)` host-floor probes + optional rate-saturation block + Route-B dim card.
-    - `run_rate_sweep(...)` rate-saturation probe driven against the full TAS mesh; opt-in.
+    - `run_rate_sweep(...)` rate-saturation probe driven against the standalone ping/echo vernier (host-transport ceiling); opt-in.
     - `run_calib_sweep(envelope, sweep_grid, ...)` Route-B measured sweep across `(c, K, mu_factor)`; drives vernier per combo and reuses `derive_calib_coefs`.
 
 Kept deliberately small and dependency-light:
@@ -120,28 +120,16 @@ _DEFAULT_PAYLOAD_SIZE_BYTES = int(_CALIB_CFG.get("payload_size_bytes", 0))
 _DEFAULT_INTER_LEVEL_DELAY_S = float(_CALIB_CFG.get("inter_level_delay_s", 0.0))
 _DEFAULT_INTER_TRIAL_DELAY_S = float(_CALIB_CFG.get("inter_trial_delay_s", 0.0))
 
-# rate-sweep: opt-in (each trial is a full experiment.run); enable via config or --rate-sweep
+# rate-sweep: drives the standalone ping/echo vernier at increasing rates; opt-in via config or --rate-sweep
 _DEFAULT_SKIP_RATE_SWEEP = bool(_CALIB_CFG.get("skip_rate_sweep", True))
 _RATE_SWEEP_CFG: Dict[str, Any] = _CALIB_CFG.get("rate_sweep", {})
-_DEFAULT_RATE_SWEEP_ADAPTATION = str(
-    _RATE_SWEEP_CFG.get("adaptation", "baseline"))
 _DEFAULT_RATE_SWEEP_RATES: Tuple[float, ...] = tuple(
     float(_r) for _r in _RATE_SWEEP_CFG.get("rates", ()))
 _DEFAULT_RATE_SWEEP_TRIALS = int(_RATE_SWEEP_CFG.get("trials_per_rate", 5))
-_DEFAULT_RATE_SWEEP_MIN_SAMPLES = int(
-    _RATE_SWEEP_CFG.get("min_samples_per_kind", 32))
 _DEFAULT_RATE_SWEEP_PROBE_S = float(
     _RATE_SWEEP_CFG.get("max_probe_window_s", 4.0))
-_DEFAULT_RATE_SWEEP_CASCADE_MODE = str(
-    _RATE_SWEEP_CFG.get("cascade_mode", "rolling"))
-_DEFAULT_RATE_SWEEP_CASCADE_THRESHOLD = float(
-    _RATE_SWEEP_CFG.get("cascade_threshold", 0.10))
-_DEFAULT_RATE_SWEEP_CASCADE_WINDOW = int(
-    _RATE_SWEEP_CFG.get("cascade_window", 50))
 _DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT = float(
     _RATE_SWEEP_CFG.get("target_loss_pct", 2.0))
-_DEFAULT_RATE_SWEEP_ENTRY_SERVICE = str(
-    _RATE_SWEEP_CFG.get("entry_service", "TAS_{1}"))
 
 # jitter-probe sleep target (ns); same unit as the hot path
 _JITTER_TARGET_NS = int(_CALIB_CFG.get("jitter_target_ns", 1_000_000))
@@ -669,113 +657,38 @@ def _batch_size_for(rate: float) -> int:
     return max(1, _batch)
 
 
-def _read_lambda_z_at(adaptation: str,
-                      entry_service: str = "TAS_{1}") -> float:
-    """*_read_lambda_z_at()* read the seeded external arrival rate at `entry_service`.
+def _summarise_rate_trial_from_stats(rate: float,
+                                     stats: Dict[str, float],
+                                     window_s: float) -> Dict[str, float]:
+    """*_summarise_rate_trial_from_stats()* compute trial summary from a `_drive_lambda_step` result.
 
-    Lazy-imports `src.io.load_profile` so `calibration.py` stays light at module-load time; the import cost is paid once on the first rate-sweep call.
-
-    Args:
-        adaptation (str): adaptation stem (`baseline` / `s1` / `s2` / `aggregate`).
-        entry_service (str): artifact key to read from.
-
-    Returns:
-        float: seeded lambda_z at `entry_service`, or 0.0 when the key is absent.
-
-    Raises:
-        KeyError: when `entry_service` is not present in the profile.
-    """
-    from src.io import load_profile
-    _cfg = load_profile(adaptation=adaptation)
-    for _a in _cfg.artifacts:
-        if _a.key == entry_service:
-            return float(_a.lambda_z)
-    raise KeyError(
-        f"entry artifact {entry_service!r} not in adaptation {adaptation!r}")
-
-
-def _run_single_rate_probe(rate: float,
-                           adaptation: str,
-                           min_samples: int,
-                           max_probe_s: float,
-                           cascade_mode: str,
-                           cascade_threshold: float,
-                           cascade_window: int) -> Dict[str, Any]:
-    """*_run_single_rate_probe()* one trial at `rate` against `adaptation`.
-
-    Lazy-imports `src.methods.experiment.run` + `src.io.load_method_cfg` so the rate-sweep path only pays the experiment-module import cost when the operator opts in; the module-top import surface stays light.
-
-    `skip_calibration=True` is forced on the inner call so the sweep does not recurse through its own calibration gate; `verbose=False` suppresses the gate's warning so per-trial output stays readable.
+    `samples` (int) is the count of completed `POST /invoke` requests in the probe window. Achieved rate = samples / window_s. Loss is the gap fraction relative to target.
 
     Args:
-        rate (float): single target rate (req/s).
-        adaptation (str): adaptation stem.
-        min_samples (int): `min_samples_per_kind` per probe (>= 32 for CLT).
-        max_probe_s (float): probe wall-clock cap in seconds.
-        cascade_mode (str): cascade detector mode (e.g. `"rolling"`).
-        cascade_threshold (float): cascade threshold (fraction).
-        cascade_window (int): cascade detector window size.
+        rate (float): target rate driven in this trial (req/s).
+        stats (Dict[str, float]): one entry from `_drive_lambda_step` (handler_scaling-shaped).
+        window_s (float): wall-clock window the probe ran for (seconds).
 
     Returns:
-        dict: result envelope from `experiment.run`.
+        Dict[str, float]: `target / effective / gap / loss_pct`.
     """
-    from src.io import load_method_cfg
-    from src.methods.experiment import run as _experiment_run
-    _mcfg = load_method_cfg("experiment")
-    _cascade = {
-        "mode": str(cascade_mode),
-        "threshold": float(cascade_threshold),
-        "window": int(cascade_window),
-    }
-    _mcfg["ramp"] = {
-        "min_samples_per_kind": int(min_samples),
-        "max_probe_window_s": float(max_probe_s),
-        "rates": [float(rate)],
-        "cascade": _cascade,
-    }
-    return _experiment_run(
-        adp=adaptation,
-        wrt=False,
-        method_cfg=_mcfg,
-        skip_calibration=True,
-        verbose=False,
-    )
-
-
-def _summarise_rate_trial(rate: float,
-                          result: Dict[str, Any],
-                          entry_service: str) -> Dict[str, float]:
-    """*_summarise_rate_trial()* extract headline rate metrics from one experiment run envelope.
-
-    Args:
-        rate (float): target rate driven in this trial.
-        result (dict): `experiment.run` envelope (contains `client_effective_rate` + `nodes`).
-        entry_service (str): artifact key whose operational `lambda` we want (typically `TAS_{1}`).
-
-    Returns:
-        dict: target / effective / entry_lambda / gap / loss_pct.
-    """
-    _eff = float(result.get("client_effective_rate", 0.0))
-    _nds = result["nodes"]
-    _row = _nds.loc[_nds["key"] == entry_service]
-    if _row.empty:
-        _entry_lam = 0.0
+    _samples = float(stats.get("samples", 0.0))
+    if window_s > 0:
+        _eff = _samples / window_s
     else:
-        _entry_lam = float(_row.iloc[0]["lambda"])
+        _eff = 0.0
     _target = float(rate)
     _gap = _target - _eff
     if rate > 0:
         _loss = _gap / rate * 100.0
     else:
         _loss = 0.0
-    _summary = {
+    return {
         "target": _target,
         "effective": _eff,
-        "entry_lambda": _entry_lam,
         "gap": _gap,
         "loss_pct": _loss,
     }
-    return _summary
 
 
 def _aggregate_rate_trials(trials: List[Dict[str, float]]
@@ -783,47 +696,40 @@ def _aggregate_rate_trials(trials: List[Dict[str, float]]
     """*_aggregate_rate_trials()* summarise N per-trial records at one target rate.
 
     Args:
-        trials (List[Dict]): per-trial summaries from `_summarise_rate_trial`.
+        trials (List[Dict]): per-trial summaries from `_summarise_rate_trial_from_stats`.
 
     Returns:
-        dict: target / mean / lo / hi / mean_loss_pct / mean_entry_lambda / n.
+        Dict[str, float]: `target / mean / lo / hi / mean_loss_pct / n`. The legacy `mean_entry_lambda` field was dropped when the rate-sweep moved off the TAS profile to the standalone ping/echo vernier (no entry artifact to read).
     """
     _effs: List[float] = []
-    _lams: List[float] = []
     for _t in trials:
         _effs.append(float(_t["effective"]))
-        _lams.append(float(_t["entry_lambda"]))
     _n = len(_effs)
     if _n == 0:
-        _empty = {
+        return {
             "target": 0.0,
             "mean": 0.0,
             "lo": 0.0,
             "hi": 0.0,
             "mean_loss_pct": 0.0,
-            "mean_entry_lambda": 0.0,
             "n": 0,
         }
-        return _empty
     _mean = sum(_effs) / _n
     _lo = min(_effs)
     _hi = max(_effs)
-    _mean_lam = sum(_lams) / _n
     _target = float(trials[0]["target"])
     if _target > 0:
         _mean_loss = (_target - _mean) / _target * 100.0
     else:
         _mean_loss = 0.0
-    _agg = {
+    return {
         "target": _target,
         "mean": _mean,
         "lo": _lo,
         "hi": _hi,
         "mean_loss_pct": _mean_loss,
-        "mean_entry_lambda": _mean_lam,
         "n": _n,
     }
-    return _agg
 
 
 def _print_rate_header(rate: float) -> None:
@@ -832,19 +738,6 @@ def _print_rate_header(rate: float) -> None:
     _batch = _batch_size_for(rate)
     print(f"--- target rate {rate:>6.1f} req/s  "
           f"(interarrival {_interarrival_ms:.2f} ms, batch={_batch}) ---",
-          flush=True)
-
-
-def _print_rate_trial_row(trial_idx: int,
-                          summary: Dict[str, float]) -> None:
-    """*_print_rate_trial_row()* one-line per-trial output; kept available for opt-in debugging even though `run_rate_sweep` no longer calls it by default."""
-    _eff = summary["effective"]
-    _lam = summary["entry_lambda"]
-    _gap = summary["gap"]
-    _loss = summary["loss_pct"]
-    print(f"  trial{trial_idx}: effective={_eff:>7.2f}  "
-          f"entry.lambda={_lam:>7.2f}  "
-          f"gap={_gap:>+7.2f}  loss={_loss:>+6.2f}%",
           flush=True)
 
 
@@ -858,6 +751,58 @@ def _print_rate_aggregate(agg: Dict[str, float]) -> None:
           f"range=[{_lo:>6.2f}, {_hi:>6.2f}]  "
           f"mean_loss={_loss:>+6.2f}%",
           flush=True)
+
+
+async def _run_rate_sweep_async(rates: List[float],
+                                trials_per_rate: int,
+                                window_s: float,
+                                inter_trial_delay_s: float,
+                                port: int,
+                                payload_size_bytes: int,
+                                ready_timeout_s: float,
+                                verbose: bool) -> Dict[float, List[Dict[str, float]]]:
+    """*_run_rate_sweep_async()* spin up one vernier and drive it across rates x trials.
+
+    Single uvicorn instance reused across the whole sweep (much cheaper than the legacy TAS-coupled path that re-spawned 13 services per trial). Each trial calls `_drive_lambda_step(rate, window_s)` and converts the returned `samples` count into an achieved rate.
+
+    Args:
+        rates (List[float]): target rates (req/s) to drive.
+        trials_per_rate (int): trials per rate.
+        window_s (float): wall-clock window per trial.
+        inter_trial_delay_s (float): quiet seconds between rates (skipped before the first rate).
+        port (int): TCP port for the vernier.
+        payload_size_bytes (int): per-request body size.
+        ready_timeout_s (float): seconds to wait for uvicorn readiness.
+        verbose (bool): when True, print per-rate banners + aggregate lines.
+
+    Returns:
+        Dict[float, List[Dict[str, float]]]: `{rate: [trial_summary, ...]}` keyed by target rate.
+    """
+    _trials_by_rate: Dict[float, List[Dict[str, float]]] = {}
+    _app = _build_ping_app()
+    _server = _UvicornThread(_app, port)
+    _server.start()
+    try:
+        _server.wait_ready(timeout_s=ready_timeout_s)
+        _body = _build_probe_body(payload_size_bytes)
+        for _r_idx, _rate in enumerate(rates):
+            if _r_idx > 0 and inter_trial_delay_s > 0.0:
+                await asyncio.sleep(inter_trial_delay_s)
+            if verbose:
+                print()
+                _print_rate_header(_rate)
+            _trials: List[Dict[str, float]] = []
+            for _trial in range(int(trials_per_rate)):
+                _stats = await _drive_lambda_step(port=port,
+                                                  target_rate=float(_rate),
+                                                  window_s=float(window_s),
+                                                  body=_body)
+                _summary = _summarise_rate_trial_from_stats(_rate, _stats, window_s)
+                _trials.append(_summary)
+            _trials_by_rate[_rate] = _trials
+    finally:
+        _server.shutdown()
+    return _trials_by_rate
 
 
 def _find_highest_sustainable_rate(aggregates: Dict[float, Dict[str, float]],
@@ -885,89 +830,57 @@ def _find_highest_sustainable_rate(aggregates: Dict[float, Dict[str, float]],
 
 def run_rate_sweep(*,
                    rates: Tuple[float, ...] = _DEFAULT_RATE_SWEEP_RATES,
-                   adaptation: str = _DEFAULT_RATE_SWEEP_ADAPTATION,
                    trials_per_rate: int = _DEFAULT_RATE_SWEEP_TRIALS,
-                   min_samples: int = _DEFAULT_RATE_SWEEP_MIN_SAMPLES,
                    max_probe_s: float = _DEFAULT_RATE_SWEEP_PROBE_S,
-                   cascade_mode: str = _DEFAULT_RATE_SWEEP_CASCADE_MODE,
-                   cascade_threshold: float = _DEFAULT_RATE_SWEEP_CASCADE_THRESHOLD,
-                   cascade_window: int = _DEFAULT_RATE_SWEEP_CASCADE_WINDOW,
                    target_loss_pct: float = _DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT,
-                   entry_service: str = _DEFAULT_RATE_SWEEP_ENTRY_SERVICE,
-                   with_lambda_z: bool = False,
                    calibrate: bool = False,
                    inter_trial_delay_s: float = _DEFAULT_INTER_TRIAL_DELAY_S,
+                   port: int = _DEFAULT_PORT,
+                   payload_size_bytes: int = _DEFAULT_PAYLOAD_SIZE_BYTES,
+                   ready_timeout_s: float = _DEFAULT_READY_TIMEOUT_S,
                    verbose: bool = True) -> Dict[str, Any]:
-    """*run_rate_sweep()* drive the experiment mesh at N target rates, `trials_per_rate` trials each.
+    """*run_rate_sweep()* drive the standalone vernier ping/echo service at N target rates, `trials_per_rate` trials each.
 
-    Each trial is a full `experiment.run(adp=...)` call with an inline ramp config built from the arguments; the experiment's calibration gate is bypassed (`skip_calibration=True`) so the sweep never recurses through its own calibration loader. Results land under the calibration envelope's `rate_sweep` key so the run gate has both host-floor AND rate-saturation characterisation in one file.
+    The sweep characterises pure host-transport saturation: how fast the host's loopback + uvicorn + FastAPI stack sustains traffic, with zero application logic in the way. One vernier instance is reused across the whole sweep (decoupled from the TAS profile entirely). Replaces the legacy TAS-coupled path that re-spawned 13 services per trial; full-mesh saturation testing now belongs in the experiment notebook itself.
 
-    When `calibrate=True`, additionally reports the highest rate whose mean loss is at or below `target_loss_pct` across all trials; use this to pick a notebook ramp rate the prototype can sustain.
-
-    When `with_lambda_z=True`, the sweep appends the seeded `lambda_z` at `entry_service` (e.g. `TAS_{1}`) to the rate list so the analytic operating point is included.
+    When `calibrate=True`, additionally reports the highest rate whose mean loss is at or below `target_loss_pct` across all trials.
 
     Args:
         rates (tuple[float, ...]): target rates (req/s) to drive.
-        adaptation (str): adaptation stem.
         trials_per_rate (int): trials per rate for aggregation.
-        min_samples (int): per-probe `min_samples_per_kind`.
-        max_probe_s (float): probe wall-clock cap (seconds).
-        cascade_mode (str): cascade detector mode.
-        cascade_threshold (float): cascade threshold (fraction).
-        cascade_window (int): cascade detector window.
+        max_probe_s (float): wall-clock window per trial (seconds). Achieved rate = samples / max_probe_s.
         target_loss_pct (float): pass bar for the `calibrate` result.
-        entry_service (str): artifact key for seeded `lambda_z` + per-trial `entry_lambda`.
-        with_lambda_z (bool): when True, inject the seeded `lambda_z` at `entry_service` into the rate list.
         calibrate (bool): when True, include the highest-sustainable-rate finding in the result.
-        verbose (bool): when True, print per-trial + per-rate output; False stays silent.
+        inter_trial_delay_s (float): quiet seconds between rates (skipped before the first rate).
+        port (int): TCP port for the vernier.
+        payload_size_bytes (int): per-request body size for the probe.
+        ready_timeout_s (float): seconds to wait for uvicorn readiness.
+        verbose (bool): when True, print per-rate banners + aggregate lines; False stays silent.
 
     Returns:
-        dict: `{adaptation, rates, trials_per_rate, aggregates, per_trial, target_loss_pct, calibrated_rate (if calibrate), lambda_z_at_entry (if with_lambda_z), started_at, elapsed_s}`.
+        dict: `{rates, trials_per_rate, max_probe_window_s, target_loss_pct, aggregates, per_trial, calibrated_rate (if calibrate), elapsed_s}`. The legacy `adaptation`, `entry_service`, `cascade`, `min_samples_per_kind`, `mean_entry_lambda`, `lambda_z_at_entry` fields were removed when the sweep moved off the TAS profile.
     """
     _t0 = time.perf_counter()
-    _rates_list: List[float] = []
-    for _r in rates:
-        _rates_list.append(float(_r))
+    _rates_list: List[float] = sorted(set(float(_r) for _r in rates))
 
-    if with_lambda_z:
-        _lz = _read_lambda_z_at(adaptation, entry_service)
-        if _lz > 0.0 and _lz not in _rates_list:
-            _rates_list.append(_lz)
-        _rates_list = sorted(set(_rates_list))
-    else:
-        _lz = 0.0
+    async def _orchestrator() -> Dict[float, List[Dict[str, float]]]:
+        return await _run_rate_sweep_async(
+            rates=_rates_list,
+            trials_per_rate=int(trials_per_rate),
+            window_s=float(max_probe_s),
+            inter_trial_delay_s=float(inter_trial_delay_s),
+            port=int(port),
+            payload_size_bytes=int(payload_size_bytes),
+            ready_timeout_s=float(ready_timeout_s),
+            verbose=bool(verbose),
+        )
+
+    _trials_by_rate = _run_sweep_in_dedicated_loop(_orchestrator)
 
     _aggregates: Dict[float, Dict[str, float]] = {}
     _per_trial: Dict[float, List[Dict[str, float]]] = {}
-
-    _delay = float(inter_trial_delay_s)
-
-    for _r_idx, _rate in enumerate(_rates_list):
-        # quiet window between rates (skip before the first rate to avoid an idle gap before any work runs)
-        if _r_idx > 0 and _delay > 0.0:
-            time.sleep(_delay)
-        if verbose:
-            print()
-            _print_rate_header(_rate)
-        _trials: List[Dict[str, float]] = []
-        for _i in range(int(trials_per_rate)):
-            # quiet window between trials (skip before trial 0 of each rate)
-            # if _i > 0 and _delay > 0.0:
-            #     time.sleep(_delay)
-            _res = _run_single_rate_probe(
-                rate=_rate,
-                adaptation=adaptation,
-                min_samples=min_samples,
-                max_probe_s=max_probe_s,
-                cascade_mode=cascade_mode,
-                cascade_threshold=cascade_threshold,
-                cascade_window=cascade_window,
-            )
-            _summary = _summarise_rate_trial(_rate, _res, entry_service)
-            _trials.append(_summary)
-            # drop envelope before the next trial allocates
-            del _res
-            gc.collect()
+    for _rate in _rates_list:
+        _trials = _trials_by_rate.get(_rate, [])
         _agg = _aggregate_rate_trials(_trials)
         _aggregates[_rate] = _agg
         _per_trial[_rate] = _trials
@@ -984,27 +897,15 @@ def run_rate_sweep(*,
     for _rate_key, _trials_val in _per_trial.items():
         _per_trial_json[str(_rate_key)] = _trials_val
 
-    _cascade_block = {
-        "mode": str(cascade_mode),
-        "threshold": float(cascade_threshold),
-        "window": int(cascade_window),
-    }
-
     _ans: Dict[str, Any] = {
-        "adaptation": str(adaptation),
         "rates": _rates_list,
         "trials_per_rate": int(trials_per_rate),
-        "min_samples_per_kind": int(min_samples),
         "max_probe_window_s": float(max_probe_s),
-        "cascade": _cascade_block,
-        "entry_service": str(entry_service),
         "target_loss_pct": float(target_loss_pct),
         "aggregates": _aggregates_json,
         "per_trial": _per_trial_json,
         "elapsed_s": _elapsed,
     }
-    if with_lambda_z:
-        _ans["lambda_z_at_entry"] = float(_lz)
     if calibrate:
         _ans["calibrated_rate"] = _find_highest_sustainable_rate(
             _aggregates, float(target_loss_pct))
@@ -1190,16 +1091,9 @@ def run(*,
         skip_loopback: bool = _DEFAULT_SKIP_LOOPBACK,
         skip_rate_sweep: bool = _DEFAULT_SKIP_RATE_SWEEP,
         rate_sweep_rates: Tuple[float, ...] = _DEFAULT_RATE_SWEEP_RATES,
-        rate_sweep_adaptation: str = _DEFAULT_RATE_SWEEP_ADAPTATION,
         rate_sweep_trials: int = _DEFAULT_RATE_SWEEP_TRIALS,
-        rate_sweep_min_samples: int = _DEFAULT_RATE_SWEEP_MIN_SAMPLES,
         rate_sweep_max_probe_s: float = _DEFAULT_RATE_SWEEP_PROBE_S,
-        rate_sweep_cascade_mode: str = _DEFAULT_RATE_SWEEP_CASCADE_MODE,
-        rate_sweep_cascade_threshold: float = _DEFAULT_RATE_SWEEP_CASCADE_THRESHOLD,
-        rate_sweep_cascade_window: int = _DEFAULT_RATE_SWEEP_CASCADE_WINDOW,
         rate_sweep_target_loss_pct: float = _DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT,
-        rate_sweep_entry_service: str = _DEFAULT_RATE_SWEEP_ENTRY_SERVICE,
-        rate_sweep_with_lambda_z: bool = False,
         rate_sweep_calibrate: bool = True,
         payload_size_bytes: int = _DEFAULT_PAYLOAD_SIZE_BYTES,
         inter_level_delay_s: float = _DEFAULT_INTER_LEVEL_DELAY_S,
@@ -1225,16 +1119,9 @@ def run(*,
         skip_loopback (bool): if True, skip both the loopback and handler-scaling probes.
         skip_rate_sweep (bool): if True (default from config), skip the rate-saturation probe; set to False to opt in.
         rate_sweep_rates (tuple[float, ...]): target rates (req/s) for the rate-sweep probe.
-        rate_sweep_adaptation (str): adaptation stem the rate sweep drives against.
         rate_sweep_trials (int): trials per rate for rate-sweep aggregation.
-        rate_sweep_min_samples (int): `min_samples_per_kind` per rate-sweep probe.
-        rate_sweep_max_probe_s (float): rate-sweep probe wall-clock cap (seconds).
-        rate_sweep_cascade_mode (str): rate-sweep cascade detector mode.
-        rate_sweep_cascade_threshold (float): rate-sweep cascade threshold (fraction).
-        rate_sweep_cascade_window (int): rate-sweep cascade detector window.
+        rate_sweep_max_probe_s (float): rate-sweep wall-clock window per trial (seconds).
         rate_sweep_target_loss_pct (float): pass bar for the rate-sweep `calibrated_rate`.
-        rate_sweep_entry_service (str): rate-sweep entry artifact for seeded `lambda_z` + per-trial `entry_lambda`.
-        rate_sweep_with_lambda_z (bool): when True, inject the seeded `lambda_z` at `rate_sweep_entry_service` into the rate list.
         rate_sweep_calibrate (bool): when True, compute the highest-sustainable rate at or below `rate_sweep_target_loss_pct`.
         write (bool): persist the envelope to JSON when True.
         output (Optional[str]): override path when `write=True`; defaults to the per-host path.
@@ -1330,18 +1217,14 @@ def run(*,
             print("  [5/5] rate saturation sweep ...", flush=True)
         _envelope["rate_sweep"] = run_rate_sweep(
             rates=rate_sweep_rates,
-            adaptation=rate_sweep_adaptation,
             trials_per_rate=rate_sweep_trials,
-            min_samples=rate_sweep_min_samples,
             max_probe_s=rate_sweep_max_probe_s,
-            cascade_mode=rate_sweep_cascade_mode,
-            cascade_threshold=rate_sweep_cascade_threshold,
-            cascade_window=rate_sweep_cascade_window,
             target_loss_pct=rate_sweep_target_loss_pct,
-            entry_service=rate_sweep_entry_service,
-            with_lambda_z=rate_sweep_with_lambda_z,
             calibrate=rate_sweep_calibrate,
             inter_trial_delay_s=inter_trial_delay_s,
+            port=port,
+            payload_size_bytes=payload_size_bytes,
+            ready_timeout_s=ready_timeout_s,
             verbose=verbose,
         )
 
@@ -1440,11 +1323,6 @@ def _build_argparser() -> argparse.ArgumentParser:
     _p.add_argument("--rate-sweep-rates", type=str, default=None,
                     help=("comma-separated target rates in req/s for the "
                           f"rate-saturation probe (default: {_default_rates_csv})"))
-    _p.add_argument("--rate-sweep-adp", type=str,
-                    default=_DEFAULT_RATE_SWEEP_ADAPTATION,
-                    choices=("baseline", "s1", "s2", "aggregate"),
-                    help=("adaptation driven by the rate-saturation probe "
-                          f"(default: {_DEFAULT_RATE_SWEEP_ADAPTATION})"))
     _p.add_argument("--rate-sweep-trials", type=int,
                     default=_DEFAULT_RATE_SWEEP_TRIALS,
                     help=("trials per rate for rate-sweep aggregation "
@@ -1454,9 +1332,6 @@ def _build_argparser() -> argparse.ArgumentParser:
                     help=("pass bar (percent) for the calibrated "
                           "highest-sustainable rate "
                           f"(default: {_DEFAULT_RATE_SWEEP_TARGET_LOSS_PCT})"))
-    _p.add_argument("--rate-sweep-with-lambda-z", action="store_true",
-                    help=("inject the seeded lambda_z at the entry service "
-                          "into the rate-sweep rate list"))
 
     _p.add_argument("--payload-size-bytes", type=int,
                     default=_DEFAULT_PAYLOAD_SIZE_BYTES,
@@ -2186,7 +2061,7 @@ def run_calib_sweep(envelope: Dict[str, Any],
                             print("      band collapsed (mu*c below lambda_min) -- skipping",
                                   flush=True)
                         continue
-                    # synthesise a per-combo envelope; loopback.median_us encodes mu_combo
+                    # synthesise a per-combo envelope; loopback.median_us encodes mu_combo, args.uvicorn_backlog carries the COMBO's K (NOT the host default _backlog) so the per-combo card has K=_K_val and the yoly chart can paint a distinct trajectory per K-band
                     if _mu_combo > 0:
                         _r_us = 1e6 / _mu_combo
                     else:
@@ -2194,11 +2069,12 @@ def run_calib_sweep(envelope: Dict[str, Any],
                     _synth_env = {
                         "handler_scaling": _hs,
                         "loopback": {"median_us": _r_us},
-                        "args": {"uvicorn_backlog": int(_backlog)},
+                        "args": {"uvicorn_backlog": int(_K_val)},
                     }
                     _card = derive_calib_coefs(_synth_env,
                                                payload_size_bytes=_payload_bytes,
-                                               tag=_tag)
+                                               tag=_tag,
+                                               K_values=[int(_K_val)])
                     if not _card:
                         if verbose:
                             print("      empty card -- skipping",
@@ -2270,7 +2146,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     if _args.rate_sweep:
         print(f"  rate_sweep=ON  rates={list(_rate_sweep_rates)}  "
               f"trials={_args.rate_sweep_trials}  "
-              f"adp={_args.rate_sweep_adp!r}  "
               f"target_loss={_args.rate_sweep_target_loss}%")
     else:
         print("  rate_sweep=OFF (pass --rate-sweep to opt in)")
@@ -2290,10 +2165,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         skip_loopback=_args.skip_loopback,
         skip_rate_sweep=(not _args.rate_sweep),
         rate_sweep_rates=_rate_sweep_rates,
-        rate_sweep_adaptation=_args.rate_sweep_adp,
         rate_sweep_trials=_args.rate_sweep_trials,
         rate_sweep_target_loss_pct=_args.rate_sweep_target_loss,
-        rate_sweep_with_lambda_z=_args.rate_sweep_with_lambda_z,
         payload_size_bytes=_args.payload_size_bytes,
         write=True,
         output=_args.output,

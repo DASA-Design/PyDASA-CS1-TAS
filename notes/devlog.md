@@ -42,11 +42,12 @@ User went through several flip-flops on whether titles should be `Plane: θ vs �
 
 ### Histogram symbology
 
-`plot_yoly_arts_hist` reference line and labels:
+`plot_yoly_arts_hist` reference line and labels (final state after several iterations):
 
-- Reference at `np.median(_data)` (more robust than mean to K-block tail clustering).
-- Labelled `$\widetilde{X}$` (X-tilde = sample median).
-- Subplot title format: `rf"$\widetilde{{X}}={median:.3e}\,\,\,s^{{2}}={var:.3e}$"` — sci notation, 3 mantissa decimals; `s²` is sample variance via `np.var(_data)` (NOT population std).
+- **Reference line + legend** at `np.median(_data)`, labelled `$\widetilde{X}$` (X-tilde = sample median, more robust than mean to K-block tail clustering).
+- **Subplot title is two-line** (`\n`-separated): `$\overline{X}=...$` (sample mean via `np.mean`) on top, `$s^{2}=...$` (sample variance via `np.var`, NOT std-dev) below. `pad=8`, inner subgridspec `hspace=0.85` so the two-line title clears the histogram body.
+- **Number rendering** via new local helper `_fmt_sci_mathtext(value, decimals=2)` — produces `r"mantissa.2f \times 10^{exp}"` so the exponent is a proper superscript (not the raw `e-02` alphanumeric suffix `:.Ne` would emit). 2 mantissa decimals (was 3 in an earlier iteration). Handles `value == 0`, NaN, inf.
+- **Why split metrics across reference vs title**: median anchors the visible cluster (the line meeting the histogram bars); mean + variance live in the title because they describe distribution shape across the (n_con_usr × K × c × mu_factor) cloud and are easier to compare across cells than reading off the histogram axis.
 
 ### Uniform sci-format
 
