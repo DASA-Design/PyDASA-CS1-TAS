@@ -68,6 +68,29 @@ from src.view.common import (
 # ---------------------------------------------------------------------------
 
 
+def _fmt_sci_mathtext(value: float, decimals: int = 2) -> str:
+    """*_fmt_sci_mathtext()* format `value` as `mantissa \\times 10^{exp}` mathtext fragment.
+
+    Renders inside an outer `$...$` so the exponent goes through matplotlib's mathtext parser as a proper superscript instead of the raw `e-02` alphanumeric suffix `:.Ne` would produce.
+
+    Args:
+        value (float): scalar to format. NaN/inf return the literal `"\\mathrm{NaN}"` / `"\\infty"` string.
+        decimals (int): mantissa decimals. Defaults to 2.
+
+    Returns:
+        str: e.g. `r"1.23 \\times 10^{-2}"` for `value=0.0123`. Wrap in `$...$` at the call site.
+    """
+    if not np.isfinite(value):
+        if np.isnan(value):
+            return r"\mathrm{NaN}"
+        return r"\infty"
+    if value == 0.0:
+        return "0"
+    _exp = int(np.floor(np.log10(abs(value))))
+    _mantissa = value / (10.0 ** _exp)
+    return rf"{_mantissa:.{decimals}f} \times 10^{{{_exp}}}"
+
+
 def _resolve_yoly_inputs(labels: Optional[Dict[str, str]],
                          paths: Optional[Dict[str, str]],
                          scenarios: Optional[Dict[str, str]]
@@ -488,8 +511,8 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
     _hist_symbols = {
         "theta": r"$\mathbf{\theta}$",
         "sigma": r"$\mathbf{\sigma}$",
-        "eta":   r"$\mathbf{\eta}$",
-        "phi":   r"$\mathbf{\phi}$",
+        "eta": r"$\mathbf{\eta}$",
+        "phi": r"$\mathbf{\phi}$",
     }
     _lbl_map = {**_hist_symbols, **(labels or {})}
     _name_map = _resolve_name_map(names)
@@ -535,8 +558,9 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
 
         _col_lt = _generate_color_map(list(range(_n_coeffs)))
         _n_inner_cols = (_n_coeffs + 1) // 2
+        # extra hspace on the inner grid so the two-line subplot title (mean + sigma) clears the histogram body above it
         _gs_node = _gs_main[_nd_row, _nd_col].subgridspec(2, _n_inner_cols,
-                                                          hspace=0.65,
+                                                          hspace=0.85,
                                                           wspace=0.40)
 
         _anchor_cell_header(_fig,
@@ -562,15 +586,15 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                      alpha=0.7,
                      edgecolor=_TEXT_BLACK)
 
-            # sample median (more robust than mean to K-block tail clustering) and sample variance
+            # vertical reference at the sample median (X-tilde, more robust than mean to K-block tail clustering); the subplot title carries the sample mean (X-bar) and sample variance (s^2) for distribution shape
             _median = float(np.median(_data))
-            # variance (s^2), not the population std (s or \sigma).
+            _mean = float(np.mean(_data))
             _var = float(np.var(_data))
             _ax.axvline(_median,
                         color=_color,
                         linestyle="-",
                         linewidth=2,
-                        label=rf"$\widetilde{{X}}={_median:.3e}$")
+                        label=rf"$\widetilde{{X}}={_fmt_sci_mathtext(_median)}$")
 
             _ax.set_xlabel(_lbl_map.get(_short, _short),
                            fontsize=11,
@@ -580,11 +604,14 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                            fontsize=11,
                            fontweight="bold",
                            color=_TEXT_BLACK)
-            _ax.set_title(rf"$\widetilde{{X}}={_median:.3e}\,\,\,s^{{2}}={_var:.3e}$",
-                          fontsize=10,
-                          fontweight="bold",
-                          color=_TEXT_BLACK,
-                          pad=2)
+            # two-line title: mean on top, variance below; pad bumped to clear the body
+            _ax.set_title(
+                rf"$\overline{{X}}={_fmt_sci_mathtext(_mean)}$" "\n"
+                rf"$s^{{2}}={_fmt_sci_mathtext(_var)}$",
+                fontsize=10,
+                fontweight="bold",
+                color=_TEXT_BLACK,
+                pad=8)
 
             _ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0))
             _ax.tick_params(**_TICK_STYLE)

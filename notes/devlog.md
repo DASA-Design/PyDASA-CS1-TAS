@@ -4,6 +4,92 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-27 (evening) — Yoly figure polish iterations
+
+Follow-up session refining the yoly suite (`plot_yoly_chart`, `plot_yoly_space`, `plot_yoly_arts_hist`, `plot_yoly_arts_charts`, `plot_yoly_arts_behaviour`) plus the calibration dim card. Driven by user feedback on rendered images.
+
+### Title separator
+
+Changed from `\n` to `, ` across the five thin notebooks (00-04) so titles stay on one line: `f"{Method}: {Subject}, {Scenario}"`. 32 title strings rewritten across notebooks plus 35 prose references in `notes/titles_std.md`, `CLAUDE.md`, the memory entry, and the `notebook-editing` skill.
+
+### `\boldsymbol` → `\mathbf` (matplotlib mathtext rule)
+
+Discovered the hard way that matplotlib's built-in mathtext does NOT recognise `\boldsymbol`; it crashes `savefig` with `ParseFatalException: Unknown symbol: \boldsymbol`. The smoke-tests passed because in-memory figure creation skips the tick-bbox path that triggers the parser; the failure only surfaced when the user ran the notebook end-to-end. Reverted 111 occurrences of `\boldsymbol` → `\mathbf` across `src/view/common.py` + 4 notebooks. Greek lowercase under `\mathbf` falls back to upright non-bold (matplotlib limitation requiring `usetex=True` to overcome); accepted the visual cost. Documented in `feedback_matplotlib_mathtext_bold.md` memory entry. New rule: ALWAYS smoke-test plotter changes with `file_path=` to disk, never just in-memory.
+
+### Yoly K-label placement + multi-K coverage
+
+Two compounded bugs:
+
+1. `_split_on_K_decrease` was the helper checking for K-block boundaries to NaN-break the trajectory line. But `sweep_arch`'s natural Cartesian iteration order keeps K **monotonically non-decreasing** within each `(c, mu)` group (lambda is the inner loop, K outer factor), so the decrease-only check found zero break-points. Renamed to `_split_on_K_change` and switched to `np.where(diff != 0)` — any K change. Each K-constant sub-sweep now renders as its own dashed segment.
+
+2. K labels only annotated `(K.min(), K.max())` — only 2 of 4 K bands got labels (e.g., K=8 and K=32 visible, K=10 and K=16 invisible). Switched all four painters to `np.unique(K)` so every distinct K gets a label. Label position changed from `argmax(K == K_val)` (first occurrence = origin cluster) to `np.where(K == K_val)[0][-1]` (last occurrence = high-θ trajectory tip).
+
+### Calibration dim card multi-K
+
+`derive_calib_coefs(envelope, K_values=[256, 512, 1024])` now tiles the per-`n_con_usr` observables once per K. Latency `R(n)` is K-independent (the host probe doesn't manipulate the buffer), so tiling is exact: only `theta = L/K`, `sigma = λW/K`, `phi = M_act/M_buf` shift across K. Notebook cell `nb-calib-dim-card` reads `data/config/method/calibration.json::sweep_grid.K` and threads it through. The yoly chart now paints 3 K-trajectories instead of a single point at `uvicorn_backlog` (16384). New `meta.K_values` field records the list; legacy `meta.uvicorn_backlog` retained.
+
+### Architecture μ as `\overline{\mu}` + half-up rounding
+
+Legend label corrections after the user pointed out `int(1276.92) = 1276` truncates instead of rounding. Switched `int(value) → round(value)` in `_format_path_legend`, `_paint_single_2d_yoly`, `_paint_single_3d_yoly`. Now `1276.92 → 1277`, `957.69 → 958`, etc. Also wrapped μ in `\overline{\mu}` to indicate the architecture-level mean (since `aggregate_sweep_to_arch` collapses 13 per-node μ values via arithmetic mean).
+
+### Yoly title + axis split
+
+User went through several flip-flops on whether titles should be `Plane: θ vs σ` or `Occupancy vs. Stall`, and whether axes should be `Occupancy (θ)` or just `θ`. Final agreed split:
+
+- **Panel titles** (`_YOLY_PANELS`) — bare symbols: `r"$\mathbf{\theta}$ vs. $\mathbf{\sigma}$"`, etc.
+- **Axis labels** (`_DEFAULT_LABELS`) — operational name with symbol in parens: `r"Occupancy ($\mathbf{\theta}$)"`, etc.
+- **`plot_yoly_arts_hist` x-axis exception** — symbol-only override via local `_hist_symbols` map; the dense per-comp grid otherwise becomes unreadable.
+
+### Histogram symbology
+
+`plot_yoly_arts_hist` reference line and labels:
+
+- Reference at `np.median(_data)` (more robust than mean to K-block tail clustering).
+- Labelled `$\widetilde{X}$` (X-tilde = sample median).
+- Subplot title format: `rf"$\widetilde{{X}}={median:.3e}\,\,\,s^{{2}}={var:.3e}$"` — sci notation, 3 mantissa decimals; `s²` is sample variance via `np.var(_data)` (NOT population std).
+
+### Uniform sci-format
+
+Dropped the legacy sig=4 special case for σ in `_apply_yoly_panel_axes` and `_apply_yoly_3d_axes`. Originally needed because under Little's law `σ_old = λW/L ≈ 1` and tiny variations collapsed at sig=2. After the σ formula correction (2026-04-25, `λW/L → λW/K`), σ values span a healthy range and read clearly at sig=2. Every yoly panel now uses uniform `_apply_sci_format(ax, axes_list=["x", "y"])` with default sig=2.
+
+### `plot_yoly_space` subtitle stacking
+
+Several attempts before landing the working solution. Final approach: when `subtitle` is set, `title_h=0.10`; pass `title=None` to `build_stacked_figure`; manually draw BOTH lines into the dedicated `title_ax` in axes coords (`y=0.72` title, `y=0.22` subtitle). Subtitle font bumped to 18 (was 14). Other approaches that failed:
+
+- `_ax.set_title(subtitle, ...)` lands at the top of the 3D body axis, clashes with suptitle.
+- `fig.text(0.5, 1 - title_h - 0.005, subtitle, ...)` — figure-coord arithmetic; render-order between suptitle (axes-coord, drawn first) and fig-coord text caused inversions in some configurations.
+
+Lesson: when the figure has a dedicated title-strip axis already, draw EVERYTHING into that axis with explicit axes-coord positions. Don't mix figure-coord and axes-coord text.
+
+### Layout tightening
+
+Tightened title strip + outer-hspace + body grid spacing across all five yoly plotters so titles don't bleed into the body and y-axis tick labels (with mathtext + scientific notation) don't overlap adjacent panels:
+
+- `plot_yoly_chart`: `title_h=0.045`, `outer_hspace=0.025`, body `wspace=0.32` (60% wider than initial 0.20), `hspace=0.22`.
+- `plot_yoly_arts_hist`: `title_h=0.045`, `outer_hspace=0.025`, outer `hspace=0.30`, inner `hspace=0.65`, `wspace=0.40`.
+- `plot_yoly_arts_charts`: `title_h=0.045`, outer `hspace=0.25`, `wspace=0.22`, inner `hspace=0.45`, `wspace=0.45`.
+- `plot_yoly_arts_behaviour`: `title_h=0.045`, outer `hspace=0.10`, `wspace=0.08`.
+
+### Files touched
+
+- `src/view/common.py` — `_DEFAULT_LABELS`, `_YOLY_PANELS`, `_format_path_legend`, `_paint_*_yoly` (rename + label rounding + every-K labelling + tip placement + `\overline{\mu}`), `_split_on_K_decrease → _split_on_K_change`.
+- `src/view/charter.py` — five plotter layouts tightened; `plot_yoly_space` subtitle stacking via dedicated title_ax; `plot_yoly_arts_hist` median + `s²` + sci-3-dec + symbol-only x-axis override; `_apply_yoly_panel_axes` + `_apply_yoly_3d_axes` uniform sig=2 sci format.
+- `src/methods/calibration.py` — `derive_calib_coefs` accepts `K_values: Optional[List[int]]`; tiles observables across K when provided; meta records `K_values` list.
+- `00-calibration.ipynb` — `nb-calib-dim-card` cell reads `sweep_grid.K` and passes to `derive_calib_coefs`.
+- `01-analytic.ipynb`, `02-stochastic.ipynb`, `03-dimensional.ipynb`, `04-yoly.ipynb` — title separator `\n → , `; bar/delta/heat/diff label LaTeX wraps; DataFrame display columns wrapped in mathtext.
+- `CLAUDE.md` — View (Plotting) Conventions section extended with all yoly polish rules.
+- `notes/titles_std.md` — final tables + status block updated.
+- `.claude/skills/develop/notebook-editing.md` — title template + DISPLAY map + matplotlib mathtext bold rule.
+- Memory: `feedback_matplotlib_mathtext_bold.md` (new), `project_titles_std_2026_04_27.md`, `project_yoly_k_change_split.md`, `project_yoly_polish_2026_04_27.md` (new).
+
+### Verification
+
+- All 5 thin notebooks `nbformat.validate()` pass.
+- 6 yoly figures rendered to disk and visually inspected per iteration: trajectory tips show 4 K labels, legend shows `c=k, μ̄=m` rounded half-up, panels share sci-2 format, histogram subplot titles read `X̃=...  s²=...`, calibration dim card paints 3 K-trajectories.
+- `pytest` baseline unchanged (only label / config / layout changes; no logic touched).
+
+---
+
 ## 2026-04-27 — Title standardisation, bold-math labels, yoly K-change fix
 
 Three refactor passes hit the five thin notebooks (`00-calibration`, `01-analytic`, `02-stochastic`, `03-dimensional`, `04-yoly`) plus `src/view/common.py` and `src/view/charter.py`.
