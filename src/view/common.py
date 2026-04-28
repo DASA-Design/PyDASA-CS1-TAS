@@ -168,7 +168,7 @@ _STAT_NAMES = {
     "std": r"$s^{2}$",
 }
 
-# Yoly default coefficient labels (mathtext-wrapped so subscripts render).
+# Yoly default coefficient labels: operational name with symbol in parentheses; consumed by every yoly plotter as axis labels.
 _DEFAULT_LABELS: Dict[str, str] = {
     "theta": r"Occupancy ($\mathbf{\theta}$)",
     "sigma": r"Stall ($\mathbf{\sigma}$)",
@@ -176,12 +176,12 @@ _DEFAULT_LABELS: Dict[str, str] = {
     "phi": r"Memory-Use ($\mathbf{\phi}$)",
 }
 
-# The 4 panels of a single-queue 2D yoly chart, ordered (panel_title, x_key, y_key).
+# The 4 panels of a single-queue 2D yoly chart, ordered (panel_title, x_key, y_key). Titles use the bare LaTeX symbols since the operational names already sit on the axis labels.
 _YOLY_PANELS = [
-    (r"Plane: $\mathbf{\theta}$ vs $\mathbf{\sigma}$", "theta", "sigma"),
-    (r"Plane: $\mathbf{\theta}$ vs $\mathbf{\eta}$", "theta", "eta"),
-    (r"Plane: $\mathbf{\sigma}$ vs $\mathbf{\eta}$", "sigma", "eta"),
-    (r"Plane: $\mathbf{\theta}$ vs $\mathbf{\phi}$", "theta", "phi"),
+    (r"$\mathbf{\theta}$ vs. $\mathbf{\sigma}$", "theta", "sigma"),
+    (r"$\mathbf{\theta}$ vs. $\mathbf{\eta}$", "theta", "eta"),
+    (r"$\mathbf{\sigma}$ vs. $\mathbf{\eta}$", "sigma", "eta"),
+    (r"$\mathbf{\theta}$ vs. $\mathbf{\phi}$", "theta", "phi"),
 ]
 
 # Per-node dimensionless coefficient columns + symbols + names (declaration order drives label lines and table columns).

@@ -180,23 +180,8 @@ def _apply_yoly_panel_axes(ax: Any,
     for _spine in ax.spines.values():
         _spine.set_edgecolor(_TEXT_BLACK)
 
-    if x_key != "sigma":
-        _x_axes = ["x"]
-    else:
-        _x_axes = []
-    if y_key != "sigma":
-        _y_axes = ["y"]
-    else:
-        _y_axes = []
-    if _x_axes or _y_axes:
-        _apply_sci_format(ax, axes_list=_x_axes + _y_axes)
-
-    _sigma_axes = []
-    for _name, _key in (("x", x_key), ("y", y_key)):
-        if _key == "sigma":
-            _sigma_axes.append(_name)
-    if _sigma_axes:
-        _apply_sci_format(ax, axes_list=_sigma_axes, sig=4)
+    # uniform 2-sig-fig sci format on every axis of every panel; the legacy sig=4 special-case for sigma was needed when sigma ~ theta on closed-form solves (Little's law identity), but after the sigma = lambda*W/K formula correction sigma differs enough to read clearly at sig=2
+    _apply_sci_format(ax, axes_list=["x", "y"])
     _apply_logscale(ax, logscale)
 
     ax.set_xlabel(lbl_map[x_key], **lbl_style)
@@ -233,9 +218,8 @@ def _apply_yoly_3d_axes(ax: Any,
     ax.view_init(elev=elev, azim=azim)
     _style_3d_panes(ax)
     ax.grid(True, **_GRID_PANEL_3D)
-    _apply_sci_format(ax, axes_list=["x", "z"])
-    # sigma ~ theta on closed-form solves; bump precision so small values stay distinct
-    _apply_sci_format(ax, axes_list=["y"], sig=4)
+    # uniform 2-sig-fig sci format across all three 3D axes; matches the 2D panel formatter
+    _apply_sci_format(ax, axes_list=["x", "y", "z"])
     for _axis_name in ("x", "y", "z"):
         ax.tick_params(axis=_axis_name, **tick_style)
 
@@ -325,7 +309,7 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
                                    title_h=0.045,
                                    body=BodySpec(shape=(2, 2),
                                                  panel_kind="2d",
-                                                 wspace=0.20,
+                                                 wspace=0.32,
                                                  hspace=0.22),
                                    footer_h=0.18,
                                    footer_kind="legend",
@@ -500,7 +484,14 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                             file_path="data/img/dimensional/hist",
                             fname="dist_baseline")
     """
-    _lbl_map = {**_DEFAULT_LABELS, **(labels or {})}
+    # histogram x-axis stays symbol-only (no parenthesised name) to keep the dense per-comp grid readable; the operational name lives in the legend label / subplot title instead
+    _hist_symbols = {
+        "theta": r"$\mathbf{\theta}$",
+        "sigma": r"$\mathbf{\sigma}$",
+        "eta":   r"$\mathbf{\eta}$",
+        "phi":   r"$\mathbf{\phi}$",
+    }
+    _lbl_map = {**_hist_symbols, **(labels or {})}
     _name_map = _resolve_name_map(names)
 
     _node_keys = list(coeff_data.keys())
@@ -571,13 +562,15 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                      alpha=0.7,
                      edgecolor=_TEXT_BLACK)
 
-            _mean = float(np.mean(_data))
-            _std = float(np.std(_data))
-            _ax.axvline(_mean,
+            # sample median (more robust than mean to K-block tail clustering) and sample variance
+            _median = float(np.median(_data))
+            # variance (s^2), not the population std (s or \sigma).
+            _var = float(np.var(_data))
+            _ax.axvline(_median,
                         color=_color,
                         linestyle="-",
                         linewidth=2,
-                        label=rf"$\hat{{X}}={_mean:.3e}$")
+                        label=rf"$\widetilde{{X}}={_median:.3e}$")
 
             _ax.set_xlabel(_lbl_map.get(_short, _short),
                            fontsize=11,
@@ -587,7 +580,7 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                            fontsize=11,
                            fontweight="bold",
                            color=_TEXT_BLACK)
-            _ax.set_title(rf"$\hat{{X}}={_mean:.3g}\,\,\,s={_std:.3g}$",
+            _ax.set_title(rf"$\widetilde{{X}}={_median:.3e}\,\,\,s^{{2}}={_var:.3e}$",
                           fontsize=10,
                           fontweight="bold",
                           color=_TEXT_BLACK,

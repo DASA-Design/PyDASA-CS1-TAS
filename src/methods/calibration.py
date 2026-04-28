@@ -1747,17 +1747,21 @@ def _run_calib_pipeline(vars_block: Dict[str, Dict[str, Any]],
 def derive_calib_coefs(envelope: Dict[str, Any],
                        *,
                        payload_size_bytes: int = 0,
-                       tag: str = _CALIB_DIM_TAG) -> Dict[str, Any]:
+                       tag: str = _CALIB_DIM_TAG,
+                       K_values: Optional[List[int]] = None) -> Dict[str, Any]:
     """*derive_calib_coefs()* build the dimensional card from a calibration envelope using PyDASA.
 
     Routes the measured `handler_scaling` + `loopback` arrays through the PyDASA pipeline (Variable dicts -> Schema -> AnalysisEngine -> derive_coefs -> MonteCarloSimulation in DATA mode) so theta / sigma / eta / phi are computed by PyDASA's symbolic evaluator, not by hand-rolled arithmetic. Coefficient symbols carry the `_{<tag>}` subscript (default `_{CALIB}`).
 
     Route B semantics: coefficients are derived from measurements, not from an M/M/c/K prediction. Applies only when both `handler_scaling` and `loopback` are present in the envelope; returns an empty dict otherwise.
 
+    When `K_values` is supplied, the per-`n_con_usr` observables are tiled once per K so the resulting coefficient arrays span the full (n_con_usr, K) cartesian — gives `plot_yoly_chart` multiple K-trajectories instead of a single point. Latency `R(n)` is independent of K (the host probe doesn't manipulate the buffer), so tiling is exact: only `theta = L/K`, `sigma = lambda*W/K`, and `phi = M_act/M_buf` shift across K.
+
     Args:
         envelope (Dict[str, Any]): calibration envelope (e.g. from `run()` or `load_latest_calibration()`).
         payload_size_bytes (int): body size per request for the phi coefficient; 0 marks phi as NaN to flag the degenerate 0/0 memory case.
         tag (str): LaTeX-subscript tag used in output keys. Default `CALIB`.
+        K_values (Optional[List[int]]): K capacities to span. When None, falls back to a single K = `args.uvicorn_backlog` (legacy single-point card). When provided, output arrays have length `len(handler_scaling) * len(K_values)`.
 
     Returns:
         Dict[str, Any]: coefficient arrays (JSON-serialisable `List[float]`) keyed by LaTeX-subscripted symbol (`\\theta_{<tag>}`, `\\sigma_{<tag>}`, `\\eta_{<tag>}`, `\\phi_{<tag>}`, plus the input-side `c_{<tag>}`, `\\mu_{<tag>}`, `K_{<tag>}`, `\\lambda_{<tag>}`, `n_con_usr_{<tag>}`), and a `meta` sub-dict with provenance (`tag / mu_source / mu_req_per_s / c_srv / uvicorn_backlog / payload_size_bytes / n_con_usr / pipeline`). Empty dict when `handler_scaling` or `loopback` is missing.
@@ -1771,17 +1775,40 @@ def derive_calib_coefs(envelope: Dict[str, Any],
     _backlog = int(_args_block.get("uvicorn_backlog",
                                    _DEFAULT_UVICORN_BACKLOG))
 
+    if K_values is None:
+        _K_list = [_backlog]
+    else:
+        _K_list = [int(_k) for _k in K_values]
+        if not _K_list:
+            _K_list = [_backlog]
+
     _obs = _build_calib_observables(
         handler_scaling=_handler,
         loopback=_loop,
         payload_size_bytes=payload_size_bytes,
-        uvicorn_backlog=_backlog,
+        uvicorn_backlog=_K_list[0],
         c_srv=1,
     )
-    _n_levels = int(_obs["n"].size)
 
-    if _n_levels == 0:
+    if int(_obs["n"].size) == 0:
         return {}
+
+    # tile every per-n array K_count times so each K block spans every n_con_usr level; K + M_buf rebuilt directly from K_list because they're the only quantities that vary across K
+    _N_n = int(_obs["n"].size)
+    _N_K = len(_K_list)
+    if _N_K > 1:
+        _obs_tiled: Dict[str, np.ndarray] = {}
+        for _key, _val in _obs.items():
+            if _key in ("K", "M_buf"):
+                continue
+            _obs_tiled[_key] = np.tile(np.asarray(_val, dtype=float), _N_K)
+        _K_full = np.repeat(np.asarray(_K_list, dtype=float), _N_n)
+        _obs_tiled["K"] = _K_full
+        _d_kB = float(payload_size_bytes) / 1000.0
+        _obs_tiled["M_buf"] = _K_full * _d_kB
+        _obs = _obs_tiled
+
+    _n_levels = int(_obs["n"].size)
 
     _vars_block = _build_calib_vars(_obs, tag=tag)
     _coef_arrays = _run_calib_pipeline(_vars_block, n_levels=_n_levels, tag=tag)
@@ -1816,8 +1843,9 @@ def derive_calib_coefs(envelope: Dict[str, Any],
         "mu_req_per_s": _mu_val,
         "c_srv": 1,
         "uvicorn_backlog": _backlog,
+        "K_values": _K_list,
         "payload_size_bytes": int(payload_size_bytes),
-        "n_con_usr": [int(_n) for _n in _obs["n"].tolist()],
+        "n_con_usr": [int(_n) for _n in np.asarray(_obs["n"], dtype=float).tolist()],
         "pipeline": "pydasa.MonteCarloSimulation(mode=DATA)",
     }
     _coefs["meta"] = _meta
