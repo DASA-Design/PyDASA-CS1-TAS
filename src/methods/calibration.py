@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import contextlib
 import ctypes
 import gc
@@ -60,6 +61,7 @@ import socket
 import sys
 import threading
 import time
+import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -339,6 +341,29 @@ def _build_ping_app() -> FastAPI:
 
 # `UvicornThread` was extracted to `src.experiment.uvicorn_thread` so the calibration probe, the experiment launcher, and the launch_services script share one lifecycle. The legacy `_UvicornThread` alias keeps existing code paths unchanged.
 _UvicornThread = UvicornThread
+
+
+# zombie-vernier guard: registry of every started vernier so an atexit hook can shut them down on graceful interpreter exit (Ctrl-C in a notebook, normal jupyter quit, nbconvert finish). Hard-kill paths (taskkill /F, kernel crash) bypass atexit -- daemon=True on the underlying threads handles those, with a side-effect of brief TIME_WAIT on the listening port.
+_ACTIVE_VERNIERS: "weakref.WeakSet[_UvicornThread]" = weakref.WeakSet()
+
+
+def _register_vernier(srv: _UvicornThread) -> _UvicornThread:
+    """*_register_vernier()* track an active vernier so the atexit cleanup can reach it; returns srv unchanged for fluent use."""
+    _ACTIVE_VERNIERS.add(srv)
+    return srv
+
+
+def _shutdown_active_verniers() -> None:
+    """*_shutdown_active_verniers()* atexit hook -- best-effort shutdown of every still-running vernier so the parent process never leaks uvicorn workers on a clean exit."""
+    for _srv in list(_ACTIVE_VERNIERS):
+        try:
+            _srv.shutdown()
+        except (RuntimeError, OSError):
+            # already-shutdown / already-closed sockets are harmless on cleanup
+            pass
+
+
+atexit.register(_shutdown_active_verniers)
 
 
 def _stats_from_us_array(us_arr: np.ndarray) -> Dict[str, float]:
@@ -780,7 +805,7 @@ async def _run_rate_sweep_async(rates: List[float],
     """
     _trials_by_rate: Dict[float, List[Dict[str, float]]] = {}
     _app = _build_ping_app()
-    _server = _UvicornThread(_app, port)
+    _server = _register_vernier(_UvicornThread(_app, port))
     _server.start()
     try:
         _server.wait_ready(timeout_s=ready_timeout_s)
@@ -1049,7 +1074,7 @@ async def _run_async_probes(*,
     """
     _result: Dict[str, Any] = {}
     _app = _build_ping_app()
-    _server = _UvicornThread(_app, port)
+    _server = _register_vernier(_UvicornThread(_app, port))
     _server.start()
     try:
         _server.wait_ready(timeout_s=ready_timeout_s)
@@ -1897,7 +1922,7 @@ async def _drive_one_combo(c_srv: int,
                                         mu=mu_combo, epsilon=0.0,
                                         payload_size_bytes=payload_size_bytes,
                                         tag=tag)
-    _server = _UvicornThread(_app, port)
+    _server = _register_vernier(_UvicornThread(_app, port))
     _server.start()
     _result: Dict[str, Dict[str, float]] = {}
     try:

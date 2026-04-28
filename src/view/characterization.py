@@ -361,7 +361,13 @@ def plot_calib_rate_sweep(rate_sweep: Dict[str, Any],
               linewidth=1.5,
               color="#C9603C",
               label="Mean loss (%)")
+    # symmetric pass-band: rates pass when |mean_loss| <= target_loss_pct, so draw BOTH +target and -target lines (the calibrated_rate logic uses abs() so over-delivery beyond -target also fails the bar)
     _ax2.axhline(_target_loss,
+                 linestyle="--",
+                 color="#C9603C",
+                 linewidth=1.0,
+                 alpha=0.6)
+    _ax2.axhline(-_target_loss,
                  linestyle="--",
                  color="#C9603C",
                  linewidth=1.0,
@@ -374,9 +380,16 @@ def plot_calib_rate_sweep(rate_sweep: Dict[str, Any],
         _target_x_anchor = max(_xs)
     else:
         _target_x_anchor = 0.0
-    _ax2.annotate(f"target {_target_loss:.1f}%",
+    _ax2.annotate(f"+{_target_loss:.1f}%",
                   xy=(_target_x_anchor, _target_loss),
                   xytext=(-6, 4),
+                  textcoords="offset points",
+                  ha="right",
+                  fontsize=9,
+                  color="#C9603C")
+    _ax2.annotate(f"-{_target_loss:.1f}%",
+                  xy=(_target_x_anchor, -_target_loss),
+                  xytext=(-6, -10),
                   textcoords="offset points",
                   ha="right",
                   fontsize=9,

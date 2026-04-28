@@ -247,6 +247,29 @@ def _apply_yoly_3d_axes(ax: Any,
         ax.tick_params(axis=_axis_name, **tick_style)
 
 
+def _estimate_single_mode_count(coeff_data: Dict[str, Any]) -> int:
+    """*_estimate_single_mode_count()* number of distinct (c, mu) combos in single-mode yoly data.
+
+    Used to size the legend strip when the caller didn't pass `paths` / `scenarios`. Looks up the first `c_*` and `\\mu_*` arrays via the same prefix-search the painters use, then returns `len(unique(c)) * len(unique(mu))`. Falls back to 1 when the data isn't shaped for single-mode (so the layout still has a sane minimum).
+
+    Args:
+        coeff_data (Dict[str, Any]): single-mode coefficient dict.
+
+    Returns:
+        int: estimated combo count for legend-row budgeting.
+    """
+    try:
+        _c_full = next(_k for _k in coeff_data if _k.startswith("c_"))
+        _mu_full = next(_k for _k in coeff_data if _k.startswith("\\mu"))
+    except StopIteration:
+        return 1
+    _c_arr = np.asarray(coeff_data.get(_c_full, []), dtype=float)
+    _mu_arr = np.asarray(coeff_data.get(_mu_full, []), dtype=float)
+    if _c_arr.size == 0 or _mu_arr.size == 0:
+        return 1
+    return int(len(np.unique(_c_arr)) * len(np.unique(_mu_arr)))
+
+
 def _lift_legend_to_footer(legend_axes: Optional[Any],
                            footer_ax: Optional[Any],
                            legend_title: str,
@@ -327,6 +350,12 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
     """
     _groups, _legend_title, _lbl_map = _resolve_yoly_inputs(labels, paths, scenarios)
 
+    # legend strip auto-sizes to the row count: 4-col cap means N entries -> ceil(N/4) rows; rough budget is 0.018 figure-fraction per row + 0.04 padding/title. Floor at 0.18 keeps the small-legend look unchanged; grows when scenarios > 24 so the legend never overlaps the body.
+    _ncol_cap = 4
+    _n_legend_entries = len(_groups) if _groups else _estimate_single_mode_count(coeff_data)
+    _rows_needed = max(1, (_n_legend_entries + _ncol_cap - 1) // _ncol_cap)
+    _footer_h = max(0.18, 0.04 + _rows_needed * 0.018)
+
     # narrower + taller. title_h and footer_h trimmed so each strip wraps its text content tightly: the title strip ends just below the suptitle, and the footer strip ends just below the legend. outer_hspace near zero closes the inter-region gap. Footer legend uses mode="expand" (in render_footer_legend) to clip to body width.
     _default_layout = FigureLayout(title=title,
                                    title_h=0.045,
@@ -334,7 +363,7 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
                                                  panel_kind="2d",
                                                  wspace=0.32,
                                                  hspace=0.22),
-                                   footer_h=0.18,
+                                   footer_h=_footer_h,
                                    footer_kind="legend",
                                    figsize=(16, 22),
                                    outer_hspace=0.025)
