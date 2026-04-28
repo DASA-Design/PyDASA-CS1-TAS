@@ -38,6 +38,7 @@ from src.view.common import (
     _LBL_STY_3D_GRID,
     _LBL_STY_3D_SINGLE,
     _LBL_STYLE,
+    _SUPTITLE_STYLE,
     _TEXT_BLACK,
     _TICK_STY_3D_GRID,
     _TICK_STY_3D_SINGLE,
@@ -321,15 +322,15 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
 
     # narrower + taller. title_h and footer_h trimmed so each strip wraps its text content tightly: the title strip ends just below the suptitle, and the footer strip ends just below the legend. outer_hspace near zero closes the inter-region gap. Footer legend uses mode="expand" (in render_footer_legend) to clip to body width.
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.025,
+                                   title_h=0.045,
                                    body=BodySpec(shape=(2, 2),
                                                  panel_kind="2d",
                                                  wspace=0.20,
-                                                 hspace=0.20),
+                                                 hspace=0.22),
                                    footer_h=0.18,
                                    footer_kind="legend",
                                    figsize=(16, 22),
-                                   outer_hspace=0.01)
+                                   outer_hspace=0.025)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -413,18 +414,35 @@ def plot_yoly_space(coeff_data: Dict[str, Any],
     """
     _groups, _legend_title, _lbl_map = _resolve_yoly_inputs(labels, paths, scenarios)
 
-    _default_layout = FigureLayout(title=title,
-                                   title_h=0.04,
+    # title strip carries either the suptitle alone or suptitle stacked above subtitle. We pass title=None to build_stacked_figure when both are set so it doesn't auto-draw at strip centre; both lines are then drawn manually into the same dedicated title_ax with explicit y-positions in axes coords (no figure-coord arithmetic, no overlap risk).
+    _has_subtitle = bool(subtitle)
+    _title_h = 0.10 if _has_subtitle else 0.05
+    _default_layout = FigureLayout(title=None if _has_subtitle else title,
+                                   title_h=_title_h,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="3d"),
                                    footer_h=0.10,
                                    footer_kind="legend",
                                    figsize=(17, 14),
-                                   outer_hspace=0.01)
+                                   outer_hspace=0.02)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
     _ax = _regions["body_axes"][0]
+
+    if _has_subtitle and title:
+        # main title in the upper half of the title strip; subtitle in the lower half. Both in axes coords on the dedicated title_ax (transparent, off) so they never collide with the body or each other
+        _title_ax = _regions["title_ax"]
+        _title_ax.text(0.5, 0.72, title,
+                       ha="center", va="center",
+                       transform=_title_ax.transAxes,
+                       **_SUPTITLE_STYLE)
+        _title_ax.text(0.5, 0.22, subtitle,
+                       ha="center", va="center",
+                       transform=_title_ax.transAxes,
+                       fontsize=18,
+                       fontstyle="italic",
+                       **_LBL_STYLE)
 
     if _groups:
         _has_legend = _paint_groups_3d_yoly(_ax, coeff_data, _groups)
@@ -438,9 +456,6 @@ def plot_yoly_space(coeff_data: Dict[str, Any],
                         elev=30,
                         azim=110,
                         logscale=logscale)
-
-    if subtitle:
-        _ax.set_title(subtitle, fontsize=17, **_LBL_STYLE)
 
     if _has_legend:
         _lift_legend_to_footer(_ax,
@@ -492,13 +507,13 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
     _n_nodes = len(_node_keys)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.025,
+                                   title_h=0.045,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="2d"),
                                    footer_h=0.0,
                                    footer_kind="none",
                                    figsize=(26, 26),
-                                   outer_hspace=0.01)
+                                   outer_hspace=0.025)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -643,13 +658,13 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
     _n_nodes = len(_node_keys)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.025,
+                                   title_h=0.045,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="2d"),
                                    footer_h=0.06,
                                    footer_kind="legend",
                                    figsize=(34, 29),
-                                   outer_hspace=0.01)
+                                   outer_hspace=0.025)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -759,13 +774,13 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
     _n_nodes = len(_node_keys)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.025,
+                                   title_h=0.045,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="2d"),
                                    footer_h=0.06,
                                    footer_kind="legend",
                                    figsize=(34, 29),
-                                   outer_hspace=0.01)
+                                   outer_hspace=0.025)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)

@@ -4,6 +4,53 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-27 — Title standardisation, bold-math labels, yoly K-change fix
+
+Three refactor passes hit the five thin notebooks (`00-calibration`, `01-analytic`, `02-stochastic`, `03-dimensional`, `04-yoly`) plus `src/view/common.py` and `src/view/charter.py`.
+
+### Title template + DISPLAY map (notes/titles_std.md)
+
+Every plot title now reads `f"{Method}: {Subject}\n{Scenario}"`. Method ∈ `Calibration / Analytic / Stochastic / DASA / Yoly Chart`. The four-key DISPLAY map is identical in every notebook:
+
+```python
+DISPLAY = {"baseline": "No Adaptation", "s1": "S1: Retry", "s2": "S2: Select-Reliable", "aggregate": "S1 & S2"}
+```
+
+Yoly subjects use `"trade-off Projections"` (2D panel grids) and `"trade-off space"` (3D clouds); "2D" / "3D" qualifiers dropped because the plotter family already encodes dimensionality.
+
+### Bold-math labels — `\mathbf` only, never `\boldsymbol`
+
+Replaced 111 occurrences of `\boldsymbol` → `\mathbf` across `src/view/common.py`, 4 notebooks. matplotlib's built-in mathtext does NOT recognise `\boldsymbol` and crashes `savefig` with `ParseFatalException: Unknown symbol: \boldsymbol`. Lowercase Greek under `\mathbf` falls back to upright non-bold (a matplotlib limitation that needs `usetex=True` to overcome); accepted. Roman + uppercase Greek (Δ) DO bold under `\mathbf`.
+
+**Lesson learned:** an in-memory smoke test that creates the figure but doesn't `savefig` skips the tick-bbox path that triggers the mathtext parser. ALWAYS save to disk when smoke-testing label / title / mathtext changes — `file_path=` is mandatory in the smoke recipe.
+
+### Yoly K-change NaN-split (`_split_on_K_change`)
+
+Renamed `_split_on_K_decrease` → `_split_on_K_change` in `src/view/common.py`. The previous helper inserted NaN only where `K[i] < K[i-1]`, but `sweep_arch`'s natural Cartesian iteration order keeps K **monotonically non-decreasing** within each `(c, mu)` group (lambda is the inner loop, K is the outer factor). The decrease-only check found zero break-points, so matplotlib drew dashed lines connecting the high-theta endpoint of one K-band back to the low-theta start of the next — visually misleading "return-to-origin" zig-zags. Switching to `np.where(_diff != 0)` (any K change) splits each K-constant sub-sweep into its own segment, fixing the visual.
+
+### Layout tightening
+
+`plot_yoly_arts_hist` now uses math symbols on subplot titles ($\hat{X}=...\,\,\,s=...$) at fontsize=10, pad=2; outer hspace 0.55→0.30, inner hspace 0.45→0.65. `plot_yoly_chart` / `plot_yoly_space` / `plot_yoly_arts_behaviour` / `plot_yoly_arts_charts` all got `title_h=0.025` (was 0.04) and `outer_hspace=0.01` so the suptitle hugs the body. Legend labels now use mathtext: `f"$\\mathbf{{c}}={int(c_val)},\,\\mathbf{{\\mu}}={int(mu_val)}$"`.
+
+### Files touched
+
+- `src/view/common.py` — `_DEFAULT_LABELS` + `_YOLY_PANELS` use `\mathbf{}` for coefficient symbols; `_format_path_legend` + `_paint_*_yoly` legend labels switched to mathtext; `_split_on_K_decrease` → `_split_on_K_change`.
+- `src/view/charter.py` — five yoly plotters got tighter title_h + outer_hspace + body grid spacing.
+- `00-calibration.ipynb` — DataFrame columns use `[$\mathbf{\mu s}$]` / `[$\mathbf{ns}$]`; markdown wraps `lambda`, `mu`, `theta`, `sigma`, `eta`, `phi`, `M_act`, `M_buf`, `c_srv`, `W_q` in `$...$`; plot titles include `host.get('hostname')` on the second line.
+- `01-analytic.ipynb`, `02-stochastic.ipynb`, `03-dimensional.ipynb` — DISPLAY map standardised; `bar_labels` / `delta_labels` / `heat_labels` / `diff_labels` all use `\mathbf{}` mathtext; DataFrame summary columns now bold mathtext.
+- `04-yoly.ipynb` — Yoly Chart titles + subjects rewritten to "trade-off Projections" / "trade-off space"; inherits axis labels from `_DEFAULT_LABELS`.
+- `notes/titles_std.md` — final tables + DISPLAY map + naming rules + per-notebook plotter-by-plotter title spec.
+- `CLAUDE.md` — Notebook + View conventions sections updated with title template, DISPLAY map, `\mathbf`-only rule, K-change NaN-break helper, smoke-test-with-file_path discipline.
+
+### Verification
+
+- `nbformat.validate()` on all five thin notebooks: all pass.
+- `pytest tests/io tests/analytic tests/dimensional tests/utils tests/methods` (focused subset): unchanged from baseline (no src/ logic touched).
+- `plot_arch_delta` saved to disk with `\Delta \overline{\mu}` in a label: passes (the original failing call).
+- `plot_yoly_chart` + `plot_yoly_arts_charts` saved to disk with `_DEFAULT_LABELS` + `_YOLY_PANELS` + mu legend formatter: passes.
+
+---
+
 ## 2026-04-26 (continued) — Schema split (artifacts vs specs), local_end_ts column, lambda_z restored
 
 Three structural changes landed late on 2026-04-26, all on top of the profile-rescaling work captured in the previous entry.

@@ -170,18 +170,18 @@ _STAT_NAMES = {
 
 # Yoly default coefficient labels (mathtext-wrapped so subscripts render).
 _DEFAULT_LABELS: Dict[str, str] = {
-    "theta": r"Occupancy ($\boldsymbol{\theta}$)",
-    "sigma": r"Stall ($\boldsymbol{\sigma}$)",
-    "eta": r"Effective-Yield ($\boldsymbol{\eta}$)",
-    "phi": r"Memory-Use ($\boldsymbol{\phi}$)",
+    "theta": r"Occupancy ($\mathbf{\theta}$)",
+    "sigma": r"Stall ($\mathbf{\sigma}$)",
+    "eta": r"Effective-Yield ($\mathbf{\eta}$)",
+    "phi": r"Memory-Use ($\mathbf{\phi}$)",
 }
 
 # The 4 panels of a single-queue 2D yoly chart, ordered (panel_title, x_key, y_key).
 _YOLY_PANELS = [
-    (r"Plane: $\boldsymbol{\theta}$ vs $\boldsymbol{\sigma}$", "theta", "sigma"),
-    (r"Plane: $\boldsymbol{\theta}$ vs $\boldsymbol{\eta}$", "theta", "eta"),
-    (r"Plane: $\boldsymbol{\sigma}$ vs $\boldsymbol{\eta}$", "sigma", "eta"),
-    (r"Plane: $\boldsymbol{\theta}$ vs $\boldsymbol{\phi}$", "theta", "phi"),
+    (r"Plane: $\mathbf{\theta}$ vs $\mathbf{\sigma}$", "theta", "sigma"),
+    (r"Plane: $\mathbf{\theta}$ vs $\mathbf{\eta}$", "theta", "eta"),
+    (r"Plane: $\mathbf{\sigma}$ vs $\mathbf{\eta}$", "sigma", "eta"),
+    (r"Plane: $\mathbf{\theta}$ vs $\mathbf{\phi}$", "theta", "phi"),
 ]
 
 # Per-node dimensionless coefficient columns + symbols + names (declaration order drives label lines and table columns).
@@ -1060,12 +1060,12 @@ def _format_path_legend(data: Dict[str, Any], path_tag: str) -> str:
     _parts: List[str] = []
     if len(_c_vals) > 0:
         _uniq_c = np.unique(_c_vals)
-        _c_str = ",".join(str(int(_v)) for _v in _uniq_c)
+        _c_str = ",".join(str(round(_v)) for _v in _uniq_c)
         _parts.append(rf"$\mathbf{{c}}={_c_str}$")
     if len(_mu_vals) > 0:
         _uniq_mu = np.unique(_mu_vals)
-        _mu_str = ",".join(str(int(_v)) for _v in _uniq_mu)
-        _parts.append(rf"$\boldsymbol{{\mu}}={_mu_str}$")
+        _mu_str = ",".join(str(round(_v)) for _v in _uniq_mu)
+        _parts.append(rf"$\mathbf{{\overline{{\mu}}}}={_mu_str}$")
     return ", ".join(_parts)
 
 
@@ -1321,7 +1321,7 @@ def _paint_single_2d_yoly(ax: Any,
                 _x[_idx_group], _y[_idx_group], _K[_idx_group])
 
             _combo = (_c_val, _mu_val)
-            _label = rf"$\mathbf{{c}}={int(_c_val)},\,\boldsymbol{{\mu}}={int(_mu_val)}$"
+            _label = rf"$\mathbf{{c}}={round(_c_val)},\,\mathbf{{\overline{{\mu}}}}={round(_mu_val)}$"
             _seen_combos.add(_combo)
 
             ax.plot(_xs_seg, _ys_seg,
@@ -1337,13 +1337,14 @@ def _paint_single_2d_yoly(ax: Any,
                     label=_label,
                     rasterized=True)
 
-            # annotate the global min and max K across this (c, mu) group once per panel
+            # annotate every unique K in this group at the LAST data point of that K-block (high-theta end of the lambda-sweep)
             _K_grp = _K[_idx_group]
-            for _K_val in (float(_K_grp.min()), float(_K_grp.max())):
+            for _K_val in [float(v) for v in np.unique(_K_grp)]:
                 if _K_val in _seen_K:
                     continue
                 _seen_K.add(_K_val)
-                _at_idx = _idx_group[int(np.argmax(_K_grp == _K_val))]
+                _K_match_local = np.where(_K_grp == _K_val)[0]
+                _at_idx = _idx_group[int(_K_match_local[-1])]
                 ax.text(float(_x[_at_idx]),
                         float(_y[_at_idx]) + _y_off,
                         f"K={int(_K_val)}",
@@ -1415,13 +1416,14 @@ def _paint_groups_2d_yoly(ax: Any,
                 label=_path_lbl,
                 rasterized=True)
 
-        # annotate the global min and max K of this group once per panel
+        # annotate every unique K of this group at the LAST data point of that K-block (high-theta trajectory tip)
         if len(_K) > 0:
-            for _K_val in (float(_K.min()), float(_K.max())):
+            for _K_val in [float(v) for v in np.unique(_K)]:
                 if _K_val in _seen_K:
                     continue
                 _seen_K.add(_K_val)
-                _at_idx = int(np.argmax(_K == _K_val))
+                _K_match = np.where(_K == _K_val)[0]
+                _at_idx = int(_K_match[-1])
                 ax.text(float(_x[_at_idx]),
                         float(_y[_at_idx]) + _y_off,
                         f"K={int(_K_val)}",
@@ -1479,7 +1481,7 @@ def _paint_single_3d_yoly(ax: Any, coeff_data: Dict[str, Any]) -> bool:
                 _eta[_idx_group], _K[_idx_group])
 
             _combo = (_c_val, _mu_val)
-            _label = rf"$\mathbf{{c}}={int(_c_val)},\,\boldsymbol{{\mu}}={int(_mu_val)}$"
+            _label = rf"$\mathbf{{c}}={round(_c_val)},\,\mathbf{{\overline{{\mu}}}}={round(_mu_val)}$"
             _seen_combos.add(_combo)
 
             ax.plot(_theta_seg, _sigma_seg, _eta_seg,
@@ -1494,12 +1496,14 @@ def _paint_single_3d_yoly(ax: Any, coeff_data: Dict[str, Any]) -> bool:
                     alpha=0.7,
                     label=_label)
 
+            # annotate every unique K at the LAST point of that K-block (high-theta trajectory tip)
             _K_grp = _K[_idx_group]
-            for _K_val in (float(_K_grp.min()), float(_K_grp.max())):
+            for _K_val in [float(v) for v in np.unique(_K_grp)]:
                 if _K_val in _seen_K:
                     continue
                 _seen_K.add(_K_val)
-                _at_idx = _idx_group[int(np.argmax(_K_grp == _K_val))]
+                _K_match_local = np.where(_K_grp == _K_val)[0]
+                _at_idx = _idx_group[int(_K_match_local[-1])]
                 ax.text(float(_theta[_at_idx]),
                         float(_sigma[_at_idx]),
                         float(_eta[_at_idx]) + _z_off,
@@ -1576,11 +1580,13 @@ def _paint_groups_3d_yoly(ax: Any,
                 label=_group_lbl)
 
         if len(_K) > 0:
-            for _K_val in (float(_K.min()), float(_K.max())):
+            # annotate every unique K at the LAST point of that K-block (high-theta trajectory tip)
+            for _K_val in [float(v) for v in np.unique(_K)]:
                 if _K_val in _seen_K:
                     continue
                 _seen_K.add(_K_val)
-                _at_idx = int(np.argmax(_K == _K_val))
+                _K_match = np.where(_K == _K_val)[0]
+                _at_idx = int(_K_match[-1])
                 ax.text(float(_theta[_at_idx]),
                         float(_sigma[_at_idx]),
                         float(_eta[_at_idx]) + _z_off,
