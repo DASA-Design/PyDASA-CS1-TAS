@@ -1060,12 +1060,12 @@ def _format_path_legend(data: Dict[str, Any], path_tag: str) -> str:
     _parts: List[str] = []
     if len(_c_vals) > 0:
         _uniq_c = np.unique(_c_vals)
-        _c_str = ", ".join(str(int(_v)) for _v in _uniq_c)
-        _parts.append(f"c={_c_str}")
+        _c_str = ",".join(str(int(_v)) for _v in _uniq_c)
+        _parts.append(rf"$\mathbf{{c}}={_c_str}$")
     if len(_mu_vals) > 0:
         _uniq_mu = np.unique(_mu_vals)
-        _mu_str = ", ".join(str(int(_v)) for _v in _uniq_mu)
-        _parts.append(f"mu={_mu_str}")
+        _mu_str = ",".join(str(int(_v)) for _v in _uniq_mu)
+        _parts.append(rf"$\boldsymbol{{\mu}}={_mu_str}$")
     return ", ".join(_parts)
 
 
@@ -1231,17 +1231,17 @@ def _format_node_header(node_key: str,
     return _node_math
 
 
-def _split_on_K_decrease(*arrays: np.ndarray
-                         ) -> Tuple[np.ndarray, ...]:
-    """*_split_on_K_decrease()* split parallel arrays into NaN-separated sub-sweeps wherever K decreases (the last positional array is K).
+def _split_on_K_change(*arrays: np.ndarray
+                       ) -> Tuple[np.ndarray, ...]:
+    """*_split_on_K_change()* split parallel arrays into NaN-separated sub-sweeps wherever K changes (the last positional array is K).
 
-    A yoly group can carry multiple sub-sweeps (e.g. one per hidden 4th dim). When the data is in natural Cartesian order, K monotonically increases within a sub-sweep and resets at the boundary. Inserting NaN at every "K decreased" position breaks the line at sub-sweep boundaries, producing one dashed trajectory per sub-sweep instead of one zig-zag connecting all of them.
+    Within a (c, mu) group the natural Cartesian sweep order keeps K constant for one sub-sweep (lambda iterates), then K jumps to the next K_factor and lambda restarts. Inserting NaN at every K change breaks the trajectory between sub-sweeps so the line never jumps from a high-theta endpoint back to the next sub-sweep's low-theta start.
 
     Args:
         *arrays (np.ndarray): parallel 1-D float arrays of the same length; the last one is treated as K.
 
     Returns:
-        Tuple[np.ndarray, ...]: each input array with a `np.nan` inserted at every index where K decreased relative to the previous element. The returned arrays are still parallel and same-length.
+        Tuple[np.ndarray, ...]: each input array with a `np.nan` inserted at every index where K differs from the previous element. The returned arrays are still parallel and same-length.
     """
     if not arrays:
         return ()
@@ -1249,9 +1249,9 @@ def _split_on_K_decrease(*arrays: np.ndarray
     if len(_K_arr) <= 1:
         return tuple(np.asarray(a, dtype=float) for a in arrays)
 
-    # boundary indices (in the input space) where K[i] < K[i-1] -> insert NaN BEFORE that index in the output
+    # boundary indices where K[i] != K[i-1] -> insert NaN BEFORE that index in the output (any change, not just decrease)
     _diff = np.diff(_K_arr)
-    _break_at = np.where(_diff < 0)[0] + 1  # indices in arrays (i where break should land before)
+    _break_at = np.where(_diff != 0)[0] + 1
 
     if len(_break_at) == 0:
         return tuple(np.asarray(a, dtype=float) for a in arrays)
@@ -1317,11 +1317,11 @@ def _paint_single_2d_yoly(ax: Any,
                 continue
             _idx_group = np.where(_group_mask)[0]
 
-            _xs_seg, _ys_seg, _ks_seg = _split_on_K_decrease(
+            _xs_seg, _ys_seg, _ks_seg = _split_on_K_change(
                 _x[_idx_group], _y[_idx_group], _K[_idx_group])
 
             _combo = (_c_val, _mu_val)
-            _label = f"c={int(_c_val)}, mu={int(_mu_val)}"
+            _label = rf"$\mathbf{{c}}={int(_c_val)},\,\boldsymbol{{\mu}}={int(_mu_val)}$"
             _seen_combos.add(_combo)
 
             ax.plot(_xs_seg, _ys_seg,
@@ -1398,7 +1398,7 @@ def _paint_groups_2d_yoly(ax: Any,
 
         # NaN-break wherever K decreases so each sub-sweep within a group renders as its own dashed trajectory
         if len(_K) == len(_x):
-            _x_seg, _y_seg, _ks_seg = _split_on_K_decrease(_x, _y, _K)
+            _x_seg, _y_seg, _ks_seg = _split_on_K_change(_x, _y, _K)
         else:
             _x_seg, _y_seg = np.asarray(_x, dtype=float), np.asarray(_y, dtype=float)
 
@@ -1474,12 +1474,12 @@ def _paint_single_3d_yoly(ax: Any, coeff_data: Dict[str, Any]) -> bool:
                 continue
             _idx_group = np.where(_group_mask)[0]
 
-            _theta_seg, _sigma_seg, _eta_seg, _ks_seg = _split_on_K_decrease(
+            _theta_seg, _sigma_seg, _eta_seg, _ks_seg = _split_on_K_change(
                 _theta[_idx_group], _sigma[_idx_group],
                 _eta[_idx_group], _K[_idx_group])
 
             _combo = (_c_val, _mu_val)
-            _label = f"c={int(_c_val)}, mu={int(_mu_val)}"
+            _label = rf"$\mathbf{{c}}={int(_c_val)},\,\boldsymbol{{\mu}}={int(_mu_val)}$"
             _seen_combos.add(_combo)
 
             ax.plot(_theta_seg, _sigma_seg, _eta_seg,
@@ -1556,7 +1556,7 @@ def _paint_groups_3d_yoly(ax: Any,
 
         # NaN-break wherever K decreases so each sub-sweep renders as its own dashed 3D trajectory
         if len(_K) == len(_theta):
-            _theta_seg, _sigma_seg, _eta_seg, _ks_seg = _split_on_K_decrease(
+            _theta_seg, _sigma_seg, _eta_seg, _ks_seg = _split_on_K_change(
                 _theta, _sigma, _eta, _K)
         else:
             _theta_seg = np.asarray(_theta, dtype=float)

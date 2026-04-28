@@ -321,15 +321,15 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
 
     # narrower + taller. title_h and footer_h trimmed so each strip wraps its text content tightly: the title strip ends just below the suptitle, and the footer strip ends just below the legend. outer_hspace near zero closes the inter-region gap. Footer legend uses mode="expand" (in render_footer_legend) to clip to body width.
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.04,
+                                   title_h=0.025,
                                    body=BodySpec(shape=(2, 2),
                                                  panel_kind="2d",
-                                                 wspace=0.25,
-                                                 hspace=0.25),
-                                   footer_h=0.20,
+                                                 wspace=0.20,
+                                                 hspace=0.20),
+                                   footer_h=0.18,
                                    footer_kind="legend",
                                    figsize=(16, 22),
-                                   outer_hspace=0.02)
+                                   outer_hspace=0.01)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -414,12 +414,13 @@ def plot_yoly_space(coeff_data: Dict[str, Any],
     _groups, _legend_title, _lbl_map = _resolve_yoly_inputs(labels, paths, scenarios)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.06,
+                                   title_h=0.04,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="3d"),
                                    footer_h=0.10,
                                    footer_kind="legend",
-                                   figsize=(17, 14))
+                                   figsize=(17, 14),
+                                   outer_hspace=0.01)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -491,12 +492,13 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
     _n_nodes = len(_node_keys)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.04,
+                                   title_h=0.025,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="2d"),
                                    footer_h=0.0,
                                    footer_kind="none",
-                                   figsize=(26, 26))
+                                   figsize=(26, 26),
+                                   outer_hspace=0.01)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -511,8 +513,8 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
 
     _n_rows, _n_cols, _last_row_idx, _n_last_row = _compute_grid_dims(_n_nodes)
     _gs_main = _body_ax.get_subplotspec().subgridspec(_n_rows, _n_cols,
-                                                      hspace=0.55,
-                                                      wspace=0.30)
+                                                      hspace=0.30,
+                                                      wspace=0.25)
 
     for _nd_idx, _node in enumerate(_node_keys):
         _nd_row, _nd_col = _compute_node_pos(_nd_idx,
@@ -528,8 +530,8 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
         _col_lt = _generate_color_map(list(range(_n_coeffs)))
         _n_inner_cols = (_n_coeffs + 1) // 2
         _gs_node = _gs_main[_nd_row, _nd_col].subgridspec(2, _n_inner_cols,
-                                                          hspace=0.45,
-                                                          wspace=0.45)
+                                                          hspace=0.65,
+                                                          wspace=0.40)
 
         _anchor_cell_header(_fig,
                             _gs_main[_nd_row, _nd_col],
@@ -560,7 +562,7 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                         color=_color,
                         linestyle="-",
                         linewidth=2,
-                        label=f"Mean: {_mean:.4e}")
+                        label=rf"$\hat{{X}}={_mean:.3e}$")
 
             _ax.set_xlabel(_lbl_map.get(_short, _short),
                            fontsize=11,
@@ -570,11 +572,11 @@ def plot_yoly_arts_hist(coeff_data: Dict[str, Dict[str, Any]],
                            fontsize=11,
                            fontweight="bold",
                            color=_TEXT_BLACK)
-            _ax.set_title(f"mean={_mean:.3g}  std={_std:.3g}",
-                          fontsize=11,
+            _ax.set_title(rf"$\hat{{X}}={_mean:.3g}\,\,\,s={_std:.3g}$",
+                          fontsize=10,
                           fontweight="bold",
                           color=_TEXT_BLACK,
-                          pad=4)
+                          pad=2)
 
             _ax.ticklabel_format(axis="x", style="sci", scilimits=(0, 0))
             _ax.tick_params(**_TICK_STYLE)
@@ -641,12 +643,13 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
     _n_nodes = len(_node_keys)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.04,
+                                   title_h=0.025,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="2d"),
                                    footer_h=0.06,
                                    footer_kind="legend",
-                                   figsize=(34, 29))
+                                   figsize=(34, 29),
+                                   outer_hspace=0.01)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -659,8 +662,8 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
     _body_ax.axis("off")
     _n_rows, _n_cols, _last_row_idx, _n_last_row = _compute_grid_dims(_n_nodes)
     _gs_main = _body_ax.get_subplotspec().subgridspec(_n_rows, _n_cols,
-                                                      hspace=0.15,
-                                                      wspace=0.10)
+                                                      hspace=0.10,
+                                                      wspace=0.08)
 
     _legend_axes: Optional[Any] = None
     for _nd_idx, _node in enumerate(_node_keys):
@@ -756,12 +759,13 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
     _n_nodes = len(_node_keys)
 
     _default_layout = FigureLayout(title=title,
-                                   title_h=0.04,
+                                   title_h=0.025,
                                    body=BodySpec(shape=(1, 1),
                                                  panel_kind="2d"),
                                    footer_h=0.06,
                                    footer_kind="legend",
-                                   figsize=(34, 29))
+                                   figsize=(34, 29),
+                                   outer_hspace=0.01)
     _layout = _pick_layout(layout, _default_layout)
 
     _fig, _regions = build_stacked_figure(_layout)
@@ -774,8 +778,8 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
     _body_ax.axis("off")
     _n_rows, _n_cols, _last_row_idx, _n_last_row = _compute_grid_dims(_n_nodes)
     _gs_main = _body_ax.get_subplotspec().subgridspec(_n_rows, _n_cols,
-                                                      hspace=0.35,
-                                                      wspace=0.30)
+                                                      hspace=0.25,
+                                                      wspace=0.22)
 
     _legend_axes: Optional[Any] = None
     for _nd_idx, _node in enumerate(_node_keys):
@@ -784,8 +788,8 @@ def plot_yoly_arts_charts(coeff_data: Dict[str, Dict[str, Any]],
                                              _last_row_idx, _n_last_row)
 
         _gs_node = _gs_main[_nd_row, _nd_col].subgridspec(2, 2,
-                                                          hspace=0.55,
-                                                          wspace=0.60)
+                                                          hspace=0.45,
+                                                          wspace=0.45)
         _node_block = coeff_data[_node]
 
         for _p_idx, (_panel_title, _x_key, _y_key) in enumerate(_YOLY_PANELS):
