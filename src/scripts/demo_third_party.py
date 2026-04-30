@@ -70,9 +70,9 @@ def _recorded_forward(_calls: List[Tuple[str, str]]) -> httpx.AsyncClient:
     """*_recorded_forward()* build a forward closure that appends `(target, request_id)` to `_calls`."""
 
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        _calls.append((target, req.request_id))
-        return SvcResp(request_id=req.request_id,
-                       service_name=target,
+        _calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                       srv_name=target,
                        success=True,
                        message="recorded")
 

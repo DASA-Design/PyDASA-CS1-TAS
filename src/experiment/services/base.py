@@ -3,14 +3,14 @@
 Module services/base.py
 =======================
 
-Shared building blocks every service reads. No queueing logic lives here on purpose. Queue behaviour emerges from FastAPI and asyncio running requests concurrently, so we do not encode it with classes or admission counters.
+Shared building blocks every service reads. Concurrency is gated by a c-permit semaphore (in-service) and a K counter (total in-flight); over-K arrivals get HTTP 503. The K-gate is a deployment tactic, not an M/M/c/K simulation.
 
 Exports:
-    - `SvcSpec`: frozen per-service knobs (mu, eps, c, K, seed, mem_per_buffer).
-    - `derive_seed(root, name)`: deterministic per-component seed derivation.
+    - `SvcSpec`: frozen per-service knobs.
     - `SvcReq`, `SvcResp`: pydantic wire schema.
+    - `SvcCtx`: mutable per-service state with c-semaphore + K-gate.
     - `LOG_COLUMNS`: frozen per-invocation CSV schema.
-    - `SvcCtx`: mutable per-service state (spec, log, rng). No counters, no semaphores.
+    - `derive_seed(root, name)`: deterministic per-component seed.
     - `make_base_app(title, healthz_fn)`: bare FastAPI app with /healthz.
     - `HttpForward(client, registry)`: async `(target, req) -> SvcResp` over HTTP.
 """
@@ -41,13 +41,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class SvcSpec:
-    """**SvcSpec** immutable per-service knobs. Carries `(mu, epsilon, c, K, seed, mem_per_buffer)` consumed by every method.
-    """
+    """**SvcSpec** frozen per-service knobs: `(mu, epsilon, c, K, seed, mem_per_buffer)`."""
 
     # LaTeX-subscript key (e.g. `TAS_{1}`)
     name: str
 
-    # workflow tag: composite_client/medical/alarm/drug, atomic
+    # workflow tag: 'composite_client'. 'medical', 'alarm', 'drug', 'atomic'
     role: str
 
     # TCP port (TAS components share; third-party get their own)
@@ -71,33 +70,37 @@ class SvcSpec:
     # declared buffer memory in bytes; downstream derives actual usage
     mem_per_buffer: int = 0
 
+    # profile-wide K-gate switch; False -> try_admit always admits
+    enforce_limits: bool = True
+
     # headroom factor applied over K * avg_request_size to derive `mem_per_buffer`
     MEM_HEADROOM_FACTOR: float = 1.5
 
     @property
     def buffer_budget_bytes(self) -> int:
-        """*buffer_budget_bytes* Declared memory budget in bytes; 0 when undeclared.
+        """*buffer_budget_bytes* declared memory budget in bytes; 0 when undeclared.
 
         Returns:
-            int: `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR` from the profile, sized for the memory-usage coefficient; 0 when undeclared.
+            int: `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR`; 0 when undeclared.
         """
         return int(self.mem_per_buffer)
 
     @property
     def c_srv(self) -> int:
-        """*c_srv* alias for `c` that reads as "service-side parallel handlers".
+        """c_srv service-side parallel handlers (M/M/c/K); alias for `c` to clarify the role of this parameter in the code.
 
-        Exists so downstream prose / plots can distinguish service-side `c_srv` from client-side `n_con_usr` (concurrent-user load) without renaming the wire-schema field `c` that profile JSONs + PyDASA already depend on. No new semantics; identical value.
+        Returns:
+            int: number of parallel servers in the M/M/c/K model from the configuration profile.
         """
-        return int(self.c)
+        return self.c
 
 
-def derive_seed(root_seed: int, service_name: str) -> int:
-    """*derive_seed()* stable 64-bit per-service seed from `(root, name)` FNV-1a over the UTF-8 service name XORed with `root_seed`; stable across processes.
+def derive_seed(root_seed: int, srv_name: str) -> int:
+    """derive_seed derives a stable 64-bit per-service seed from `(root, name)` FNV-1a over the UTF-8 service name XORed with `root_seed`; stable across processes.
 
     Args:
         root_seed (int): single seed from `experiment.json::seed`.
-        service_name (str): LaTeX-subscript artifact key (e.g. `TAS_{1}`).
+        srv_name (str): LaTeX-subscript artifact key (e.g. `TAS_{1}`).
 
     Returns:
         int: 64-bit non-negative seed for `random.Random`.
@@ -105,7 +108,7 @@ def derive_seed(root_seed: int, service_name: str) -> int:
     _h = 0xCBF29CE484222325
     _prime = 0x100000001B3
     _mask = (1 << 64) - 1
-    for _b in service_name.encode("utf-8"):
+    for _b in srv_name.encode("utf-8"):
         _h ^= _b
         _h = (_h * _prime) & _mask
     _h ^= (int(root_seed) & _mask)
@@ -118,10 +121,11 @@ def derive_seed(root_seed: int, service_name: str) -> int:
 
 
 class SvcReq(BaseModel):
-    """**SvcReq** pydantic wire schema for every component invocation."""
+    """SvcReq pydantic wire schema for every component invocation.BaseModel is the abstract base class for request bodies.
+    """
 
     # client UUID; stable across every hop
-    request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    req_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
 
     # request kind; TAS_{1}'s kind-router reads this
     kind: str = "analyse"
@@ -134,13 +138,14 @@ class SvcReq(BaseModel):
 
 
 class SvcResp(BaseModel):
-    """**SvcResp** pydantic wire schema returned by every component."""
+    """SvcResp Pydantic wire schema returned by every component. BaseModel is the abstract base class for request bodies.
+    """
 
     # echoes the request's UUID for end-to-end tracing
-    request_id: str
+    req_id: str
 
     # which component produced this response
-    service_name: str
+    srv_name: str
 
     # True on HTTP 200 + business success; False on Bernoulli-ε business failure
     success: bool
@@ -150,10 +155,10 @@ class SvcResp(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# frozen CSV schema; column order is a breaking-change contract. `local_end_ts` excludes the downstream dispatch await (equals `end_ts` for terminals).
+# frozen CSV schema; column order is a breaking-change contract
 LOG_COLUMNS = (
-    "request_id",
-    "service_name",
+    "req_id",
+    "srv_name",
     "kind",
     "recv_ts",
     "start_ts",
@@ -167,36 +172,38 @@ LOG_COLUMNS = (
 
 
 # ---------------------------------------------------------------------------
-# minimal per-service state; just what @logger needs to record one CSV row per invocation
+# minimal per-service state for @logger
 
 
 @dataclass
 class SvcCtx:
-    """**SvcCtx** mutable per-service state.
-
-    Carries `spec`, bounded log deque, seeded RNG, bound `handler`, and `spec.c`-permit semaphore. Log overflow silently drops the oldest row and bumps `dropped_count` (must be 0 at shutdown).
-    """
+    """SvcCtx mutable per-service state with c-semaphore + K-gate."""
 
     # immutable per-service knobs
     spec: SvcSpec
 
-    # bounded CSV row buffer; overflow increments `dropped_count` (must be 0 at shutdown)
+    # bounded CSV row buffer; overflow bumps `dropped_count`
     log: Deque[Dict[str, Any]] = field(init=False)
 
-    # non-zero means the log buffer was sized too small or load exceeded calibration
+    # bigger than 0 means log buffer overflowed; must be 0 at shutdown
     dropped_count: int = field(default=0, init=False)
 
-    # deque cap; 500k leaves ~6x headroom over a 345 req/s x 60 s x 4-hop run
+    # deque cap; 500k = ~6x headroom for a 345 req/s x 60 s x 4-hop run
     log_maxlen: int = field(default=500_000)
 
     # per-service RNG seeded from spec.seed
     rng: random.Random = field(init=False)
 
-    # spec.c permits; gates concurrent handler execution so Wq + c_used_at_start are measurable
+    # gates concurrent in-service handlers for spec.c_srv permits
     sem: asyncio.Semaphore = field(init=False)
 
+    # in-flight count (waiting + in-service); gated against spec.K
+    in_flight: int = field(default=0, init=False)
+
     # bound request handler; set by mount_atomic_svc after build
-    handler: Optional[Callable[..., Any]] = field(default=None, init=False, repr=False)
+    handler: Optional[Callable[..., Any]] = field(default=None,
+                                                  init=False,
+                                                  repr=False)
 
     def __post_init__(self) -> None:
         if self.spec.seed:
@@ -204,59 +211,99 @@ class SvcCtx:
         else:
             self.rng = random.Random()
         self.log = deque(maxlen=int(self.log_maxlen))
-        # safe to allocate here: the launcher mounts services inside the running event loop
-        self.sem = asyncio.Semaphore(max(int(self.spec.c), 1))
+        # allocated inside the launcher's running event loop
+        self.sem = asyncio.Semaphore(max(int(self.spec.c_srv), 1))
 
     def record_row(self, row: Dict[str, Any]) -> None:
-        """*record_row()* append a log row; count a drop if the deque was already full.
-
-        Called from `@logger` instead of `self.log.append(...)` so the overflow path is observable. `deque(maxlen=...)` silently drops the left-most element on append when full; we detect the drop by checking `len(self.log) == self.log.maxlen` before the append.
+        """record_row append a log row; count a drop if the deque was already full. Silently drops the left-most element on append when full;
 
         Args:
             row (Dict[str, Any]): one CSV row in the `LOG_COLUMNS` shape.
         """
+
         if len(self.log) == self.log.maxlen:
             self.dropped_count += 1
         self.log.append(row)
 
     def drain(self) -> List[Dict[str, Any]]:
-        """*drain()* swap the current log buffer for a fresh empty one and return the old contents. O(1) rebind; safe under concurrent appends.
+        """drain swap the current log buffer for a fresh empty one and return the old contents. O(1) rebind; safe under concurrent appends.
 
         Returns:
-            List[Dict[str, Any]]: every row buffered since the previous drain (or construction); the deque is reset to empty with the same `maxlen`.
+            List[Dict[str, Any]]: all rows buffered since the previous drain (or construction).
         """
         _snapshot = list(self.log)
+        # create a new deque instead of clearing the old
         self.log = deque(maxlen=int(self.log_maxlen))
         return _snapshot
 
     @property
     def c_in_use(self) -> int:
-        """*c_in_use* number of permits currently held (server slots busy).
+        """c_in_use number of currently busy servers slots.
 
-        `Semaphore._value` is the public-but-implementation-detail count of free permits; capacity minus free = in-use. Used by `@logger` to sample the PASTA observation `c_used_at_start`.
+        Returns:
+            int: number of permits currently held (server slots busy). Used by `@logger` to sample the PASTA observation `c_used_at_start`.
         """
+        # gets the `Semaphore._value` to count free server slots
         _free = int(getattr(self.sem, "_value", 0))
-        _cap = max(int(self.spec.c), 1)
+        _cap = max(int(self.spec.c_srv), 1)
         return max(_cap - _free, 0)
 
+    def try_admit(self) -> bool:
+        """try_admit cheks and count the in-flight requests against the spec.K max buffer capacity.
+
+        Doesnt need lock due to asyncio the read+increment is one Python step (no awaits between the compare and the bump),
+
+        Returns:
+            bool: True when admitted (counter incremented); False when rejected (counter unchanged).
+        """
+        # checks if there is available space
+        if not self.spec.enforce_limits:
+            self.in_flight += 1
+            return True
+        _K = int(self.spec.K)
+        # completely free, border case for release() method
+        if _K <= 0:
+            self.in_flight += 1
+            return True
+        # check if the queue has space
+        if self.in_flight >= _K:
+            return False
+        self.in_flight += 1
+        return True
+
+    def release(self) -> None:
+        """release reduce the inf_flight counter, signaling that a request has completed and freed up capacity.
+        """
+        # dont allow negative counter
+        if self.in_flight > 0:
+            self.in_flight -= 1
+
     def draw_svc_time(self) -> float:
-        """*draw_svc_time()* one exponential draw at rate `mu` from the seeded RNG; returns 0 when `mu == 0`."""
+        """draw_svc_time simulate the service time by drawing from the seeded RNG's exponential distribution at rate `mu`.
+
+        Returns:
+            float: service time in seconds. Returns 0 when `mu` is 0 or negative (no sleep).
+        """
         if self.spec.mu <= 0:
             return 0.0
         return self.rng.expovariate(self.spec.mu)
 
     def draw_eps(self) -> bool:
-        """*draw_eps()* one Bernoulli draw at rate `eps` from the seeded RNG; True means business failure fired."""
+        """draw_eps simulate the probability of error of the service by comparing the a random number from the seeded RNG to `epsilon`.
+
+        Returns:
+            bool: True means the services failed, False means it succeeded. When `epsilon` is 0 or negative, always returns False (no failure)..
+        """
         return self.rng.random() < self.spec.epsilon
 
     def flush_log(self,
                   csv_path: Path,
                   columns: tuple[str, ...] = LOG_COLUMNS) -> int:
-        """*flush_log()* write every buffered row to `csv_path` and clear the buffer. Overwrites (not appends) so a stale-schema CSV at the same path can never misalign new rows.
+        """flush_log writes all buffered log rows to a CSV at `csv_path` with the given column order, then clears the buffer. Overwrites (not appends) so a stale-schema CSV at the same path can never misalign new rows.
 
         Args:
             csv_path (Path): target CSV; parent directory is created if missing.
-            columns (tuple): column order; defaults to `LOG_COLUMNS`.
+            columns (tuple[str, ...], optional): column order; defaults to LOG_COLUMNS.
 
         Returns:
             int: number of rows written.
@@ -281,13 +328,11 @@ def make_base_app(title: str,
                   *,
                   healthz_fn: Optional[Callable[[], Dict[str, Any]]] = None,
                   ) -> FastAPI:
-    """*make_base_app()* bare FastAPI app exposing `/healthz` and no other route.
-
-    Practitioners attach invoke routes via `mount_atomic_svc` or `mount_composite_svc`, and attach service state via `app.state`.
+    """make_base_app exposes the FastAPI `/healthz` and no other route. Practitioners attach invoke routes wuth the functions `mount_atomic_svc` or `mount_composite_svc`, and attach service state via `app.state`.
 
     Args:
         title (str): FastAPI app title.
-        healthz_fn (Optional[Callable]): callback returning the `/healthz` payload. Defaults to `{"ok": True}`.
+        healthz_fn (Optional[Callable[[], Dict[str, Any]]], optional): callback returning the `/healthz` payload. Defaults to None.
 
     Returns:
         FastAPI: configured base app.
@@ -308,9 +353,7 @@ ExtFwdFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 
 class HttpForward:
-    """**HttpForward** async callback `(target, req) -> SvcResp` over HTTP.
-
-    Closes over a shared `httpx.AsyncClient` and a `SvcRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
+    """ HttpForward async callback `(target, req) -> SvcResp` over HTTP. Closes over a shared `httpx.AsyncClient` and a `SvcRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
     """
 
     def __init__(self,
@@ -320,11 +363,11 @@ class HttpForward:
         self._registry = registry
 
     async def __call__(self, target: str, req: SvcReq) -> SvcResp:
-        """*__call__()* POST `req` to `target`'s invoke URL; return the parsed response.
+        """__call__ POST `req` to `target`'s invoke URL; return the parsed response.
 
         Args:
             target (str): downstream service name.
-            req (SvcReq): request body, forwarded verbatim.
+            req (SvcReq): request body, forwarded verbatim as JSON with extra headers for tracing and memory-usage logging.
 
         Raises:
             httpx.HTTPStatusError: on non-2xx response (infrastructure failure).
@@ -335,7 +378,7 @@ class HttpForward:
         _r = await self._client.post(
             self._registry.build_invoke_url(target),
             json=req.model_dump(),
-            headers={"X-Request-Id": req.request_id,
+            headers={"X-Request-Id": req.req_id,
                      "X-Request-Size-Bytes": str(req.size_bytes),
                      "X-Request-Kind": req.kind})
         _r.raise_for_status()

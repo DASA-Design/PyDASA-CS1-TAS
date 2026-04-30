@@ -3,9 +3,7 @@
 Module services/vernier.py
 ==========================
 
-Vernier-service module (no class). One function, `mount_vernier_svc`, attaches a terminal echo handler to a FastAPI app for host-floor calibration. Mirrors `mount_atomic_svc` (admission semaphore, exponential service-time draw, Bernoulli epsilon, `@logger` row recording) but drops the routing axis entirely: vernier is a leaf service. The handler reads `req.payload['blob']` end-to-end so the request body actually traverses the kernel buffer + ASGI stack, making `phi` (memory-usage coefficient) informative on a constant-payload workload.
-
-The single `SvcSpec` knob set (mu, epsilon, c, K, mem_per_buffer) is supplied by the calibration runner from `data/config/method/calibration.json` keys (`payload_size_bytes`, `sweep_grid.c[0]`, `sweep_grid.K[0]`); see `notes/scale.md` for the resolution table.
+Terminal echo service for host-floor calibration. Mirrors `mount_atomic_svc` (K-gate, c-semaphore, mu sleep, eps draw, `@logger`) minus routing; reads `req.payload['blob']` end-to-end so `phi` is measurable on constant-payload workloads.
 
 Public API:
     - `mount_vernier_svc(app, spec, payload_size_bytes, *, route='/invoke') -> SvcCtx`
@@ -16,7 +14,7 @@ from __future__ import annotations
 import asyncio
 
 # web stack
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 # local modules
 from src.experiment.services.base import (SvcCtx,
@@ -51,37 +49,40 @@ def mount_vernier_svc(app: FastAPI,
 
     @logger(_ctx)
     async def _handler(req: SvcReq) -> SvcResp:
-        # 1. admission gate. spec.c permits cap concurrent in-service; excess
-        #    arrivals wait here and the wait becomes measurable Wq.
-        async with _ctx.sem:
-            mark_admit_time(_ctx.c_in_use)
+        # 0. K-bounded admission: reject before any state allocation when total in-flight (waiting at sem + in-service) is at capacity.
+        if not _ctx.try_admit():
+            raise HTTPException(
+                status_code=503,
+                detail=f"capacity exceeded (K={spec.K}) at {spec.name}")
+        try:
+            # 1. c-permit gate. spec.c caps concurrent in-service; excess admitted arrivals wait here and the wait becomes measurable Wq.
+            async with _ctx.sem:
+                mark_admit_time(_ctx.c_in_use)
 
-            _svc = _ctx.draw_svc_time()
-            if _svc > 0:
-                await asyncio.sleep(_svc)
+                _svc = _ctx.draw_svc_time()
+                if _svc > 0:
+                    await asyncio.sleep(_svc)
 
-            # 2. Bernoulli epsilon: structurally 0 at calibration time, but
-            #    the draw stays for code-path parity with mount_atomic_svc.
-            if _ctx.draw_eps():
-                return SvcResp(request_id=req.request_id,
-                               service_name=spec.name,
-                               success=False,
-                               message="bernoulli failure")
+                # 2. Bernoulli epsilon: structurally 0 at calibration time, but the draw stays for code-path parity with mount_atomic_svc.
+                if _ctx.draw_eps():
+                    return SvcResp(req_id=req.req_id,
+                                   srv_name=spec.name,
+                                   success=False,
+                                   message="bernoulli failure")
 
-            # 3. touch the payload end-to-end so the request body actually
-            #    traverses the kernel buffer + ASGI stack. Without this the
-            #    handler can return before the bytes leave the buffer and
-            #    phi (memory-usage coefficient) measures nothing.
-            _payload = req.payload or {}
-            _blob = _payload.get("blob", "")
-            _observed_size = len(_blob)
+                # 3. touch the payload end-to-end so the request body actually traverses the kernel buffer + ASGI stack. Without this the handler can return before the bytes leave the buffer and phi (memory-usage coefficient) measures nothing.
+                _payload = req.payload or {}
+                _blob = _payload.get("blob", "")
+                _observed_size = len(_blob)
 
-        # 4. terminal response; no downstream hop.
-        _msg = f"terminal size_bytes={_observed_size} declared={_declared_size}"
-        return SvcResp(request_id=req.request_id,
-                       service_name=spec.name,
-                       success=True,
-                       message=_msg)
+            # 4. terminal response; no downstream hop.
+            _msg = f"terminal size_bytes={_observed_size} declared={_declared_size}"
+            return SvcResp(req_id=req.req_id,
+                           srv_name=spec.name,
+                           success=True,
+                           message=_msg)
+        finally:
+            _ctx.release()
 
     _ctx.handler = _handler
 

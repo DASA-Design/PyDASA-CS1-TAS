@@ -70,9 +70,9 @@ def _recorded_forward(_calls: List[Tuple[str, str]]):
     """*_recorded_forward()* build a forward closure that appends `(target, request_id)` to `_calls`."""
 
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        _calls.append((target, req.request_id))
-        _res = SvcResp(request_id=req.request_id,
-                       service_name=target,
+        _calls.append((target, req.req_id))
+        _res = SvcResp(req_id=req.req_id,
+                       srv_name=target,
                        success=True,
                        message="recorded")
         return _res
@@ -128,8 +128,8 @@ async def _demo() -> None:
     print(f"  POST /TAS_1/invoke  status = {_r.status_code}")
     print(f"  body                      = {_r.json()}")
     for _name, _ctx in _app.state.tas_components.items():
-        _rid = _ctx.log[0]["request_id"] if _ctx.log else None
-        print(f"    {_name:<10}  log_rows={len(_ctx.log)}  request_id={_rid}")
+        _rid = _ctx.log[0]["req_id"] if _ctx.log else None
+        print(f"    {_name:<10}  log_rows={len(_ctx.log)}  req_id={_rid}")
     _row = _app.state.tas_components["TAS_{1}"].log[0]
     print(f"  LOG_COLUMNS present       = "
           f"{sorted(set(LOG_COLUMNS).intersection(_row))}")

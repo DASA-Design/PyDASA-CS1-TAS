@@ -6,6 +6,7 @@ Module test_atomic.py
 Unit tests for `src/experiment/services/atomic.py`:
 
     - **TestMountAtomicService** healthz + terminal path + ε=1 business failure + non-terminal single-target forward.
+    - **TestAtomicKGate** K-bounded admission gate produces 503 at capacity, releases on every exit path, and disables when `spec.K<=0`.
 """
 # native python modules
 import asyncio
@@ -43,9 +44,9 @@ async def _noop_forward(_target: str, _req: SvcReq) -> SvcResp:
 def _recorded_forward(calls: List[Tuple[str, str]]):
     """*_recorded_forward()* external-forward stub that logs `(target, request_id)` and returns success."""
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        calls.append((target, req.request_id))
-        return SvcResp(request_id=req.request_id,
-                               service_name=target,
+        calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                               srv_name=target,
                                success=True,
                                message="recorded")
     return _fwd
@@ -80,7 +81,7 @@ class TestMountAtomicService:
         assert _body["success"] is True
         assert _body["message"] == "terminal"
         assert len(_app.state.ctx.log) == 1
-        assert _app.state.ctx.log[0]["request_id"] == _req.request_id
+        assert _app.state.ctx.log[0]["req_id"] == _req.req_id
 
     @pytest.mark.asyncio
     async def test_epsilon_one_always_business_fails(self):
@@ -102,8 +103,8 @@ class TestMountAtomicService:
 
     @pytest.mark.asyncio
     async def test_epsilon_zero_never_fails(self):
-        """*test_epsilon_zero_never_fails()* `epsilon=0.0` makes every response succeed; run 20 calls to confirm the Bernoulli never fires at the floor."""
-        _s = _spec(epsilon=0.0)
+        """*test_epsilon_zero_never_fails()* `epsilon=0.0` makes every response succeed; run 20 calls to confirm the Bernoulli never fires at the floor. Concurrency stays under K (gate-disabled via K=0) so the test isolates epsilon behaviour from admission rejection."""
+        _s = _spec(epsilon=0.0, K=0)
         _app = self._make_app(_s)
         _transport = httpx.ASGITransport(app=_app)
         async with httpx.AsyncClient(transport=_transport,
@@ -113,6 +114,33 @@ class TestMountAtomicService:
                 for _ in range(20)]
             _responses = await asyncio.gather(*_tasks)
         assert all(_r.json()["success"] for _r in _responses)
+
+    @pytest.mark.asyncio
+    async def test_K_zero_skips_gate(self):
+        """*test_K_zero_skips_gate()* `spec.K=0` disables the gate; every concurrent call gets through (no 503)."""
+        _s = _spec(K=0, mu=0.0)
+        _app = self._make_app(_s)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t") as _c:
+            _tasks = [asyncio.create_task(
+                _c.post("/invoke", json=SvcReq().model_dump()))
+                for _ in range(20)]
+            _responses = await asyncio.gather(*_tasks)
+        assert all(_r.status_code == 200 for _r in _responses)
+
+    @pytest.mark.asyncio
+    async def test_K_release_after_response(self):
+        """*test_K_release_after_response()* in_flight returns to 0 after every successful completion."""
+        _s = _spec(K=4, mu=10000.0)
+        _app = self._make_app(_s)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t") as _c:
+            for _ in range(5):
+                _r = await _c.post("/invoke", json=SvcReq().model_dump())
+                assert _r.status_code == 200
+        assert _app.state.ctx.in_flight == 0
 
     @pytest.mark.asyncio
     async def test_non_terminal_forwards_to_single_target(self):
@@ -128,4 +156,75 @@ class TestMountAtomicService:
             _req = SvcReq(kind="analyse", size_bytes=64)
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
-        assert _calls == [("TAS_{4}", _req.request_id)]
+        assert _calls == [("TAS_{4}", _req.req_id)]
+
+
+class TestAtomicKGate:
+    """**TestAtomicKGate** K-bounded admission rejects with HTTP 503 once `in_flight >= K`; counter releases on every exit path; CSV records the rejection."""
+
+    def _make_app(self, spec: SvcSpec) -> FastAPI:
+        _app = make_base_app(f"test::{spec.name}",
+                             healthz_fn=lambda: {"name": spec.name})
+        mount_atomic_svc(_app, spec, [], _noop_forward)
+        return _app
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_in_flight_exceeds_K(self):
+        """*test_returns_503_when_in_flight_exceeds_K()* fire 12 concurrent requests at a slow service with c=1, K=3 -> at least 9 see HTTP 503; counter respects K."""
+        _s = _spec(c=1, K=3, mu=20.0)
+        _app = self._make_app(_s)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            _tasks = [asyncio.create_task(
+                _c.post("/invoke", json=SvcReq().model_dump()))
+                for _ in range(12)]
+            _responses = await asyncio.gather(*_tasks)
+        _codes = [_r.status_code for _r in _responses]
+        _503 = sum(1 for _x in _codes if _x == 503)
+        _200 = sum(1 for _x in _codes if _x == 200)
+        assert _503 >= 9
+        assert _200 <= 3
+        assert _app.state.ctx.in_flight == 0
+
+    @pytest.mark.asyncio
+    async def test_csv_row_records_503_status(self):
+        """*test_csv_row_records_503_status()* every rejected request lands one CSV row with `status_code=503` and `success=False`."""
+        _s = _spec(c=1, K=2, mu=20.0)
+        _app = self._make_app(_s)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            _tasks = [asyncio.create_task(
+                _c.post("/invoke", json=SvcReq().model_dump()))
+                for _ in range(8)]
+            await asyncio.gather(*_tasks)
+        _rows = list(_app.state.ctx.log)
+        _503_rows = [_r for _r in _rows if _r["status_code"] == 503]
+        assert len(_503_rows) >= 6
+        for _r in _503_rows:
+            assert _r["success"] is False
+            assert _r["srv_name"] == _s.name
+
+    @pytest.mark.asyncio
+    async def test_K_release_after_handler_exception(self):
+        """*test_K_release_after_handler_exception()* downstream forward raises -> `in_flight` still decrements via the finally branch."""
+        async def _raising_forward(_t: str, _req: SvcReq) -> SvcResp:
+            raise httpx.HTTPError("simulated downstream failure")
+
+        _s = _spec(c=2, K=4, mu=2000.0)
+        _app = make_base_app(f"test::{_s.name}",
+                             healthz_fn=lambda: {"name": _s.name})
+        mount_atomic_svc(_app, _s, [("DOWNSTREAM", 1.0)], _raising_forward)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            for _ in range(5):
+                try:
+                    await _c.post("/invoke", json=SvcReq().model_dump())
+                except Exception:
+                    pass
+        assert _app.state.ctx.in_flight == 0

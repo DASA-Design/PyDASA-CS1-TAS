@@ -198,6 +198,7 @@ def _build_specs_from_cfg(cfg: NetCfg,
             K=_K,
             seed=derive_seed(root_seed, _a.key),
             mem_per_buffer=int(_K * int(avg_request_size_bytes) * _headroom),
+            enforce_limits=bool(cfg.enforce_limits),
         )
     return _specs
 

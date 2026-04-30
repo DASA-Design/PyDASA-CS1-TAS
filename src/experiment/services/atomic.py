@@ -10,7 +10,7 @@ Two optional extension points let composite callers (TAS target system) reuse th
     - `pick_target`: replace the Jackson-weighted pick with a custom target-picker (e.g. kind-based dispatch). Return `None` to force the terminal branch.
     - `dispatch`: replace the forward step (e.g. "check an in-process handler dict first; fall back to `external_forward`").
 
-Both default to the plain atomic behaviour used by third-party services (MAS / AS / DS). Queueing stays emergent; no admission counters or semaphores are simulated.
+Both default to the plain atomic behaviour used by third-party services (MAS / AS / DS). Concurrency is gated by two real resource limits: the `c`-permit semaphore on in-service handlers and a `K` counter on total in-flight (waiting + in-service). At K capacity the handler raises HTTP 503 before allocating any further state, so the service rejects rather than growing the buffer without bound. Set `spec.K <= 0` to disable the gate.
 """
 # native python modules
 from __future__ import annotations
@@ -19,7 +19,7 @@ import asyncio
 from typing import Awaitable, Callable, List, Optional, Tuple
 
 # web stack
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 # local modules
 from src.experiment.services.base import (ExtFwdFn,
@@ -80,37 +80,45 @@ def mount_atomic_svc(app: FastAPI,
 
     @logger(_ctx)
     async def _handler(req: SvcReq) -> SvcResp:
-        # 1. admission gate; held around local work only so composite chains do not deadlock.
-        async with _ctx.sem:
-            # post-admit timestamp + admitted concurrency for `@logger` Wq.
-            mark_admit_time(_ctx.c_in_use)
+        # 0. K-bounded admission: reject before any state allocation when total in-flight (waiting at sem + in-service) is at capacity.
+        if not _ctx.try_admit():
+            raise HTTPException(
+                status_code=503,
+                detail=f"capacity exceeded (K={spec.K}) at {spec.name}")
+        try:
+            # 1. c-permit gate; held around local work only so composite chains do not deadlock.
+            async with _ctx.sem:
+                # post-admit timestamp + admitted concurrency for `@logger` Wq.
+                mark_admit_time(_ctx.c_in_use)
 
-            _svc = _ctx.draw_svc_time()
-            if _svc > 0:
-                await asyncio.sleep(_svc)
+                _svc = _ctx.draw_svc_time()
+                if _svc > 0:
+                    await asyncio.sleep(_svc)
 
-            # 2. Bernoulli epsilon: local business failure (still holds permit)
-            if _ctx.draw_eps():
-                return SvcResp(request_id=req.request_id,
-                               service_name=spec.name,
-                               success=False,
-                               message="bernoulli failure")
+                # 2. Bernoulli epsilon: local business failure (still holds permit)
+                if _ctx.draw_eps():
+                    return SvcResp(req_id=req.req_id,
+                                   srv_name=spec.name,
+                                   success=False,
+                                   message="bernoulli failure")
 
-        # 3. pick target; terminal branch leaves `local_end_ts` defaulted to `end_ts`.
-        _target = pick_target(_ctx, req)
-        if _target is None:
-            return SvcResp(request_id=req.request_id,
-                           service_name=spec.name,
-                           success=True,
-                           message="terminal")
+            # 3. pick target; terminal branch leaves `local_end_ts` defaulted to `end_ts`.
+            _target = pick_target(_ctx, req)
+            if _target is None:
+                return SvcResp(req_id=req.req_id,
+                               srv_name=spec.name,
+                               success=True,
+                               message="terminal")
 
-        # 4. dispatch; `mark_local_end()` brackets local B from the downstream await.
-        mark_local_end()
-        _inner = await dispatch(_target, req)
-        return SvcResp(request_id=req.request_id,
-                       service_name=spec.name,
-                       success=_inner.success,
-                       message=_inner.message)
+            # 4. dispatch; `mark_local_end()` brackets local B from the downstream await.
+            mark_local_end()
+            _inner = await dispatch(_target, req)
+            return SvcResp(req_id=req.req_id,
+                           srv_name=spec.name,
+                           success=_inner.success,
+                           message=_inner.message)
+        finally:
+            _ctx.release()
 
     _ctx.handler = _handler
 

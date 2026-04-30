@@ -45,9 +45,9 @@ def _banner(_s: str) -> None:
 async def _recorded_forward_factory(_calls: List[Tuple[str, str]]):
     """*_recorded_forward_factory()* build a forward closure that appends `(target, request_id)` to `_calls` and returns `success=True`."""
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        _calls.append((target, req.request_id))
-        return SvcResp(request_id=req.request_id,
-                       service_name=target,
+        _calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                       srv_name=target,
                        success=True,
                        message="recorded")
     return _fwd
@@ -117,8 +117,8 @@ async def _demo() -> None:
     async def _handler(req: SvcReq) -> SvcResp:
         # small sleep so recv_ts < end_ts is visible in the row. In the real atomic handler this is `asyncio.sleep(expovariate(mu))`; here we just await a fixed 5 ms so the demo prints non-zero work.
         await asyncio.sleep(0.005)
-        return SvcResp(request_id=req.request_id,
-                       service_name=_ctx2.spec.name,
+        return SvcResp(req_id=req.req_id,
+                       srv_name=_ctx2.spec.name,
                        success=True,
                        message="ok")
 

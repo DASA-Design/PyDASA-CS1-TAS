@@ -154,6 +154,7 @@ class NetCfg:
         label (str): human-readable scenario label (from `_labels`).
         artifacts (List[ArtifactSpec]): resolved artifact specs in positional order.
         routing (np.ndarray): NxN routing-probability matrix; `row = source`, `col = dest`.
+        enforce_limits (bool): umbrella switch for runtime resource gates (read from the source layer's `enforce_limits` key; defaults to True). Plumbed into every `SvcSpec` built from this config so the launcher's K-admission gate can be disabled profile-wide without per-artifact overrides.
     """
 
     profile: str
@@ -161,6 +162,7 @@ class NetCfg:
     label: str
     artifacts: List[ArtifactSpec]
     routing: np.ndarray
+    enforce_limits: bool = True
 
     @property
     def n_nodes(self) -> int:
@@ -290,6 +292,7 @@ def load_profile(adaptation: Optional[str] = None,
     _label = _env["_labels"].get(_scenario, "")
 
     _block = _doc[source]
+    _enforce = bool(_block.get("enforce_limits", True))
     _artifacts: List[ArtifactSpec] = []
     for _key in _node_keys:
         _a = _block[_key]
@@ -310,7 +313,8 @@ def load_profile(adaptation: Optional[str] = None,
                   _scenario,
                   _label,
                   _artifacts,
-                  _routing,)
+                  _routing,
+                  _enforce,)
     return _cfg
 
 

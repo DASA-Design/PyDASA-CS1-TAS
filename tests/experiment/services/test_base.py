@@ -8,6 +8,7 @@ Unit tests for `src/experiment/services/base.py`:
     - **TestServiceSpec** frozen dataclass fields + `buffer_budget_bytes`.
     - **TestDeriveSeed** deterministic per-component seed derivation.
     - **TestServiceContextRng** per-service seeded RNG draws + log buffer wiring.
+    - **TestSvcCtxKAdmission** K-bounded admission gate (`try_admit` / `release` / `in_flight`).
     - **TestLogColumns** the frozen CSV schema.
     - **TestMakeBaseApp** bare app + `/healthz` + custom callback.
     - **TestHttpForward** async `(target, req) -> SvcResp` callback over HTTP.
@@ -69,6 +70,17 @@ class TestServiceSpec:
     def test_buffer_budget_reports_declared(self):
         _s = _spec(mem_per_buffer=4096)
         assert _s.buffer_budget_bytes == 4096
+
+    def test_enforce_limits_default_true(self):
+        """*test_enforce_limits_default_true()* the umbrella switch defaults to True so legacy profiles keep the K-tactic active without an explicit JSON edit."""
+        _s = SvcSpec(name="X", role="atomic", port=9000,
+                     mu=100.0, epsilon=0.0, c=1, K=10)
+        assert _s.enforce_limits is True
+
+    def test_enforce_limits_can_be_disabled(self):
+        """*test_enforce_limits_can_be_disabled()* the field accepts False (profile-wide opt-out)."""
+        _s = _spec(enforce_limits=False)
+        assert _s.enforce_limits is False
 
     def test_headroom_factor_is_1_5(self):
         assert SvcSpec.MEM_HEADROOM_FACTOR == 1.5
@@ -170,6 +182,85 @@ class TestServiceContextLogBuffer:
         assert _ctx.log.maxlen == 16
 
 
+class TestSvcCtxKAdmission:
+    """**TestSvcCtxKAdmission** K-bounded admission gate: counter-based check-and-increment against `spec.K`."""
+
+    def test_try_admit_succeeds_below_K(self):
+        """*test_try_admit_succeeds_below_K()* admits and increments while `in_flight < K`."""
+        _ctx = SvcCtx(spec=_spec(K=3))
+        assert _ctx.in_flight == 0
+        assert _ctx.try_admit() is True
+        assert _ctx.in_flight == 1
+        assert _ctx.try_admit() is True
+        assert _ctx.in_flight == 2
+        assert _ctx.try_admit() is True
+        assert _ctx.in_flight == 3
+
+    def test_try_admit_rejects_at_K(self):
+        """*test_try_admit_rejects_at_K()* returns False without mutating in_flight once at capacity."""
+        _ctx = SvcCtx(spec=_spec(K=2))
+        assert _ctx.try_admit() is True
+        assert _ctx.try_admit() is True
+        assert _ctx.in_flight == 2
+        assert _ctx.try_admit() is False
+        assert _ctx.in_flight == 2
+        assert _ctx.try_admit() is False
+        assert _ctx.in_flight == 2
+
+    def test_release_decrements_counter(self):
+        """*test_release_decrements_counter()* one decrement per release; symmetric with admit."""
+        _ctx = SvcCtx(spec=_spec(K=3))
+        _ctx.try_admit()
+        _ctx.try_admit()
+        assert _ctx.in_flight == 2
+        _ctx.release()
+        assert _ctx.in_flight == 1
+        _ctx.release()
+        assert _ctx.in_flight == 0
+
+    def test_release_clamped_at_zero(self):
+        """*test_release_clamped_at_zero()* over-release is a no-op; counter never goes negative."""
+        _ctx = SvcCtx(spec=_spec(K=2))
+        assert _ctx.in_flight == 0
+        _ctx.release()
+        _ctx.release()
+        assert _ctx.in_flight == 0
+
+    def test_K_zero_disables_gate(self):
+        """*test_K_zero_disables_gate()* `spec.K=0` makes the gate always admit (legacy unbounded)."""
+        _ctx = SvcCtx(spec=_spec(K=0))
+        for _ in range(100):
+            assert _ctx.try_admit() is True
+        assert _ctx.in_flight == 100
+
+    def test_K_negative_disables_gate(self):
+        """*test_K_negative_disables_gate()* `spec.K<0` is treated identically to K=0."""
+        _ctx = SvcCtx(spec=_spec(K=-1))
+        for _ in range(50):
+            assert _ctx.try_admit() is True
+
+    def test_enforce_limits_false_disables_gate_with_K_set(self):
+        """*test_enforce_limits_false_disables_gate_with_K_set()* `enforce_limits=False` makes the gate always admit even when `spec.K > 0`."""
+        _ctx = SvcCtx(spec=_spec(K=3, enforce_limits=False))
+        for _ in range(20):
+            assert _ctx.try_admit() is True
+        assert _ctx.in_flight == 20
+
+    def test_enforce_limits_true_with_K_zero_still_disables(self):
+        """*test_enforce_limits_true_with_K_zero_still_disables()* the K<=0 sentinel takes precedence; the gate is a no-op even with the umbrella switch on."""
+        _ctx = SvcCtx(spec=_spec(K=0, enforce_limits=True))
+        for _ in range(50):
+            assert _ctx.try_admit() is True
+
+    def test_admit_release_cycle_returns_to_zero(self):
+        """*test_admit_release_cycle_returns_to_zero()* balanced admit/release pairs leave the counter at 0."""
+        _ctx = SvcCtx(spec=_spec(K=4))
+        for _ in range(20):
+            assert _ctx.try_admit() is True
+            _ctx.release()
+        assert _ctx.in_flight == 0
+
+
 # ---- LOG_COLUMNS frozen schema -----------------------------------------
 
 
@@ -178,7 +269,7 @@ class TestLogColumns:
 
     def test_exact_tuple(self):
         assert LOG_COLUMNS == (
-            "request_id", "service_name", "kind",
+            "req_id", "srv_name", "kind",
             "recv_ts", "start_ts", "local_end_ts", "end_ts",
             "c_used_at_start",
             "success", "status_code",
@@ -238,8 +329,8 @@ class TestHttpForward:
         def _handler(request: httpx.Request) -> httpx.Response:
             _captured["url"] = str(request.url)
             _captured["headers"] = dict(request.headers)
-            _body = {"request_id": request.headers.get("x-request-id"),
-                     "service_name": "MAS_{1}",
+            _body = {"req_id": request.headers.get("x-request-id"),
+                     "srv_name": "MAS_{1}",
                      "success": True,
                      "message": "ok"}
             return httpx.Response(200, json=_body)
@@ -251,7 +342,7 @@ class TestHttpForward:
             _resp = await _fwd("MAS_{1}", _req)
         assert _resp.success is True
         assert _captured["url"] == "http://127.0.0.1:9000/invoke"
-        assert _captured["headers"].get("x-request-id") == _req.request_id
+        assert _captured["headers"].get("x-request-id") == _req.req_id
         assert _captured["headers"].get("x-request-size-bytes") == "256"
         assert _captured["headers"].get("x-request-kind") == "analyse"
 
@@ -262,7 +353,7 @@ class TestHttpForward:
 
         def _handler(request: httpx.Request) -> httpx.Response:
             _captured["url"] = str(request.url)
-            _body = {"request_id": "x", "service_name": "TAS_{4}",
+            _body = {"req_id": "x", "srv_name": "TAS_{4}",
                      "success": True, "message": "ok"}
             return httpx.Response(200, json=_body)
 
@@ -277,8 +368,8 @@ class TestHttpForward:
         """HTTP 200 with body.success=False is a business failure; HttpForward returns it without raising."""
         def _handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={
-                "request_id": "x",
-                "service_name": "MAS_{1}",
+                "req_id": "x",
+                "srv_name": "MAS_{1}",
                 "success": False,
                 "message": "bernoulli failure",
             })

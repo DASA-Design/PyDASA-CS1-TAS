@@ -58,13 +58,14 @@ import json
 import os
 import platform
 import socket
+import subprocess
 import sys
 import threading
 import time
 import weakref
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 
 # scientific stack
 import numpy as np
@@ -102,6 +103,9 @@ def _load_cfg() -> Dict[str, Any]:
 
 _CALIB_CFG: Dict[str, Any] = _load_cfg()
 
+# polymorphic return for `_run_sweep_in_dedicated_loop`; lets each caller's orchestrator return type flow through unchanged
+_T = TypeVar("_T")
+
 _DEFAULT_TIMER_SAMPLES = int(_CALIB_CFG.get("timer_samples", 0))
 _DEFAULT_JITTER_SAMPLES = int(_CALIB_CFG.get("jitter_samples", 0))
 _DEFAULT_LOOPBACK_SAMPLES = int(_CALIB_CFG.get("loopback_samples", 0))
@@ -118,9 +122,10 @@ _DEFAULT_SKIP_JITTER = bool(_CALIB_CFG.get("skip_jitter", False))
 _DEFAULT_SKIP_LOOPBACK = bool(_CALIB_CFG.get("skip_loopback", False))
 # per-request body size (bytes) for the phi coefficient; 0 -> NaN, 131072 (128 kB) -> phi resolves to L/K
 _DEFAULT_PAYLOAD_SIZE_BYTES = int(_CALIB_CFG.get("payload_size_bytes", 0))
-# quiet windows between phase-4 levels + phase-5 trials; lets uvicorn drain before the next ramp (default 0.0 = legacy no-delay)
+# quiet windows: between phase-4 n_con_usr levels (same server), between phase-5 rate-sweep rates (same vernier), and between multi-combo sweep combos (server rebind, TIME_WAIT drain). Defaults 0.0 keep legacy no-delay behaviour.
 _DEFAULT_INTER_LEVEL_DELAY_S = float(_CALIB_CFG.get("inter_level_delay_s", 0.0))
 _DEFAULT_INTER_TRIAL_DELAY_S = float(_CALIB_CFG.get("inter_trial_delay_s", 0.0))
+_DEFAULT_INTER_COMBO_DELAY_S = float(_CALIB_CFG.get("inter_combo_delay_s", 0.0))
 
 # rate-sweep: drives the standalone ping/echo vernier at increasing rates; opt-in via config or --rate-sweep
 _DEFAULT_SKIP_RATE_SWEEP = bool(_CALIB_CFG.get("skip_rate_sweep", True))
@@ -172,6 +177,47 @@ def _windows_timer_resolution(period_ms: int = 1):
         _winmm.timeEndPeriod(int(period_ms))
 
 
+def _read_total_ram_gb_windows() -> float:
+    """*_read_total_ram_gb_windows()* total physical RAM via Win32 `GlobalMemoryStatusEx`."""
+    class _MEMSTAT(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_uint32),
+            ("dwMemoryLoad", ctypes.c_uint32),
+            ("ullTotalPhys", ctypes.c_uint64),
+            ("ullAvailPhys", ctypes.c_uint64),
+            ("ullTotalPageFile", ctypes.c_uint64),
+            ("ullAvailPageFile", ctypes.c_uint64),
+            ("ullTotalVirtual", ctypes.c_uint64),
+            ("ullAvailVirtual", ctypes.c_uint64),
+            ("sullAvailExtendedVirtual", ctypes.c_uint64),
+        ]
+
+    _stat = _MEMSTAT()
+    _stat.dwLength = ctypes.sizeof(_MEMSTAT)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_stat))
+    return float(_stat.ullTotalPhys) / (1024 ** 3)
+
+
+def _read_total_ram_gb_linux() -> Optional[float]:
+    """*_read_total_ram_gb_linux()* total physical RAM via `/proc/meminfo::MemTotal`."""
+    with open("/proc/meminfo", "r", encoding="utf-8") as _fh:
+        for _line in _fh:
+            if _line.startswith("MemTotal:"):
+                _kb = float(_line.split()[1])
+                return _kb / (1024 ** 2)
+    return None
+
+
+def _read_total_ram_gb_macos() -> float:
+    """*_read_total_ram_gb_macos()* total physical RAM via `sysctl -n hw.memsize`."""
+    _out = subprocess.check_output(["sysctl",
+                                    "-n",
+                                    "hw.memsize"],
+                                   text=True,
+                                   timeout=2.0)
+    return float(_out.strip()) / (1024 ** 3)
+
+
 def snapshot_host_profile() -> Dict[str, Any]:
     """*snapshot_host_profile()* capture OS, CPU, RAM, python identity for the envelope.
 
@@ -180,47 +226,28 @@ def snapshot_host_profile() -> Dict[str, Any]:
     Returns:
         dict: hostname, os, cpu_count, python, timer resolution guesses.
     """
+    # str-bound to defeat Literal narrowing on sys.platform
+    _platform: str = sys.platform
     _mem_gb: Optional[float] = None
     try:
-        if sys.platform == "win32":
-
-            class _MEMSTAT(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_uint32),
-                    ("dwMemoryLoad", ctypes.c_uint32),
-                    ("ullTotalPhys", ctypes.c_uint64),
-                    ("ullAvailPhys", ctypes.c_uint64),
-                    ("ullTotalPageFile", ctypes.c_uint64),
-                    ("ullAvailPageFile", ctypes.c_uint64),
-                    ("ullTotalVirtual", ctypes.c_uint64),
-                    ("ullAvailVirtual", ctypes.c_uint64),
-                    ("sullAvailExtendedVirtual", ctypes.c_uint64),
-                ]
-
-            _stat = _MEMSTAT()
-            _stat.dwLength = ctypes.sizeof(_MEMSTAT)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_stat))
-            _total_phys = float(_stat.ullTotalPhys)
-            _mem_gb = _total_phys / (1024 ** 3)
-    except (OSError, AttributeError):
+        if _platform == "win32":
+            _mem_gb = _read_total_ram_gb_windows()
+        elif _platform.startswith("linux"):
+            _mem_gb = _read_total_ram_gb_linux()
+        elif _platform == "darwin":
+            _mem_gb = _read_total_ram_gb_macos()
+    except (OSError, AttributeError, ValueError, FileNotFoundError,
+            subprocess.SubprocessError):
         _mem_gb = None
 
-    _hostname = socket.gethostname()
-    _os = platform.platform()
-    _py_ver = platform.python_version()
-    _py_impl = platform.python_implementation()
-    _cpu_count = os.cpu_count()
-    _cpu_machine = platform.machine()
-    _cpu_processor = platform.processor()
-
     _profile = {
-        "hostname": _hostname,
-        "os": _os,
-        "python": _py_ver,
-        "python_impl": _py_impl,
-        "cpu_count": _cpu_count,
-        "cpu_machine": _cpu_machine,
-        "cpu_processor": _cpu_processor,
+        "hostname": socket.gethostname(),
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "python_impl": platform.python_implementation(),
+        "cpu_count": os.cpu_count(),
+        "cpu_machine": platform.machine(),
+        "cpu_processor": platform.processor(),
         "ram_total_gb": _mem_gb,
     }
     return _profile
@@ -247,20 +274,20 @@ def measure_timer(samples: int) -> Dict[str, float]:
             _deltas.append(_d)
         else:
             _zero += 1
-    if not _deltas:
-        return {
-            "min_ns": 0,
-            "median_ns": 0.0,
-            "mean_ns": 0.0,
-            "std_ns": 0.0,
-            "zero_frac": 1.0,
-        }
-    _arr = np.asarray(_deltas, dtype=np.int64)
-    _min = int(_arr.min())
-    _median = float(np.median(_arr))
-    _mean = float(_arr.mean())
-    _std = float(_arr.std())
-    _zero_frac = float(_zero / samples)
+    if _deltas:
+        _arr = np.asarray(_deltas, dtype=np.int64)
+        _min = int(_arr.min())
+        _median = float(np.median(_arr))
+        _mean = float(_arr.mean())
+        _std = float(_arr.std())
+        _zero_frac = float(_zero / samples)
+    else:
+        _min = 0
+        _median = 0.0
+        _mean = 0.0
+        _std = 0.0
+        _zero_frac = 1.0
+
     _result = {
         "min_ns": _min,
         "median_ns": _median,
@@ -288,6 +315,7 @@ def measure_jitter(samples: int) -> Dict[str, float]:
         time.sleep(0.001)
         _t2 = time.perf_counter_ns()
         _jitters.append((_t2 - _t1) - _JITTER_TARGET_NS)
+
     _arr = np.asarray(_jitters, dtype=np.int64)
     _us = _arr / 1000.0
     _mean = float(_us.mean())
@@ -295,6 +323,7 @@ def measure_jitter(samples: int) -> Dict[str, float]:
     _p50 = float(np.percentile(_us, 50))
     _p99 = float(np.percentile(_us, 99))
     _max = float(_us.max())
+
     _result = {
         "mean_us": _mean,
         "std_us": _std,
@@ -1959,16 +1988,16 @@ def _resolve_sweep_grid(sweep_grid: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return dict(sweep_grid)
 
 
-def _run_sweep_in_dedicated_loop(orchestrator) -> Dict[str, Dict[str, Any]]:
+def _run_sweep_in_dedicated_loop(orchestrator: Callable[[], Awaitable[_T]]) -> _T:
     """*_run_sweep_in_dedicated_loop()* execute the orchestrator on a fresh thread with its own event loop and return its result.
 
-    Mirrors `_run_probes_in_dedicated_loop` but is generic over the coroutine instead of pinned to `_run_async_probes`. Lets the sweep execute cleanly from a Jupyter cell where the ambient loop would otherwise block.
+    Generic over the orchestrator return type so each caller's typed result flows through unchanged. Lets the sweep execute cleanly from a Jupyter cell where the ambient loop would otherwise block.
 
     Args:
-        orchestrator: zero-arg async callable returning the sweep dict.
+        orchestrator: zero-arg async callable returning the sweep result.
 
     Returns:
-        Dict[str, Dict[str, Any]]: sweep result.
+        Whatever the orchestrator returned.
 
     Raises:
         Exception: re-raises any exception that fired inside the worker thread.
@@ -2010,7 +2039,7 @@ def run_calib_sweep(envelope: Dict[str, Any],
                     verbose: bool = True) -> Dict[str, Dict[str, Any]]:
     """*run_calib_sweep()* drive vernier across `(c, K, mu_factor)` and derive the dim card per combo.
 
-    For each combo on `sweep_grid.c x sweep_grid.K x sweep_grid.mu_factor`: spin up a fresh vernier with the combo spec, ramp `lambda` from `lambda_factor_min*mu` up to `util_threshold*mu*c` across `lambda_steps` points, drive each step for `max_probe_window_s` seconds, aggregate latencies into a synthetic `handler_scaling`-shaped block, and feed that to the same derivation pipeline `derive_calib_coefs` uses. Returns nested `{combo_tag: per_combo_card}` matching the shape consumed by `src.view.plot_yoly_chart`. Inter-combo waits read `inter_trial_delay_s` from the same JSON config so port lifecycles are clean.
+    For each combo on `sweep_grid.c x sweep_grid.K x sweep_grid.mu_factor`: spin up a fresh vernier with the combo spec, ramp `lambda` from `lambda_factor_min*mu` up to `util_threshold*mu*c` across `lambda_steps` points, drive each step for `max_probe_window_s` seconds, aggregate latencies into a synthetic `handler_scaling`-shaped block, and feed that to the same derivation pipeline `derive_calib_coefs` uses. Returns nested `{combo_tag: per_combo_card}` matching the shape consumed by `src.view.plot_yoly_chart`. Inter-combo waits read `inter_combo_delay_s` from the same JSON config so uvicorn rebinds and TIME_WAIT drains cleanly between combos.
 
     Per-combo `mu` resolves through `_resolve_mu_anchor`: explicit `sweep_grid.mu_anchor_req_per_s` first, then named `sweep_grid.mu_anchor_source` (defaults to `"loopback.median_us"`). Provenance is recorded on every per-combo `meta` block so plot legends can show which anchor each combo used.
 
@@ -2032,7 +2061,7 @@ def run_calib_sweep(envelope: Dict[str, Any],
         return {}
 
     _payload_bytes = int(_DEFAULT_PAYLOAD_SIZE_BYTES)
-    _inter_trial_s = float(_DEFAULT_INTER_TRIAL_DELAY_S)
+    _inter_combo_s = float(_DEFAULT_INTER_COMBO_DELAY_S)
     _probe_window_s = float(_grid.get("max_probe_window_s",
                                       _DEFAULT_RATE_SWEEP_PROBE_S))
     _mu_factors = [float(_v) for _v in _grid.get("mu_factor", [1.0])]
@@ -2119,8 +2148,8 @@ def run_calib_sweep(envelope: Dict[str, Any],
                     _card["meta"] = _meta
                     _out[_tag] = _card
                     # quiet window between combos: lets uvicorn release the port + TCP TIME_WAIT drain
-                    if _combo_idx < _total and _inter_trial_s > 0.0:
-                        await asyncio.sleep(_inter_trial_s)
+                    if _combo_idx < _total and _inter_combo_s > 0.0:
+                        await asyncio.sleep(_inter_combo_s)
         return _out
 
     _sweep = _run_sweep_in_dedicated_loop(_orchestrate)

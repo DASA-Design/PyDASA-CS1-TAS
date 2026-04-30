@@ -360,15 +360,15 @@ class ClientSimulator:
 
         # FR-3.7: derive request_id from the client's seeded RNG rather than an unseeded uuid4(), so two runs at the same config seed produce byte-identical request streams (payload + id)
         _rid = str(uuid.UUID(int=self._rng.getrandbits(128), version=4))
-        _req = SvcReq(request_id=_rid,
+        _req = SvcReq(req_id=_rid,
                       kind=kind,
                       size_bytes=_size,
                       payload=_payload.to_dict())
         _url = self._registry.build_invoke_url(self._cfg.entry_service)
-        _headers = {"X-Request-Id": _req.request_id,
+        _headers = {"X-Request-Id": _req.req_id,
                     "X-Request-Size-Bytes": str(_size),
                     "X-Request-Kind": kind}
-        _rec = InvocationRecord(request_id=_req.request_id,
+        _rec = InvocationRecord(request_id=_req.req_id,
                                 kind=kind,
                                 size_bytes=_req.size_bytes,
                                 send_ts=time.perf_counter())

@@ -37,8 +37,8 @@ class TestLogger:
 
         @logger(_ctx)
         async def _handler(req: SvcReq) -> SvcResp:
-            return SvcResp(request_id=req.request_id,
-                                   service_name=_ctx.spec.name,
+            return SvcResp(req_id=req.req_id,
+                                   srv_name=_ctx.spec.name,
                                    success=True)
 
         _req = SvcReq(kind="analyse", size_bytes=128)
@@ -47,8 +47,8 @@ class TestLogger:
         assert len(_ctx.log) == 1
         _row = _ctx.log[0]
         assert set(LOG_COLUMNS).issubset(_row.keys())
-        assert _row["request_id"] == _req.request_id
-        assert _row["service_name"] == _ctx.spec.name
+        assert _row["req_id"] == _req.req_id
+        assert _row["srv_name"] == _ctx.spec.name
         assert _row["kind"] == "analyse"
         assert _row["success"] is True
         assert _row["status_code"] == 200
@@ -63,8 +63,8 @@ class TestLogger:
         @logger(_ctx)
         async def _handler(req: SvcReq) -> SvcResp:
             # simulate a downstream that failed its own Bernoulli
-            return SvcResp(request_id=req.request_id,
-                                   service_name="MAS_{1}",
+            return SvcResp(req_id=req.req_id,
+                                   srv_name="MAS_{1}",
                                    success=False,
                                    message="bernoulli failure")
 

@@ -62,8 +62,8 @@ def _mock_client(handler) -> httpx.AsyncClient:
 def _ok_handler(request: httpx.Request) -> httpx.Response:
     """*_ok_handler()* every inbound request gets HTTP 200 + success=True."""
     _body = {
-        "request_id": request.headers.get("X-Request-Id", "unknown"),
-        "service_name": "TAS_{1}",
+        "req_id": request.headers.get("X-Request-Id", "unknown"),
+        "srv_name": "TAS_{1}",
         "success": True,
         "message": "ok",
     }

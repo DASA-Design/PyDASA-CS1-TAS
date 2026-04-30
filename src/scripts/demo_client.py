@@ -97,11 +97,11 @@ async def _demo() -> None:
                                       default=_client_cfg.request_size_bytes)
         _payload = _generate_payload(_kind, _size,
                                      rng=random.Random(_seed))
-        _req = SvcReq(request_id=str(uuid.uuid4()),
+        _req = SvcReq(req_id=str(uuid.uuid4()),
                       kind=_kind,
                       size_bytes=_size,
                       payload=_payload.to_dict())
-        print(f"  request_id       = {_req.request_id}")
+        print(f"  req_id           = {_req.req_id}")
         print(f"  kind             = {_req.kind!r}")
         print(f"  size_bytes       = {_req.size_bytes}")
         print(f"  payload.kind     = {_req.payload['kind']!r}")
@@ -112,7 +112,7 @@ async def _demo() -> None:
         # ---- 3. actually send it ----
         _banner("3. HTTP POST to the TAS entry and observe the response")
         _url = _lnc.registry.build_invoke_url("TAS_{1}")
-        _headers = {"X-Request-Id": _req.request_id,
+        _headers = {"X-Request-Id": _req.req_id,
                     "X-Request-Size-Bytes": str(_req.size_bytes),
                     "X-Request-Kind": _req.kind}
         for _k, _v in _headers.items():
@@ -131,7 +131,7 @@ async def _demo() -> None:
         _banner("4. what an InvocationRecord would look like post-send")
         _body = _r.json()
         _rec = InvocationRecord(
-            request_id=_req.request_id,
+            request_id=_req.req_id,
             kind=_req.kind,
             size_bytes=_req.size_bytes,
             # placeholder: 10 ms before now

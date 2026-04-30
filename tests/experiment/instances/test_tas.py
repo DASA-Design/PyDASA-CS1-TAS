@@ -55,9 +55,9 @@ def _recorded_forward(_calls: List[Tuple[str, str]]):
     """*_recorded_forward()* forward closure that appends `(target, request_id)` to `_calls` and returns success."""
 
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        _calls.append((target, req.request_id))
-        return SvcResp(request_id=req.request_id,
-                               service_name=target,
+        _calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                               srv_name=target,
                                success=True,
                                message="recorded")
 
@@ -143,7 +143,7 @@ class TestInternalRoutingInProcess:
         for _name in ("TAS_{1}", "TAS_{2}", "TAS_{3}"):
             _log = _states[_name].log
             assert len(_log) == 1, f"{_name} log has {len(_log)} rows"
-            assert _log[0]["request_id"] == _req.request_id
+            assert _log[0]["req_id"] == _req.req_id
             assert set(LOG_COLUMNS).issubset(set(_log[0].keys()))
 
 

@@ -12,7 +12,7 @@ Each member is mounted through `services.atomic.mount_atomic_svc` with two exten
 
 The shared `_handlers` dict closes over `dispatch` and is populated as each member mounts; by the time a request actually runs, every member's handler is registered, so the late-bound lookup resolves.
 
-Queueing stays emergent, same as in `services.atomic`.
+Each member inherits the K-bounded admission gate from `services.atomic`: at K capacity the member rejects with HTTP 503 before any state allocation. Set the per-member `spec.K <= 0` to disable the gate.
 """
 # native python modules
 from __future__ import annotations

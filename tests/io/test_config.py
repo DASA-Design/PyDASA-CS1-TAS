@@ -153,3 +153,18 @@ class TestSourceSwitch:
         """*test_invalid_source_raises()* an unknown `source` value must raise `ValueError`."""
         with pytest.raises(ValueError, match="source must be"):
             load_profile(adaptation="baseline", source="bogus")
+
+
+class TestEnforceLimits:
+    """**TestEnforceLimits** the `enforce_limits` umbrella key (top-level under `specs`) flows through `NetCfg.enforce_limits`."""
+
+    def test_specs_layer_reads_enforce_limits_true(self):
+        """*test_specs_layer_reads_enforce_limits_true()* dflt + opti specs ship with `enforce_limits=true`."""
+        for _adp in ("baseline", "s1", "s2", "aggregate"):
+            _cfg = load_profile(adaptation=_adp, source="specs")
+            assert _cfg.enforce_limits is True
+
+    def test_artifacts_layer_defaults_enforce_limits_true(self):
+        """*test_artifacts_layer_defaults_enforce_limits_true()* the model-side `artifacts` block has no umbrella key; loader defaults to True."""
+        _cfg = load_profile(adaptation="baseline", source="artifacts")
+        assert _cfg.enforce_limits is True

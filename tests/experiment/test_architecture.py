@@ -141,11 +141,11 @@ class TestSweepArchExpStability:
     """**TestSweepArchExpStability** combos that breach the utilisation cap are dropped."""
 
     def test_unstable_combo_dropped(self, _profile_cfg: NetCfg, _method_cfg: Dict[str, Any]) -> None:
-        """*test_unstable_combo_dropped()* a tiny K with a high mu_factor cap forces saturation; the combo is dropped and every per-artifact array is empty."""
+        """*test_unstable_combo_dropped()* a crushed mu against a tight util_threshold forces saturation; the combo is dropped and every per-artifact array is empty. K=0 disables the per-service admission gate so the asyncio queue grows unbounded and the sweep-stability check is exercised on raw utilisation, not on rejection-bounded utilisation."""
         _grid: Dict[str, Any] = {
             "mu_factor": [0.01],   # crush mu so any rate saturates
             "c": [1],
-            "K": [1],
+            "K": [0],              # gate off; rely on util_threshold to catch saturation
             "util_threshold": 0.50,
         }
         _out = sweep_arch_exp(_profile_cfg,

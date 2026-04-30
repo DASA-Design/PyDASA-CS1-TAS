@@ -55,9 +55,9 @@ def _recorded_forward(_calls: List[Tuple[str, str]]):
     """*_recorded_forward()* forward closure that appends `(target, request_id)` to `_calls` and returns success."""
 
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        _calls.append((target, req.request_id))
-        return SvcResp(request_id=req.request_id,
-                               service_name=target,
+        _calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                               srv_name=target,
                                success=True,
                                message="recorded")
 
@@ -137,7 +137,7 @@ class TestTerminalService:
         assert _r.status_code == 200
         _body = _r.json()
         assert _body["success"] is True
-        assert _body["service_name"] == "MAS_{1}"
+        assert _body["srv_name"] == "MAS_{1}"
         assert _body["message"] == "terminal"
 
 
@@ -155,7 +155,7 @@ class TestExternalForward:
             _r = await _c.post("/invoke", json=_req.model_dump())
         assert _r.status_code == 200
         assert len(_calls) == 1
-        assert _calls[0] == ("DS_{3}", _req.request_id)
+        assert _calls[0] == ("DS_{3}", _req.req_id)
 
 
 class TestBernoulliEpsilon:
@@ -195,5 +195,5 @@ class TestLogRow:
         assert len(_log) == 3
         for _row in _log:
             assert set(LOG_COLUMNS).issubset(set(_row.keys()))
-            assert _row["service_name"] == "MAS_{1}"
+            assert _row["srv_name"] == "MAS_{1}"
             assert _row["success"] is True

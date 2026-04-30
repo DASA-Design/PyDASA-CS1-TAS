@@ -6,6 +6,7 @@ Module test_vernier.py
 Unit tests for `src/experiment/services/vernier.py`:
 
     - **TestVernierSvc** mount + route + terminal response + logger row writing + payload end-to-end read + Bernoulli epsilon + admission gate + mu service-time floor + drop-count zero on normal load.
+    - **TestVernierKGate** K-bounded admission produces 503 at capacity, releases on every exit path, and disables when `spec.K<=0`.
 """
 # native python modules
 import asyncio
@@ -104,7 +105,7 @@ class TestVernierSvc:
         assert _r.status_code == 200
         _b = _r.json()
         assert _b["success"] is True
-        assert _b["service_name"] == "CALIB"
+        assert _b["srv_name"] == "CALIB"
         assert _b["message"].startswith("terminal")
 
     @pytest.mark.asyncio
@@ -122,7 +123,7 @@ class TestVernierSvc:
         for _row in _ctx.log:
             for _k in LOG_COLUMNS:
                 assert _k in _row, f"missing column {_k!r}"
-            assert _row["service_name"] == "CALIB"
+            assert _row["srv_name"] == "CALIB"
 
     @pytest.mark.asyncio
     async def test_payload_is_read_end_to_end(self):
@@ -199,3 +200,74 @@ class TestVernierSvc:
                 await _c.post("/invoke", json=_req_with_payload(64))
         _ctx = _app.state.ctx
         assert _ctx.dropped_count == 0
+
+
+class TestVernierKGate:
+    """**TestVernierKGate** K-bounded admission rejects with HTTP 503 once `in_flight >= K`; counter releases on every exit path; CSV records the rejection."""
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_in_flight_exceeds_K(self):
+        """*test_returns_503_when_in_flight_exceeds_K()* fire 12 concurrent requests at a slow vernier with c=1, K=3 -> at least 9 see HTTP 503."""
+        _s = _spec(c=1, K=3, mu=20.0)
+        _app = _make_app(_s, payload_size_bytes=64)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            _tasks = [asyncio.create_task(
+                _c.post("/invoke", json=_req_with_payload(64)))
+                for _ in range(12)]
+            _responses = await asyncio.gather(*_tasks)
+        _codes = [_r.status_code for _r in _responses]
+        assert sum(1 for _x in _codes if _x == 503) >= 9
+        assert _app.state.ctx.in_flight == 0
+
+    @pytest.mark.asyncio
+    async def test_csv_row_records_503_status(self):
+        """*test_csv_row_records_503_status()* every rejected request lands one CSV row with `status_code=503` and `success=False`."""
+        _s = _spec(c=1, K=2, mu=20.0)
+        _app = _make_app(_s, payload_size_bytes=64)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            _tasks = [asyncio.create_task(
+                _c.post("/invoke", json=_req_with_payload(64)))
+                for _ in range(8)]
+            await asyncio.gather(*_tasks)
+        _rows = list(_app.state.ctx.log)
+        _503_rows = [_r for _r in _rows if _r["status_code"] == 503]
+        assert len(_503_rows) >= 6
+        for _r in _503_rows:
+            assert _r["success"] is False
+            assert _r["srv_name"] == _s.name
+
+    @pytest.mark.asyncio
+    async def test_K_zero_skips_gate(self):
+        """*test_K_zero_skips_gate()* `spec.K=0` disables the gate; concurrent calls all return 200."""
+        _s = _spec(K=0, mu=0.0)
+        _app = _make_app(_s, payload_size_bytes=64)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            _tasks = [asyncio.create_task(
+                _c.post("/invoke", json=_req_with_payload(64)))
+                for _ in range(20)]
+            _responses = await asyncio.gather(*_tasks)
+        assert all(_r.status_code == 200 for _r in _responses)
+        assert _app.state.ctx.in_flight == 0
+
+    @pytest.mark.asyncio
+    async def test_K_release_after_response(self):
+        """*test_K_release_after_response()* in_flight returns to 0 after every successful completion."""
+        _s = _spec(c=1, K=4, mu=10000.0)
+        _app = _make_app(_s, payload_size_bytes=64)
+        _transport = httpx.ASGITransport(app=_app)
+        async with httpx.AsyncClient(transport=_transport,
+                                     base_url="http://t",
+                                     timeout=10.0) as _c:
+            for _ in range(5):
+                _r = await _c.post("/invoke", json=_req_with_payload(64))
+                assert _r.status_code == 200
+        assert _app.state.ctx.in_flight == 0

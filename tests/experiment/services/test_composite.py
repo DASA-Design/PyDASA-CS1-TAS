@@ -30,9 +30,9 @@ from src.experiment.services.composite import parse_tas_idx
 def _recorded_forward(calls: List[Tuple[str, str]]):
     """*_recorded_forward()* external-forward stub that logs `(target, request_id)` and returns success."""
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
-        calls.append((target, req.request_id))
-        return SvcResp(request_id=req.request_id,
-                               service_name=target,
+        calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                               srv_name=target,
                                success=True,
                                message="recorded")
     return _fwd
@@ -96,7 +96,7 @@ class TestMountCompositeService:
         _ctxs = _app.state.tas_components
         assert len(_ctxs["TAS_{1}"].log) == 1
         assert len(_ctxs["TAS_{2}"].log) == 1
-        assert _calls == [("MAS_{1}", _req.request_id)]
+        assert _calls == [("MAS_{1}", _req.req_id)]
 
     @pytest.mark.asyncio
     async def test_unknown_kind_raises_400_at_entry(self):

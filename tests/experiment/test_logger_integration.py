@@ -29,7 +29,7 @@ class TestJourneySchemaLocked:
     def test_column_order_and_set(self):
         """*test_column_order_and_set()* pin the exact `LOG_COLUMNS` tuple; any change to this test signals a breaking schema change for downstream re-estimators."""
         assert LOG_COLUMNS == (
-            "request_id", "service_name", "kind",
+            "req_id", "srv_name", "kind",
             "recv_ts", "start_ts", "local_end_ts", "end_ts",
             "c_used_at_start",
             "success", "status_code",

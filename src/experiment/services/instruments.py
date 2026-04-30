@@ -56,7 +56,7 @@ def mark_local_end() -> None:
 
 
 def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
-    """*@logger(ctx)* append one `LOG_COLUMNS` row to `ctx.log` per call; local-success when `_resp.service_name == ctx.spec.name` else `True`; raised exceptions land a failure row before propagating.
+    """*@logger(ctx)* append one `LOG_COLUMNS` row to `ctx.log` per call; local-success when `_resp.srv_name == ctx.spec.name` else `True`; raised exceptions land a failure row before propagating.
 
     Args:
         ctx (SvcCtx): per-service state carrying `spec`, `log`, and `rng`.
@@ -84,8 +84,8 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
                     _c_used_at_start = ctx.c_in_use
                 _status = getattr(_exc, "status_code", 500)
                 _row_fail = {
-                    "request_id": req.request_id,
-                    "service_name": ctx.spec.name,
+                    "req_id": req.req_id,
+                    "srv_name": ctx.spec.name,
                     "kind": req.kind,
                     "recv_ts": _recv_ns / _NS_TO_S,
                     "start_ts": _start_ns / _NS_TO_S,
@@ -107,14 +107,14 @@ def logger(ctx: SvcCtx) -> Callable[[HandlerFn], HandlerFn]:
                 _c_used_at_start = ctx.c_in_use
 
             # local outcome only; downstream success does not apply here
-            if _resp.service_name == ctx.spec.name:
+            if _resp.srv_name == ctx.spec.name:
                 _local_success = bool(_resp.success)
             else:
                 _local_success = True
 
             _row_ok = {
-                "request_id": req.request_id,
-                "service_name": ctx.spec.name,
+                "req_id": req.req_id,
+                "srv_name": ctx.spec.name,
                 "kind": req.kind,
                 "recv_ts": _recv_ns / _NS_TO_S,
                 "start_ts": _start_ns / _NS_TO_S,
