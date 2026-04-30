@@ -1,20 +1,23 @@
 {
     "files.eol": "\r\n",
-    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.typeCheckingMode": "standard",
     "python.testing.pytestArgs": [
         "tests"
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
-    "flake8.args": [
-        // "--max-line-length=120",
-        "--ignore=E501,"
-    ],
+    "flake8.enabled": false,
+    "ruff.enable": true,
+    "ruff.lint.enable": true,
+    "ruff.lint.select": ["E", "F", "W"],
+    "ruff.lint.ignore": ["E501"],
+    "ruff.nativeServer": "on",
     "python.testing.unittestArgs": [
         "-v",
         "-s",
         "./tests",
         "-p",
         "test_*.py"
-    ]
+    ],
+    "python.analysis.autoImportCompletions": false
 }

@@ -4,6 +4,204 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-04-30 (later) — Notes consolidation: proof + experiment + InfoQ -> procedure.md + new MVA skill
+
+Three `notes/` files merged or relocated to bring the methodology / case-study split into clean alignment per the experimental-design skill's authority chain.
+
+### Files moved / created / deleted
+
+| Action | Path | Reason |
+|---|---|---|
+| **DELETED** | `notes/proof.md` | content absorbed into `notes/procedure.md` |
+| **DELETED** | `notes/experiment.md` | content absorbed into `notes/procedure.md` |
+| **MOVED** | `notes/architecture_experimentation.md` -> `assets/docs/architecture_experimentation.md` | full InfoQ summary belongs in `assets/` (matches the precedent set by `assets/docs/operational_analysis.md`); not project-specific content |
+| **CREATED** | `notes/procedure.md` | CS-01 instantiation of the four-piece experimental-design discipline (hypothesis -> model -> prototype -> validation); single document for both the falsifiable claims AND the procedure that tests them |
+| **CREATED** | `.claude/skills/design/mva-framework.md` | NEW skill seeded from the InfoQ summary; architectural-experiment subset of experimental design (distinct from `experimental-design.md`'s authoritative four-piece flow) |
+
+### Authoritative chain (named explicitly in `procedure.md::§0`)
+
+```
+.claude/skills/design/experimental-design.md         (authoritative — four-piece methodology)
+   complemented by
+.claude/skills/design/mva-framework.md               (distinct subset — MVA framing per Pureur & Bittner)
+   complemented by
+.claude/skills/develop/architectural-experiments.md  (prototype-side discipline)
+   instantiated by
+notes/procedure.md                                    (CS-01)
+   referenced from
+notes/prototype.md, notes/comparison.md, notes/calibration.md
+```
+
+On any conflict between procedure.md and a skill, defer to the skill.
+
+### Why the split
+
+The previous `notes/` layout mixed two layers:
+
+| Layer | Purpose | Lives in |
+|---|---|---|
+| Methodology | project-agnostic experimental-design discipline; reusable across CS-1, CS-2, future cases | `.claude/skills/design/` + `assets/docs/` |
+| Case-study content | CS-01 hypotheses, procedure, prototype, validation plan | `notes/` |
+
+`architecture_experimentation.md` was methodology (Layer A) misfiled in Layer B's directory. `proof.md` and `experiment.md` were two views of the same Layer-B content (hypothesis vs. procedure for CS-01) and merging them removes a redundant cross-reference axis. The new MVA skill captures the InfoQ-derived framing so future case studies can apply it without copying content.
+
+### Memory updates
+
+- `project_proof_framework_2026_04_30.md` — file-path reference updated from `notes/proof.md` to `notes/procedure.md`
+- `MEMORY.md` index — same path update
+
+### Skill cross-references
+
+- `.claude/skills/design/experimental-design.md` and `.claude/skills/develop/architectural-experiments.md` — to add a one-line cross-reference to `mva-framework.md` so the authoritative chain is explicit (deferred; non-blocking)
+
+### Net `notes/` inventory
+
+Was 14 files / ~430 KB; now **12 files / ~330 KB**. No load-bearing content lost; cross-references collapsed; methodology / case-study boundary respected.
+
+### Link breakage to expect
+
+| Reference | Where | Fix |
+|---|---|---|
+| `notes/proof.md` | memory entries (already updated), some skill cross-refs | search-replace to `notes/procedure.md` |
+| `notes/experiment.md` | several `notes/*.md` cross-references; `CLAUDE.md` | search-replace to `notes/procedure.md` |
+| `notes/architecture_experimentation.md` | `notes/proof.md` (now deleted), some memory entries | search-replace to `assets/docs/architecture_experimentation.md` (or to the new `.claude/skills/design/mva-framework.md` for skill-style references) |
+
+These are find-and-replace fixes. User explicitly said link-breakage repair is the least difficult item and not a blocker.
+
+---
+
+## 2026-04-30 — Proof framework: predictive + congruent claims, two-stage structure
+
+Articulated the dissertation-grade proof structure in `notes/proof.md`. Two independent falsifiable axes:
+
+| Axis | Hypothesis | Falsifier |
+|---|---|---|
+| **H1 predictive** | DASA's dimensional viable region on the Yoly chart bounds prototype configurations satisfying R1∧R2∧R3 | Predicted-viable config fails Cámara; predicted-infeasible passes |
+| **H2 congruent** | The four methods (analytic, stochastic, dimensional, experimental) agree within DASA-side tolerance for every (c, K, μ, λ) | Any pairwise residual exceeds tolerance |
+
+Two-stage structure with **completely different tolerance semantics**:
+
+1. **Stage 1 — calibration gate (≤ 5 % noise floor)**: precondition for experimentation, NOT a hypothesis-test tolerance. Captures irreducible host noise outside the model's abstraction. Already implemented (envelope's `baseline` block stamped on every experiment result).
+2. **Stage 2 — real experiments at DASA-side tolerance**: tests H1 + H2 against the model's own approximation budget (Markovian assumption, 2nd-order ignored effects, MC variance). NOT against host noise.
+
+User correction on the framing — three things were initially conflated and are now separately captured:
+
+1. **Calibration error vs model error**: I had pinned `±5 %` as a hypothesis tolerance. It is a precondition gate, not a tolerance. Memory: `feedback_calibration_vs_model_error.md`.
+2. **`data/config/` (input) vs `data/results/` (output)**: I labelled result JSONs as "configs" in proof prose. They are run outputs of `<method>.run()`. Memory: `feedback_data_paths_input_vs_output.md`.
+3. **Tests / functional replication ≠ experiments**: Software-architecture community routinely calls unit / functional tests "experiments" because all three involve running code and comparing output. Distinguishing question: what would falsify the activity? Cámara 6-decimal replication is a unit test of the analytic solver, not validation of DASA's predictive claim. Memory: `feedback_test_vs_experiment_distinction.md`.
+
+### Skill updates
+
+- `.claude/skills/design/experimental-design.md`: added "Calibration is a precondition gate, NOT a hypothesis tolerance" subsection; added "Tests / functional replication are NOT experiments" subsection; new anti-patterns (calibration-as-tolerance, replication-as-validation, config/results path inversion).
+- `.claude/skills/develop/architectural-experiments.md`: extended Principle #1 with replication-≠-validation paragraph; new anti-patterns + reviewer checklist items for calibration gate and config/results separation.
+
+### Files touched
+
+- `notes/proof.md` (NEW) — formal proof structure with two-stage tolerance discipline
+- `notes/architecture_experimentation.md` (existing) — InfoQ MVA piece reference
+- `notes/devlog.md` — this entry
+- `.claude/skills/design/experimental-design.md` — three new subsections
+- `.claude/skills/develop/architectural-experiments.md` — replication-≠-validation paragraph + 2 new anti-patterns + 2 new checklist items
+- `memory/MEMORY.md` (index) — 4 new entries indexed at top
+- `memory/project_proof_framework_2026_04_30.md` (NEW)
+- `memory/feedback_calibration_vs_model_error.md` (NEW)
+- `memory/feedback_test_vs_experiment_distinction.md` (NEW)
+- `memory/feedback_data_paths_input_vs_output.md` (NEW)
+
+### Open work blocking the proof
+
+- Articulate the model's approximation budget → DASA-side tolerance numerical
+- Build method 5 (`comparison.py`) — currently a skeleton in `notes/comparison.md`
+- Define hypothesis-set operating points formally (validity envelope: ρ < 1, finite K, Markovian)
+- Extend `plot_yoly_chart` with viable-region shading
+- Define DASA viable-region predicate from R1/R2/R3
+
+---
+
+## 2026-04-28 — Calibration overhaul: rate-sweep decoupled, specs binpacked, zombie cleanup
+
+Driven by the "how do I get μ=1600 req/s on this host?" question. The host's per-worker μ ceiling on `DESKTOP-INKGBK6` (Windows + uvicorn TCP loopback) is `~290 req/s` — Cámara canonical artifacts (`AS_{3}.μ=1580`) cannot be served by a single physical worker. Today landed five interlocking changes.
+
+### 1. Rate-sweep decoupled from TAS
+
+`run_rate_sweep` (`src/methods/calibration.py`) was driving the full TAS mesh per trial — 13 services up + down + cascade-detection on the `experiment.run` envelope. Rewrote it to drive the **standalone ping/echo vernier**: one server reused across all rates × trials, achieved rate = `samples / window_s`. Loss = `(target - achieved) / target × 100`. Decoupled from any TAS profile, no `entry_service` coupling, no `experiment.run` recursion.
+
+Dropped: `adaptation`, `min_samples`, `cascade_*`, `entry_service`, `with_lambda_z` kwargs + `_read_lambda_z_at`, `_run_single_rate_probe`, `_summarise_rate_trial`, `_print_rate_trial_row` helpers + matching CLI flags. Trimmed `data/config/method/calibration.json::rate_sweep` to just `{rates, trials_per_rate, max_probe_window_s, target_loss_pct}`. Test rewritten to monkey-patch the new `_run_rate_sweep_async` orchestrator. 24/24 tests pass in 90 s.
+
+Notebook section 7 markdown updated: "Drives the standalone vernier ping/echo service ... Pure host-transport saturation, decoupled from the TAS profile (full-mesh saturation testing belongs in the experiment notebook itself)." Section 6b retitled "Single-worker push-back card (closed-loop)"; section 7b "Multi-worker rate-driven sweep (open-loop)". "Route B" jargon stripped (internal-only term).
+
+### 2. Specs-layer μ-binpacking applied
+
+The artifacts vs specs split (per `notes/qn_config_conventions.md`) lets `artifacts.json::*` stay frozen at Cámara values while `specs.json::*` carries the deployable knobs. Today's recipe applied to both `dflt.json::specs` and `opti.json::specs`:
+
+| Artifact | artifacts μ | specs (c · μ) | aggregate | headroom |
+|---|---|---|---|---|
+| TAS_{1..6} | 700 | 4 · 250 | 1000 | +43% |
+| MAS_{1} | 180 | 1 · 180 | 180 | host can deliver |
+| MAS_{2} | 530 | 3 · 250 | 750 | +42% |
+| MAS_{3} | 150 | 1 · 150 | 150 | host can deliver |
+| AS_{1} | 700 | 3 · 250 | 750 | +7% (tight) |
+| AS_{2} | 410 | 2 · 250 | 500 | +22% |
+| **AS_{3}** | **1580** | **8 · 250** | **2000** | **+27%** |
+| DS_{3} | 550 | 3 · 250 | 750 | +36% |
+| MAS_{4} (opti) | 880 | 4 · 250 | 1000 | +14% |
+| AS_{4} (opti) | 210 | 1 · 210 | 210 | host can deliver |
+| DS_{1} (opti) | 250 | 2 · 250 | 500 | +100% margin |
+
+All K=10. Drift between `artifacts.c=1, μ=1580` (analytic / stochastic / dimensional predictions) and `specs.c=8, μ=250` (experiment delivery) is the dimensional case-study finding — η = X·K/(μ·c) shifts ~10× because c·μ is held but per-server μ drops 6×. **That drift IS the story**, not a bug.
+
+UDS transport upgrade (Path C — μ ≈ 2000 per worker on Linux UDS) deferred to remote-distribution stage; full plan in `notes/distribute.md::Section 12` and `project_uds_transport_deferred.md` memory.
+
+### 3. Zombie vernier cleanup (atexit + WeakSet + daemon=True)
+
+Killing a sweep mid-flight (Ctrl-C, kernel crash, nbconvert timeout) was leaving uvicorn workers orphaned. Three layers of defense:
+
+1. **Per-combo cleanup**: `_drive_one_combo` already wrapped in `try / finally _server.shutdown()`. Normal flow.
+2. **atexit hook (NEW)**: module-level `_ACTIVE_VERNIERS: weakref.WeakSet[_UvicornThread]` tracks every vernier started via `_register_vernier(_UvicornThread(_app, port))`. `atexit.register(_shutdown_active_verniers)` walks the registry on graceful interpreter exit. Catches the case where a sweep crash bypasses the per-combo `finally`.
+3. **`daemon=True`** on `UvicornThread` (`src/experiment/uvicorn_thread.py:56`): ensures the parent process can always exit even if `shutdown()` deadlocks or `join(timeout=5.0)` exceeds.
+
+What's still outside our control: `taskkill /F` (SIGKILL-equivalent on Windows) bypasses atexit. The kernel still owes a 30 s TIME_WAIT cooldown per closed TCP connection — port 8765 stays in TIME_WAIT for ~30 s after a hard kill before re-bindable. That's the irreducible "leak window".
+
+### 4. K-fix in `_drive_one_combo`
+
+`run_calib_sweep` was passing `args.uvicorn_backlog` (16384 default) to `derive_calib_coefs` per combo, leaking host-default K into every combo card. Each combo's K array became `[16384] * lambda_steps` regardless of `sweep_grid.K = [16, 32, 64, 128]`. Fixed by passing `_K_val` (combo's K) and `K_values=[int(_K_val)]` explicitly. Smoke-test confirmed `K_array == [combo_K] * lambda_steps` post-fix.
+
+### 5. Visual fixes on the calibration cloud
+
+- **`plot_calib_rate_sweep`**: now draws BOTH `+target_loss_pct` and `-target_loss_pct` horizontal bars (was only `+target`). Annotations: `+2.5%` / `-2.5%`. Pairs with the `abs()` check in `_find_highest_sustainable_rate` so the visualisation matches the calibrated-rate pass-band semantics.
+- **`plot_yoly_chart` auto-scaling footer**: `footer_h = max(0.18, 0.04 + ceil(N/4) × 0.018)` where N is `len(scenarios)` / `len(paths)` (grouped mode) or `_estimate_single_mode_count(coeff_data) = unique(c) × unique(μ)` (single mode). New helper `_estimate_single_mode_count` looks up the first `c_*` and `\mu_*` arrays via prefix-match. Architecture yoly (16 entries) keeps `footer_h=0.18`; calibration sweep (48 entries) grows to `footer_h=0.256`. Without this, the 48-entry legend overflowed the body.
+- **Calibration sweep label includes μ**: cell `nb-calib-sweep-plot` was building scenario labels as `f"c={c} K={K}"` — collapsing 4 mu_factor variants per (c, K) into one dict entry (only 12 of 48 combos visible). Fixed: label now includes `μ` (bold-math) read from `meta.mu_req_per_s`. 48 unique scenarios now render.
+
+### Files touched
+
+- `src/methods/calibration.py` — full rate-sweep rewrite, atexit cleanup, K-fix, helper deletions
+- `src/experiment/uvicorn_thread.py` — `daemon=True` (already present, confirmed)
+- `src/view/charter.py` — auto-scaling footer in `plot_yoly_chart`, `_estimate_single_mode_count` helper
+- `src/view/characterization.py` — symmetric `±target_loss_pct` lines in `plot_calib_rate_sweep`
+- `data/config/method/calibration.json` — `rate_sweep` block trimmed; `entry_service` removed
+- `data/config/profile/dflt.json::specs` — 13 artifacts updated to host-bound bin-packing
+- `data/config/profile/opti.json::specs` — same 13 + 3 swap-slot upgrades (MAS_{4}, AS_{4}, DS_{1})
+- `tests/methods/test_calibration.py` — `_aggregate_rate_trials` test updated, orchestration test rewritten to monkey-patch `_run_rate_sweep_async`
+- `00-calibration.ipynb` — section 6b/7b reframed (closed-loop vs open-loop), label fixes, RUN_CALIB_SWEEP toggle defaults to False, "Route B" mentions removed
+- `notes/distribute.md::Section 12` — UDS upgrade deferred plan
+- `CLAUDE.md` — Method Module Conventions: rate-sweep decoupling note, specs-binpacking recipe, zombie-cleanup three-layer pattern; View Conventions: auto-scaling legend, symmetric loss-band, K-fix
+- `notes/titles_std.md` — section 6b/7b retitled in audit table
+- Memory: `project_calibration_2026_04_28.md` (NEW), `project_uds_transport_deferred.md` (existing), MEMORY.md indexed
+
+### Verification
+
+- 24/24 calibration unit tests pass.
+- Live smoke test: 1-combo sweep wrote `K_array=[32, 32, 32]` and `meta.K_capacity=32` (was 16384 before fix).
+- Live ping-only rate sweep: 3 rates × 2 trials × 1 s window finished in 12 s (vs ~30 min for the old TAS path).
+- Plotter smoke tests: yoly chart with 16 entries (architecture) keeps `footer_h=0.18`; with 48 entries (calibration sweep) renders cleanly with `footer_h=0.256`.
+
+### Open
+
+- **Re-run the multi-combo sweep with the current grid** to refresh the on-disk `*_sweep.json` (the 01:04 file predates the K-fix). Current sweep_grid: `c=[8,16,32,64], K=[16,32,64,128], mu_factor=[0.5,1,1.5,2]` = 64 combos. Recommend `inter_trial_delay_s=3.0` (was 0.3) to give TIME_WAIT room between combos.
+- Notebook re-run sequence (00→04) was paused at 00 due to TIME_WAIT exhaustion at high-c combos in the previous (cancelled) attempt; resume after a fresh terminal session has fully drained zombies.
+
+---
+
 ## 2026-04-27 (evening) — Yoly figure polish iterations
 
 Follow-up session refining the yoly suite (`plot_yoly_chart`, `plot_yoly_space`, `plot_yoly_arts_hist`, `plot_yoly_arts_charts`, `plot_yoly_arts_behaviour`) plus the calibration dim card. Driven by user feedback on rendered images.

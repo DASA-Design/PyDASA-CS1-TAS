@@ -6279,6 +6279,7 @@
         }
     },
     "specs": {
+        "enforce_limits": true,
         "TAS_{1}": {
             "name": "TAS composite stage 1 (dispatch)",
             "type": "M/M/s/K",
