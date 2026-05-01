@@ -31,7 +31,7 @@ DispatchFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 
 class AtomicHandler:
-    """*AtomicHandler* one atomic service pipeline per call (K-admit, c-acquire, sleep, Bernoulli, pick, forward). `__call__` matches the `(SvcReq) -> SvcResp` contract FastAPI and `@logger` expect."""
+    """*AtomicHandler* simulate one service node of the queueing network. Each call enforces the node's capacity limits, waits a draw from the service-time distribution, may fail with the node's configured failure probability, and then either terminates the request or hands it off to a downstream node. FastAPI uses the instance directly as a route handler; `@logger` records a CSV row around every call so downstream metrics (rho, L, W) can be derived from the trace."""
 
     def __init__(self,
                  ctx: SvcCtx,
@@ -61,10 +61,10 @@ class AtomicHandler:
         self.dispatch = dispatch
 
     def _jackson_pick(self) -> Optional[str]:
-        """*_jackson_pick()* default `pick_tgt`: Jackson-weighted choice over `self.names` using `self.ctx.rng`. Returns None when `self.names` is empty so `__call__` takes the terminal branch.
+        """*_jackson_pick()* return `self.ctx.rng.choices(self.names, weights=self.weights, k=1)[0]` when `self.names` is non-empty; return None otherwise so `__call__` takes the terminal branch. Used as the `pick_tgt` default when the caller of `mount_atomic_svc` doesn't pass one.
 
         Returns:
-            Optional[str]: name of the picked target, or None for the terminal branch.
+            Optional[str]: name drawn from `self.names` according to `self.weights`, or None when `self.names` is empty.
         """
         if not self.names:
             return None
@@ -74,14 +74,14 @@ class AtomicHandler:
     async def _external_dispatch(self,
                                  tgt: str,
                                  req: SvcReq) -> SvcResp:
-        """*_external_dispatch()* default `dispatch`: delegate to `self.ext_fwd` (typically an `HttpForward` HTTP call).
+        """*_external_dispatch()* return `await self.ext_fwd(tgt, req)`. Used as the `dispatch` default when the caller of `mount_atomic_svc` doesn't pass one; `self.ext_fwd` is typically an `HttpForward` instance that posts to the downstream service over HTTP.
 
         Args:
             tgt (str): downstream service name.
-            req (SvcReq): request to relay; `req_id` propagates for end-to-end correlation.
+            req (SvcReq): request to relay; `req_id` is preserved end-to-end.
 
         Returns:
-            SvcResp: downstream response.
+            SvcResp: response returned by the request.
         """
         return await self.ext_fwd(tgt, req)
 
@@ -91,7 +91,7 @@ class AtomicHandler:
 
         Args:
             req (SvcReq): inbound request; `req_id` is propagated through every emitted `SvcResp`.
-            probe (LogProbe): per-invocation scratchpad written by `stamp_admit` / `stamp_local_end`; read by `@logger` to populate the CSV row.
+            probe (LogProbe): per-invocation record where `stamp_admit` / `stamp_local_end` deposit timestamps; `@logger` reads it to populate the CSV row after this method returns.
 
         Returns:
             SvcResp: terminal/success response, Bernoulli-failure response, or wrapped downstream response.
@@ -152,7 +152,7 @@ def mount_atomic_svc(app: FastAPI,
                      route: str = "/invoke",
                      pick_tgt: Optional[PickTargetFn] = None,
                      dispatch: Optional[DispatchFn] = None) -> SvcCtx:
-    """*mount_atomic_svc()* mount an `AtomicHandler` POST route on `app`; stash the handler on `ctx.handler` for in-process sibling dispatch.
+    """*mount_atomic_svc()* build an `AtomicHandler`, register it under `route` as a POST endpoint on `app`, and store it as `ctx.handler` so composite callers can call `ctx.handler(req)` in-process without going through HTTP.
 
     Args:
         app (FastAPI): app to attach the route to.

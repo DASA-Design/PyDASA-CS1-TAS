@@ -22,9 +22,11 @@ _NS_TO_S: float = 1_000_000_000.0
 
 @dataclass
 class LogProbe:
-    """*LogProbe* per-invocation scratchpad written by `stamp_*` helpers and read by `@logger`. The decorator creates one probe per call and threads it as the third arg of the wrapped method.
+    """*LogProbe* container for the three timestamp/count fields the `@logger` wrapper needs to populate a CSV row but cannot capture itself: `admit_ts` (perf_counter_ns at the moment the c-permit was acquired), `c_used_at_start` (in-flight count at that moment), and `local_end_ts` (perf_counter_ns at the end of local work, before any downstream await).
+
+    The wrapper creates one instance per call, passes it to the wrapped method as a third arg, and reads its fields after the method returns.
     """
-    # ost-admit timestamp in ns; None until `stamp_admit` records it (composite handlers leave None so Wq reads 0).
+    # post-admit timestamp in ns; None until `stamp_admit` records it (composite handlers leave None so Wq reads 0).
     admit_ts: Optional[int] = None
     # in-flight count when this request acquired its permit; None until set.
     c_used_at_start: Optional[int] = None
@@ -33,25 +35,27 @@ class LogProbe:
 
 
 def stamp_admit() -> int:
-    """*stamp_admit()* capture admit_ts_ns for the caller to record on its `LogProbe`. The matching `c_used_at_start` is a plain attribute assignment at the call site.
+    """*stamp_admit()* return `time.perf_counter_ns()`. Caller assigns the result to `probe.admit_ts` right after acquiring the c-permit, then assigns `probe.c_used_at_start = self.ctx.c_in_use` separately (no helper for that — it's a plain int read).
 
     Returns:
-        int: perf_counter_ns at the moment of admission.
+        int: `time.perf_counter_ns()` at the call site.
     """
     return time.perf_counter_ns()
 
 
 def stamp_local_end() -> int:
-    """*stamp_local_end()* capture local_end_ts_ns for the caller to record on its `LogProbe`.
+    """*stamp_local_end()* return `time.perf_counter_ns()`. Caller assigns the result to `probe.local_end_ts` immediately before awaiting a downstream `dispatch` call, so `local_end_ts - start_ts` brackets the local-work portion of B and excludes downstream wait time.
 
     Returns:
-        int: perf_counter_ns at end of local work (B_local bracket; before any downstream await).
+        int: `time.perf_counter_ns()` at the call site.
     """
     return time.perf_counter_ns()
 
 
 def logger(func: Callable) -> Callable:
-    """*@logger* wrap an async method `(self, req, probe) -> SvcResp` and append one `LOG_COLUMNS` row to `self.ctx.log` per call. The wrapper creates a `LogProbe`, passes it in, then reads its fields after the body returns. Local-success requires `resp.srv_name == ctx.spec.name and resp.success`; exceptions land a failure row, then re-raise. FastAPI sees the wrapper's 2-arg `(self, req)` signature; `__wrapped__` is intentionally not set so signature inspection stops here.
+    """*@logger* wrap an async service method so every call produces one row in the per-service log.
+
+    The decorator records observable timing and outcome for each invocation. Timestamps come from the probe when the wrapped method has set them; otherwise the wrapper falls back to its own stamps taken on entry and exit. The local service is treated as successful unless its own response says otherwise: a downstream failure flowing through this node does not pollute the row written for this node. When the wrapped method raises, the failure is captured with the exception's HTTP status if available and a 500 default, then the exception propagates to the caller after the row is recorded. FastAPI only sees the two-argument shape, which lets it bind the request body without knowing the probe exists.
 
     Args:
         func (Callable): async method `(self, req, probe) -> SvcResp` to wrap.

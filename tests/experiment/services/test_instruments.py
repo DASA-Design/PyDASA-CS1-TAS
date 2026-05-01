@@ -39,7 +39,7 @@ def specs() -> _SpecBuilder:
 
 
 class _LoggedProbe:
-    """*_LoggedProbe* minimal class to exercise `@logger`. `self.ctx` is read by the decorator; `self._payload` is the user-supplied async coroutine that produces the response."""
+    """*_LoggedProbe* test scaffold: `__call__(self, req, probe)` returns `await self._payload(req)`, wrapped by `@logger`. Each test passes a different `_payload` coroutine to inject the response (or exception) the decorator should observe; `self.ctx` is the SvcCtx the decorator records the row into."""
 
     def __init__(self, ctx: SvcCtx, payload: PayloadFn) -> None:
         self.ctx = ctx
@@ -55,7 +55,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_success_row(self, specs: _SpecBuilder) -> None:
-        """*test_success_row()* one log row appended per successful call with full LOG_COLUMNS coverage + HTTP 200 + monotonic timestamps."""
+        """*test_success_row()* after one successful call: `len(ctx.log) == 1`, the row's keys are a superset of `LOG_COLUMNS`, `status_code == 200`, `success is True`, `req_id`/`srv_name`/`kind`/`size_bytes` match the request, and `end_ts >= recv_ts`."""
         _ctx = SvcCtx(spec=specs())
 
         async def _payload(req: SvcReq) -> SvcResp:
@@ -80,7 +80,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_local_success_isolated(self, specs: _SpecBuilder) -> None:
-        """*test_local_success_isolated()* a downstream response with a different `srv_name` and `success=False` does not flip THIS context's row to failure (local Bernoulli didn't fire)."""
+        """*test_local_success_isolated()* when `ctx.spec.name == "TAS_{2}"` and the handler returns `SvcResp(srv_name="MAS_{1}", success=False)`, the row this decorator writes for `ctx` has `success=True` (the False belongs to the downstream service, not to us)."""
         _ctx = SvcCtx(spec=specs(name="TAS_{2}"))
 
         async def _payload(req: SvcReq) -> SvcResp:
@@ -95,7 +95,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_exception_row(self, specs: _SpecBuilder) -> None:
-        """*test_exception_row()* a raising handler still appends one `success=False` row before the exception propagates, so row counts match arrival counts."""
+        """*test_exception_row()* when the wrapped method raises `RuntimeError`, the wrapper appends one row with `success=False` to `ctx.log` and then re-raises, so `pytest.raises(RuntimeError)` catches the exception and `len(ctx.log) == 1` afterward."""
         _ctx = SvcCtx(spec=specs())
 
         async def _payload(_req: SvcReq) -> SvcResp:
@@ -109,7 +109,7 @@ class TestLogger:
 
     @pytest.mark.asyncio
     async def test_probe_stamps_threaded(self, specs: _SpecBuilder) -> None:
-        """*test_probe_stamps_threaded()* values written to `probe.admit_ts` / `probe.c_used_at_start` / `probe.local_end_ts` reach the row instead of the recv_ts / end_ts fallbacks."""
+        """*test_probe_stamps_threaded()* when the wrapped method writes `probe.admit_ts = stamp_admit()`, `probe.c_used_at_start = 7`, `probe.local_end_ts = stamp_local_end()`, the resulting row has `c_used_at_start == 7` and `start_ts <= local_end_ts <= end_ts` (i.e. the wrapper used the probe values, not the `recv_ts` / `end_ts` / `ctx.c_in_use` fallbacks)."""
         _ctx = SvcCtx(spec=specs())
 
         class _Stamped:
@@ -138,7 +138,7 @@ class TestStampHelpers:
     """**TestStampHelpers** the `stamp_*` helpers return monotonic perf-counter ns values."""
 
     def test_admit_monotonic(self) -> None:
-        """*test_admit_monotonic()* `stamp_admit()` returns a positive int between two reference perf-counter samples."""
+        """*test_admit_monotonic()* `t0 = perf_counter_ns(); ts = stamp_admit(); t1 = perf_counter_ns()` satisfies `t0 <= ts <= t1`."""
         _t0: int = time.perf_counter_ns()
         _ts: int = stamp_admit()
         _t1: int = time.perf_counter_ns()
@@ -147,7 +147,7 @@ class TestStampHelpers:
         assert _con_1 and _con_2
 
     def test_local_end_monotonic(self) -> None:
-        """*test_local_end_monotonic()* `stamp_local_end()` returns a positive int between two reference perf-counter samples."""
+        """*test_local_end_monotonic()* `t0 = perf_counter_ns(); ts = stamp_local_end(); t1 = perf_counter_ns()` satisfies `t0 <= ts <= t1`."""
         _t0: int = time.perf_counter_ns()
         _ts: int = stamp_local_end()
         _t1: int = time.perf_counter_ns()
