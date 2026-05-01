@@ -48,7 +48,7 @@ async def _raising_forward(_tgt: str, _req: SvcReq) -> SvcResp:
 
 
 class _RecordedForward:
-    """*_RecordedForward* callable async forward that appends `(target, req_id)` to a shared list and returns a success response."""
+    """*_RecordedForward* append `(target, req.req_id)` to `self.calls` and return `SvcResp(success=True, message="recorded")`. Used as the test-side `ext_fwd` so each test can assert which targets the handler tried to forward to and in what order."""
 
     def __init__(self, calls: List[Tuple[str, str]]) -> None:
         self.calls = calls

@@ -55,10 +55,14 @@ def stamp_local_end() -> int:
 def logger(func: Callable) -> Callable:
     """*@logger* wrap an async service method so every call produces one row in the per-service log.
 
-    The decorator records observable timing and outcome for each invocation. Timestamps come from the probe when the wrapped method has set them; otherwise the wrapper falls back to its own stamps taken on entry and exit. The local service is treated as successful unless its own response says otherwise: a downstream failure flowing through this node does not pollute the row written for this node. When the wrapped method raises, the failure is captured with the exception's HTTP status if available and a 500 default, then the exception propagates to the caller after the row is recorded. FastAPI only sees the two-argument shape, which lets it bind the request body without knowing the probe exists.
+    The decorator records observable timing and outcome for each invocation. Timestamps come from the probe when the wrapped method has set them; otherwise the wrapper falls back to its own stamps taken on entry and exit.
+
+    The local service is treated as successful unless its own response says otherwise: a downstream failure flowing through this node does not pollute the row written for this node. When the wrapped method raises, the failure is captured with the exception's HTTP status if available and a 500 default, then the exception propagates to the caller after the row is recorded.
+
+    FastAPI only sees the two-argument shape, which lets it bind the request body without knowing the probe exists.
 
     Args:
-        func (Callable): async method `(self, req, probe) -> SvcResp` to wrap.
+        func (Callable): FastAPI will call the wrapper with `(self, req)` and the wrapper will call the method with `(self, req, probe)`.
 
     Returns:
         Callable: wrapped async method with FastAPI-visible signature `(self, req)`.
