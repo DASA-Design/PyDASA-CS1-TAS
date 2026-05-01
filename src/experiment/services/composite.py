@@ -3,16 +3,7 @@
 Module services/composite.py
 ============================
 
-Composite-service module (no class). One function, `mount_composite_svc`, attaches N atomic handlers to one FastAPI app and wires their in-process routing. We use it for the TAS target system: six atomic handlers (TAS_{1..6}) behind a single port with six per-member routes.
-
-Each member is mounted through `services.atomic.mount_atomic_svc` with two extension kwargs:
-
-    - `pick_target`: at the entry member, resolves the target via the `kind_to_target` table (raising HTTP 400 on unknown kind); every other member falls back to atomic's default Jackson pick.
-    - `dispatch`: checks the shared `_handlers` dict first so sibling members dispatch to each other in-process via a direct `await`; non-member targets fall through to `external_forward` (typically `HttpForward`).
-
-The shared `_handlers` dict closes over `dispatch` and is populated as each member mounts; by the time a request actually runs, every member's handler is registered, so the late-bound lookup resolves.
-
-Each member inherits the K-bounded admission gate from `services.atomic`: at K capacity the member rejects with HTTP 503 before any state allocation. Set the per-member `spec.K <= 0` to disable the gate.
+Attach N atomic handlers to one FastAPI app and wire their in-process routing. Used for the TAS target system: six atomic handlers (TAS_{1..6}) behind a single port. Each member is mounted via `mount_atomic_svc` with `CompositeDispatch` (prefers in-process sibling dispatch over HTTP) and `KindPick` at the entry member (kind -> target table). Members inherit the K-bounded admission gate from `services.atomic`.
 """
 # native python modules
 from __future__ import annotations
@@ -24,7 +15,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from fastapi import FastAPI, HTTPException
 
 # local modules
-from src.experiment.services.atomic import mount_atomic_svc
+from src.experiment.services.atomic import (DispatchFn,
+                                            PickTargetFn,
+                                            mount_atomic_svc)
 from src.experiment.services.base import (ExtFwdFn,
                                           SvcCtx,
                                           SvcReq,
@@ -32,84 +25,153 @@ from src.experiment.services.base import (ExtFwdFn,
                                           SvcSpec)
 
 
-def parse_tas_idx(name: str) -> int:
-    """*parse_tas_idx()* extract the numeric index from a `TAS_{i}` artifact key."""
+def _parse_constituent_idx(name: str) -> int:
+    """*_parse_constituent_idx()* extract the numeric index from a `TAS_{i}` artifact key.
+
+    Args:
+        name (str): artifact key, e.g. `TAS_{1}`.
+
+    Returns:
+        int: numeric index `i`.
+
+    Raises:
+        ValueError: when `name` does not match the `TAS_{i}` shape.
+    """
     _m = re.match(r"^TAS_\{(\d+)\}$", name)
     if _m is None:
-        raise ValueError(f"not a TAS component name: {name!r}")
+        _msg = f"not a TAS component name: {name!r}"
+        raise ValueError(_msg)
     return int(_m.group(1))
 
 
-def mount_composite_svc(
-        app: FastAPI,
-        specs: Dict[str, SvcSpec],
-        routing_rows: Dict[str, List[Tuple[str, float]]],
-        kind_to_target: Dict[str, str],
-        external_forward: ExtFwdFn,
-        *,
-        entry_name: str,
-        route_for: Optional[Callable[[str], str]] = None,
-) -> Dict[str, SvcCtx]:
-    """*mount_composite_svc()* attach N atomic members inside one FastAPI app.
+def _build_route(name: str) -> str:
+    """*_build_route()* return the URL path `/TAS_<i>/invoke` for an artifact name like `TAS_{1}`.
 
-    Every member is mounted via `mount_atomic_svc` with a shared `dispatch` that prefers in-process sibling handlers over the HTTP `external_forward`, plus a kind-dispatch `pick_target` at the entry member. External hops continue to go through `external_forward`.
+    Args:
+        name (str): member artifact key, e.g. `TAS_{1}`.
+
+    Returns:
+        str: URL path the POST route mounts at.
+    """
+    return f"/TAS_{_parse_constituent_idx(name)}/invoke"
+
+
+class CompositeDispatch:
+    """*CompositeDispatch* route a request to a same-process sibling when the target name is a key in `handlers`; otherwise call `ext_fwd` (HTTP forward). Holds `handlers` by reference so siblings registered after this object is built still resolve at call time."""
+
+    def __init__(self,
+                 handlers: Dict[str, Any],
+                 ext_fwd: ExtFwdFn) -> None:
+        """*__init__()* bind the in-process handler dict + the external fallback.
+
+        Args:
+            handlers (Dict[str, Any]): shared `name -> handler` table populated by `mount_composite_svc` as each atomic mounts.
+            ext_fwd (ExtFwdFn): async `(tgt, req) -> SvcResp` used when the target is not a member.
+        """
+        self.handlers = handlers
+        self.ext_fwd = ext_fwd
+
+    async def __call__(self, tgt: str, req: SvcReq) -> SvcResp:
+        """*__call__()* return `await self.handlers[tgt](req)` when `tgt` is a key in `self.handlers`; otherwise return `await self.ext_fwd(tgt, req)`.
+
+        Args:
+            tgt (str): downstream service name.
+            req (SvcReq): request to relay.
+
+        Returns:
+            SvcResp: response from the sibling handler, or from `ext_fwd` when `tgt` is not a sibling.
+        """
+        if tgt in self.handlers:
+            return await self.handlers[tgt](req)
+        return await self.ext_fwd(tgt, req)
+
+
+class KindPick:
+    """*KindPick* return the target name listed under `req.kind` in `kind_to_tgt`; raise HTTP 400 when the kind is not in the table. Used at the entry member so the request body's `kind` field decides the next hop instead of a Jackson-weighted draw."""
+
+    def __init__(self, kind_to_tgt: Dict[str, str]) -> None:
+        """*__init__()* bind the kind dispatch table.
+
+        Args:
+            kind_to_tgt (Dict[str, str]): `kind -> target_name` mapping.
+        """
+        self.kind_to_tgt = kind_to_tgt
+
+    def __call__(self, _ctx: SvcCtx, req: SvcReq) -> str:
+        """*__call__()* return `self.kind_to_tgt[req.kind]`; raise HTTP 400 when `req.kind` is missing from the table.
+
+        Args:
+            _ctx (SvcCtx): per-service state (unused by kind dispatch; kept for `PickTargetFn` parity).
+            req (SvcReq): inbound request whose `kind` field selects the target.
+
+        Returns:
+            str: target service name listed under `req.kind`.
+
+        Raises:
+            HTTPException: 400 when `req.kind` is not a key in `self.kind_to_tgt`.
+        """
+        _t = self.kind_to_tgt.get(req.kind)
+        if _t is None:
+            _msg = f"unknown kind {req.kind!r}; "
+            _msg += f"known kinds: {list(self.kind_to_tgt)}"
+            raise HTTPException(status_code=400, detail=_msg)
+        return _t
+
+
+def mount_composite_svc(app: FastAPI,
+                        specs: Dict[str, SvcSpec],
+                        routing_rows: Dict[str, List[Tuple[str, float]]],
+                        kind_to_tgt: Dict[str, str],
+                        ext_fwd: ExtFwdFn,
+                        *,
+                        entry_name: str,
+                        route_for: Optional[Callable[[str], str]] = None) -> Dict[str, SvcCtx]:
+    """*mount_composite_svc()* register one POST route per entry in `specs`, all sharing a single `CompositeDispatch` (sibling lookup) and a `KindPick` at `entry_name` (kind-to-target dispatch). Hops between members in `specs` stay in the same Python process; targets not in `specs` go through `ext_fwd`. Returns the per-member `SvcCtx` dict; the same dict is also stored on `app.state.tas_components`.
 
     Args:
         app (FastAPI): app to attach the routes to.
         specs (Dict[str, SvcSpec]): spec per member, keyed by artifact name.
-        routing_rows (Dict[str, List[Tuple[str, float]]]): per-member routing row. Targets may be members (in-process) or external (via forward).
-        kind_to_target (Dict[str, str]): kind-based dispatch table for the entry member.
-        external_forward (ExtFwdFn): async `(target, req) -> SvcResp`. Called when the shared dispatch lookup misses the `_handlers` dict (non-member target).
+        routing_rows (Dict[str, List[Tuple[str, float]]]): per-member routing row; targets may be members or external.
+        kind_to_tgt (Dict[str, str]): kind-based dispatch table for the entry member.
+        ext_fwd (ExtFwdFn): async `(tgt, req) -> SvcResp` for non-member targets.
         entry_name (str): which member runs the kind-router, typically `TAS_{1}`.
-        route_for (Callable[[str], str] | None): `member_name -> URL path`. Defaults to `/TAS_<i>/invoke` based on the numeric index in the name.
+        route_for (Callable[[str], str] | None): `member_name -> URL path`; None -> `_build_route`.
 
     Returns:
         Dict[str, SvcCtx]: `{member_name: SvcCtx}`. Also attached to `app.state.tas_components` so the launcher can iterate for flushing.
     """
     if entry_name not in specs:
-        raise ValueError(
-            f"entry_name={entry_name!r} not in specs: {list(specs)}")
-    if route_for is None:
-        def route_for(_n: str) -> str:
-            return f"/TAS_{parse_tas_idx(_n)}/invoke"
+        _msg = f"entry_name={entry_name!r} not in specs: {list(specs)}"
+        raise ValueError(_msg)
 
-    # shared in-process handler table; populated as each member mounts. `_dispatch` captures by reference, so late-bound lookups resolve once every member is registered (order is mount-first, invoke-later).
+    if route_for is not None:
+        _route_for = route_for
+    else:
+        _route_for = _build_route
+
+    # populated as each member mounts; CompositeDispatch captures by reference, so late-bound lookups resolve once every member is registered.
     _handlers: Dict[str, Any] = {}
+    _dispatch: DispatchFn = CompositeDispatch(_handlers, ext_fwd)
 
-    async def _dispatch(_target: str,
-                        _req: SvcReq) -> SvcResp:
-        if _target in _handlers:
-            return await _handlers[_target](_req)
-        return await external_forward(_target, _req)
-
-    def _pick_for(member_name: str) -> Optional[Callable[[SvcCtx, SvcReq], str]]:
-        """*_pick_for()* return a kind-dispatch picker for the entry member; None elsewhere (falls back to atomic's default Jackson pick)."""
-        if member_name != entry_name or not kind_to_target:
-            return None
-
-        def _pick(_ctx: SvcCtx,
-                  _req: SvcReq) -> str:
-            _t = kind_to_target.get(_req.kind)
-            if _t is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(f"unknown kind {_req.kind!r}; "
-                            f"known kinds: {list(kind_to_target)}"))
-            return _t
-
-        return _pick
+    if kind_to_tgt:
+        _entry_pick: Optional[PickTargetFn] = KindPick(kind_to_tgt)
+    else:
+        _entry_pick = None
 
     _contexts: Dict[str, SvcCtx] = {}
     for _name, _spec in specs.items():
-        _ctx = mount_atomic_svc(
-            app,
-            _spec,
-            routing_rows.get(_name, []),
-            external_forward,
-            route=route_for(_name),
-            pick_target=_pick_for(_name),
-            dispatch=_dispatch,
-        )
+        if _name == entry_name:
+            _pick = _entry_pick
+        else:
+            _pick = None
+
+        _ctx = mount_atomic_svc(app,
+                                _spec,
+                                routing_rows.get(_name, []),
+                                ext_fwd,
+                                route=_route_for(_name),
+                                pick_tgt=_pick,
+                                dispatch=_dispatch)
         _contexts[_name] = _ctx
         _handlers[_name] = _ctx.handler
 
