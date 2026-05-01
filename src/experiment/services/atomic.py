@@ -3,14 +3,7 @@
 Module services/atomic.py
 =========================
 
-Atomic-service module (no class). One function, `mount_atomic_svc`, attaches a handler to a FastAPI app. The handler sleeps for the simulated service time, draws a Bernoulli at rate `epsilon`, picks a routing target, and forwards. The whole thing is wrapped with `@logger(ctx)` so one CSV row lands in `ctx.log` per call, and the built handler is stashed on `ctx.handler` so composite callers can dispatch siblings in-process without going through FastAPI.
-
-Two optional extension points let composite callers (TAS target system) reuse this machinery without re-implementing the step order:
-
-    - `pick_target`: replace the Jackson-weighted pick with a custom target-picker (e.g. kind-based dispatch). Return `None` to force the terminal branch.
-    - `dispatch`: replace the forward step (e.g. "check an in-process handler dict first; fall back to `external_forward`").
-
-Both default to the plain atomic behaviour used by third-party services (MAS / AS / DS). Concurrency is gated by two real resource limits: the `c`-permit semaphore on in-service handlers and a `K` counter on total in-flight (waiting + in-service). At K capacity the handler raises HTTP 503 before allocating any further state, so the service rejects rather than growing the buffer without bound. Set `spec.K <= 0` to disable the gate.
+Atomic-service handler (sleep -> Bernoulli -> Jackson-pick -> forward) for a FastAPI app. K-gate (total in-flight requests) + c-semaphore (concurrent in-service handlers); going over-K raises HTTP 503. Composite callers can override `pick_tgt` / `dispatch`.
 """
 # native python modules
 from __future__ import annotations
@@ -27,107 +20,169 @@ from src.experiment.services.base import (ExtFwdFn,
                                           SvcReq,
                                           SvcResp,
                                           SvcSpec)
-from src.experiment.services.instruments import (logger,
-                                                 mark_admit_time,
-                                                 mark_local_end)
+from src.experiment.services.instruments import (LogProbe,
+                                                 logger,
+                                                 stamp_admit,
+                                                 stamp_local_end)
 
 
 PickTargetFn = Callable[[SvcCtx, SvcReq], Optional[str]]
 DispatchFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 
+class AtomicHandler:
+    """*AtomicHandler* one atomic service pipeline per call (K-admit, c-acquire, sleep, Bernoulli, pick, forward). `__call__` matches the `(SvcReq) -> SvcResp` contract FastAPI and `@logger` expect."""
+
+    def __init__(self,
+                 ctx: SvcCtx,
+                 spec: SvcSpec,
+                 names: List[str],
+                 weights: List[float],
+                 ext_fwd: ExtFwdFn,
+                 pick_tgt: Optional[PickTargetFn],
+                 dispatch: Optional[DispatchFn]) -> None:
+        """*__init__()* bind per-service state for the lifetime of the mount.
+
+        Args:
+            ctx (SvcCtx): per-service runtime state (semaphore, RNG, log, in-flight counter). Required field for `@logger`.
+            spec (SvcSpec): per-service knobs (name, mu, epsilon, c, K).
+            names (List[str]): outbound target names extracted from the routing row.
+            weights (List[float]): Jackson weights aligned with `names`.
+            ext_fwd (ExtFwdFn): launcher-supplied async forward used by the default dispatch.
+            pick_tgt (PickTargetFn | None): override target picking; None falls back to `_jackson_pick`.
+            dispatch (DispatchFn | None): override target forwarding; None falls back to `_external_dispatch`.
+        """
+        self.ctx = ctx
+        self.spec = spec
+        self.names = names
+        self.weights = weights
+        self.ext_fwd = ext_fwd
+        self.pick_tgt = pick_tgt
+        self.dispatch = dispatch
+
+    def _jackson_pick(self) -> Optional[str]:
+        """*_jackson_pick()* default `pick_tgt`: Jackson-weighted choice over `self.names` using `self.ctx.rng`. Returns None when `self.names` is empty so `__call__` takes the terminal branch.
+
+        Returns:
+            Optional[str]: name of the picked target, or None for the terminal branch.
+        """
+        if not self.names:
+            return None
+        return self.ctx.rng.choices(self.names,
+                                    weights=self.weights, k=1)[0]
+
+    async def _external_dispatch(self,
+                                 tgt: str,
+                                 req: SvcReq) -> SvcResp:
+        """*_external_dispatch()* default `dispatch`: delegate to `self.ext_fwd` (typically an `HttpForward` HTTP call).
+
+        Args:
+            tgt (str): downstream service name.
+            req (SvcReq): request to relay; `req_id` propagates for end-to-end correlation.
+
+        Returns:
+            SvcResp: downstream response.
+        """
+        return await self.ext_fwd(tgt, req)
+
+    @logger
+    async def __call__(self, req: SvcReq, probe: LogProbe) -> SvcResp:
+        """*__call__()* run the full atomic pipeline for one invocation: K-admit, c-acquire, sleep, Bernoulli, pick, forward. Releases the K counter on every exit path via `finally`. The decorator threads `probe` in and reads its fields after this method returns.
+
+        Args:
+            req (SvcReq): inbound request; `req_id` is propagated through every emitted `SvcResp`.
+            probe (LogProbe): per-invocation scratchpad written by `stamp_admit` / `stamp_local_end`; read by `@logger` to populate the CSV row.
+
+        Returns:
+            SvcResp: terminal/success response, Bernoulli-failure response, or wrapped downstream response.
+
+        Raises:
+            HTTPException: 503 when the K admission gate rejects the call.
+        """
+        if not self.ctx.try_admit():
+            _msg = f"capacity exceeded (K={self.spec.K}) at {self.spec.name}"
+            raise HTTPException(status_code=503,
+                                detail=_msg)
+        try:
+            # c-permit held only around local work so composite chains do not deadlock.
+            async with self.ctx.sem:
+                probe.admit_ts = stamp_admit()
+                probe.c_used_at_start = self.ctx.c_in_use
+
+                _svc = self.ctx.draw_svc_time()
+                if _svc > 0:
+                    await asyncio.sleep(_svc)
+
+                if self.ctx.draw_eps():
+                    return SvcResp(req_id=req.req_id,
+                                   srv_name=self.spec.name,
+                                   success=False,
+                                   message="bernoulli failure")
+
+            # terminal branch leaves local_end_ts defaulted to end_ts.
+            if self.pick_tgt is not None:
+                _target = self.pick_tgt(self.ctx, req)
+            else:
+                _target = self._jackson_pick()
+            if _target is None:
+                return SvcResp(req_id=req.req_id,
+                               srv_name=self.spec.name,
+                               success=True,
+                               message="terminal")
+
+            # stamp_local_end brackets B_local from the downstream dispatch await.
+            probe.local_end_ts = stamp_local_end()
+            if self.dispatch is not None:
+                _inner = await self.dispatch(_target, req)
+            else:
+                _inner = await self._external_dispatch(_target, req)
+            return SvcResp(req_id=req.req_id,
+                           srv_name=self.spec.name,
+                           success=_inner.success,
+                           message=_inner.message)
+        finally:
+            self.ctx.release()
+
+
 def mount_atomic_svc(app: FastAPI,
                      spec: SvcSpec,
                      targets: List[Tuple[str, float]],
-                     external_forward: ExtFwdFn,
+                     ext_fwd: ExtFwdFn,
                      *,
                      route: str = "/invoke",
-                     pick_target: Optional[PickTargetFn] = None,
+                     pick_tgt: Optional[PickTargetFn] = None,
                      dispatch: Optional[DispatchFn] = None) -> SvcCtx:
-    """*mount_atomic_svc()* attach one POST route running the atomic handler through `@logger`.
+    """*mount_atomic_svc()* mount an `AtomicHandler` POST route on `app`; stash the handler on `ctx.handler` for in-process sibling dispatch.
 
     Args:
         app (FastAPI): app to attach the route to.
-        spec (SvcSpec): per-service knobs.
-        targets (List[Tuple[str, float]]): Jackson-weighted outbound routing row in declaration order. Empty means the default `pick_target` returns None, routing the request to the terminal branch.
-        external_forward (ExtFwdFn): async `(target, req) -> SvcResp`. Typically an `HttpForward` instance. Used by the default `dispatch`; callers that override `dispatch` may ignore it.
+        spec (SvcSpec): per-service knobs (name, mu, epsilon, c, K).
+        targets (List[Tuple[str, float]]): Jackson-weighted routing row; empty -> terminal branch.
+        ext_fwd (ExtFwdFn): async `(tgt, req) -> SvcResp` used by the default dispatch.
         route (str): URL path. Defaults to `"/invoke"`.
-        pick_target (PickTargetFn | None): override for the target-picking step. Receives `(ctx, req)` and returns the target name, or `None` to force the terminal branch. Defaults to a Jackson-weighted pick over `targets`.
-        dispatch (DispatchFn | None): override for the forward step. Receives `(target, req)` and returns the target's `SvcResp`. Defaults to `await external_forward(target, req)`.
+        pick_tgt (PickTargetFn | None): override target picking; None -> `_jackson_pick`.
+        dispatch (DispatchFn | None): override target forwarding; None -> `_external_dispatch`.
 
     Returns:
-        SvcCtx: per-service state `(spec, log, rng, handler)`. Attached to `app.state.ctx` so atomic callers can reach `.log` for flushing; composite callers also read `.handler` for in-process sibling dispatch.
+        SvcCtx: per-service state attached to `app.state.ctx`; `.handler` holds the `AtomicHandler` instance.
     """
     _ctx = SvcCtx(spec=spec)
     app.state.ctx = _ctx
 
-    # default Jackson pick closes over `targets` and the ctx RNG
     _names: List[str] = [_t for _t, _ in targets]
-    _weights: List[float] = [float(_w) for _, _w in targets]
+    _weights: List[float] = [_w for _, _w in targets]
 
-    if pick_target is None:
-        def pick_target(_pctx: SvcCtx,
-                        _preq: SvcReq) -> Optional[str]:
-            if not _names:
-                return None
-            return _pctx.rng.choices(_names, weights=_weights, k=1)[0]
-
-    # default forward: delegate to the launcher-supplied external_forward
-    if dispatch is None:
-        async def dispatch(_dtarget: str,
-                           _dreq: SvcReq) -> SvcResp:
-            return await external_forward(_dtarget, _dreq)
-
-    @logger(_ctx)
-    async def _handler(req: SvcReq) -> SvcResp:
-        # 0. K-bounded admission: reject before any state allocation when total in-flight (waiting at sem + in-service) is at capacity.
-        if not _ctx.try_admit():
-            raise HTTPException(
-                status_code=503,
-                detail=f"capacity exceeded (K={spec.K}) at {spec.name}")
-        try:
-            # 1. c-permit gate; held around local work only so composite chains do not deadlock.
-            async with _ctx.sem:
-                # post-admit timestamp + admitted concurrency for `@logger` Wq.
-                mark_admit_time(_ctx.c_in_use)
-
-                _svc = _ctx.draw_svc_time()
-                if _svc > 0:
-                    await asyncio.sleep(_svc)
-
-                # 2. Bernoulli epsilon: local business failure (still holds permit)
-                if _ctx.draw_eps():
-                    return SvcResp(req_id=req.req_id,
-                                   srv_name=spec.name,
-                                   success=False,
-                                   message="bernoulli failure")
-
-            # 3. pick target; terminal branch leaves `local_end_ts` defaulted to `end_ts`.
-            _target = pick_target(_ctx, req)
-            if _target is None:
-                return SvcResp(req_id=req.req_id,
-                               srv_name=spec.name,
-                               success=True,
-                               message="terminal")
-
-            # 4. dispatch; `mark_local_end()` brackets local B from the downstream await.
-            mark_local_end()
-            _inner = await dispatch(_target, req)
-            return SvcResp(req_id=req.req_id,
-                           srv_name=spec.name,
-                           success=_inner.success,
-                           message=_inner.message)
-        finally:
-            _ctx.release()
-
-    _ctx.handler = _handler
-
-    # FastAPI passes request via DI; expose a clean one-arg coroutine
-    async def _route(req: SvcReq) -> SvcResp:
-        return await _handler(req)
+    _atomic = AtomicHandler(ctx=_ctx,
+                             spec=spec,
+                             names=_names,
+                             weights=_weights,
+                             ext_fwd=ext_fwd,
+                             pick_tgt=pick_tgt,
+                             dispatch=dispatch)
+    _ctx.handler = _atomic
 
     app.add_api_route(route,
-                      _route,
+                      _atomic,
                       methods=["POST"],
                       response_model=SvcResp)
     return _ctx
