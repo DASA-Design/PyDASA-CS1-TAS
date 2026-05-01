@@ -69,7 +69,8 @@ def generate_payload(kind: str,
         MockPayload: payload with a blob of exactly `size_bytes` ASCII bytes.
     """
     if size_bytes < 0:
-        raise ValueError(f"size_bytes must be >= 0, got {size_bytes}")
+        _msg = f"size_bytes must be >= 0, got {size_bytes}"
+        raise ValueError(_msg)
 
     if rng is None:
         _rng = random.Random()

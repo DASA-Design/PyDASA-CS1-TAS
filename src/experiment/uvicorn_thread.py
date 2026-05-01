@@ -97,9 +97,9 @@ class UvicornThread(threading.Thread):
             except (httpx.HTTPError, ConnectionError, OSError):
                 pass
             time.sleep(0.05)
-        raise RuntimeError(
-            f"uvicorn did not become ready within {timeout_s} s "
-            f"on {_url}")
+        _msg = f"uvicorn did not become ready within {timeout_s} s "
+        _msg += f"on {_url}"
+        raise RuntimeError(_msg)
 
     def shutdown(self) -> None:
         """*shutdown()* signal uvicorn to exit and join the thread (5 s timeout)."""

@@ -47,14 +47,7 @@ class RegistryEntry:
 
 @dataclass(frozen=True)
 class SvcRegistry:
-    """*SvcRegistry* immutable service-name to URL resolver.
-
-    Attributes:
-        host (str): default host address (`"127.0.0.1"` in `local` mode).
-        base_port (int): first service port; each entry adds its `port_offset`.
-        table (Dict[str, RegistryEntry]): keyed by service name (e.g. `TAS_{1}`, `MAS_{1}`); values are frozen `RegistryEntry` records.
-        host_overrides (Dict[str, str]): per-service-name host override populated by `from_config`. In `local` mode, every entry maps to `host`; in `loopback_aliased` and `remote` modes, entries map to per-bucket hosts from `method_cfg.hosts`.
-    """
+    """*SvcRegistry* immutable resolver from service name to fully-qualified URL. Per-service host can vary by deployment mode (`local` collapses to one address; `loopback_aliased` / `remote` route by role bucket with optional per-name override). Field-level docs are inline above each field below."""
 
     # default host address used when host_overrides has no entry for a service
     host: str
