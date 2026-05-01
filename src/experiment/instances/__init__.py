@@ -5,8 +5,8 @@ Case-study-specific composition: the TAS target system (ONE FastAPI app with six
 
 Both are parameterised FUNCTIONS, not classes; they assemble generic `services/` building blocks (SvcSpec, SvcCtx, atomic / composite mounts) with CS-01-specific parameters.
 
-    - `build_tas(specs, routing_rows, kind_to_target, forward)` -> FastAPI
-    - `build_third_party(spec, targets, forward)` -> FastAPI
+    - `build_tas(specs, routing_rows, kind_to_tgt, ext_fwd, *, entry_name)` -> FastAPI
+    - `build_third_party(spec, targets, ext_fwd)` -> FastAPI
 """
 
 from src.experiment.instances.tas import build_tas

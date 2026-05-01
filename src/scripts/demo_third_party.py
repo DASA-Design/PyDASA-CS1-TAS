@@ -94,7 +94,7 @@ async def _demo() -> None:
     # -------- 1. terminal service ----------------------------------------
     _banner("1. build_third_party - terminal MAS (empty targets)")
     _spec = _mas_spec()
-    _app = build_third_party(_spec, targets=[], external_forward=_no_forward)
+    _app = build_third_party(_spec, targets=[], ext_fwd=_no_forward)
     _r = await _post_invoke(_app)
     print(f"  POST /invoke  status = {_r.status_code}")
     print(f"  body                 = {_r.json()}")
@@ -109,7 +109,7 @@ async def _demo() -> None:
     _spec = _mas_spec()
     _app = build_third_party(_spec,
                              targets=[("DS_{3}", 1.0)],
-                             external_forward=_fwd)
+                             ext_fwd=_fwd)
     _r = await _post_invoke(_app)
     print(f"  POST /invoke  status = {_r.status_code}")
     print(f"  body                 = {_r.json()}")
@@ -120,7 +120,7 @@ async def _demo() -> None:
     _spec = _mas_spec(epsilon=1.0)
     _app = build_third_party(_spec,
                              targets=[("DS_{3}", 1.0)],
-                             external_forward=_no_forward)
+                             ext_fwd=_no_forward)
     _r = await _post_invoke(_app)
     print(f"  POST /invoke  status = {_r.status_code}")
     print(f"  body                 = {_r.json()}")

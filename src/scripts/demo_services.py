@@ -144,7 +144,7 @@ async def _demo() -> None:
                 K=10,
                 seed=3),
         targets=[],
-        external_forward=lambda t, r: None,  # never called for terminal
+        ext_fwd=lambda t, r: None,  # never called for terminal
     )
     _transport = httpx.ASGITransport(app=_app)
     async with httpx.AsyncClient(transport=_transport,
@@ -183,7 +183,7 @@ async def _demo() -> None:
     }
 
     _rows = {
-        "TAS_{1}": [],                          # entry; dispatched by kind_to_target
+        "TAS_{1}": [],                          # entry; dispatched by kind_to_tgt
         "TAS_{2}": [("MAS_{1}", 1.0)],          # forwards externally to MAS_{1}
     }
 
@@ -191,8 +191,8 @@ async def _demo() -> None:
     mount_composite_svc(_app_tas,
                         specs=_specs,
                         routing_rows=_rows,
-                        kind_to_target=_k2t,
-                        external_forward=_forward,
+                        kind_to_tgt=_k2t,
+                        ext_fwd=_forward,
                         entry_name="TAS_{1}")
 
     _transport = httpx.ASGITransport(app=_app_tas)
@@ -202,7 +202,7 @@ async def _demo() -> None:
         _r = await _c.post("/TAS_1/invoke", json=_req.model_dump())
     print(f"  POST /TAS_1/invoke  status = {_r.status_code}")
     print(f"  body                     = {_r.json()}")
-    print(f"  external_forward calls   = {_calls}")
+    print(f"  ext_fwd calls            = {_calls}")
     print("  per-member rows:")
     for _name, _ctx in _app_tas.state.tas_components.items():
         print(f"    {_name:<10}  log_rows={len(_ctx.log)}")
