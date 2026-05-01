@@ -87,7 +87,7 @@ class SvcSpec:
 
     @property
     def c_srv(self) -> int:
-        """c_srv service-side parallel handlers (M/M/c/K); alias for `c` to clarify the role of this parameter in the code.
+        """*c_srv* service-side parallel handlers (M/M/c/K); alias for `c` to clarify the role of this parameter at call sites.
 
         Returns:
             int: number of parallel servers in the M/M/c/K model from the configuration profile.
@@ -96,7 +96,7 @@ class SvcSpec:
 
 
 def derive_seed(root_seed: int, srv_name: str) -> int:
-    """derive_seed derives a stable 64-bit per-service seed from `(root, name)` FNV-1a over the UTF-8 service name XORed with `root_seed`; stable across processes.
+    """*derive_seed()* return a stable 64-bit per-service seed from `(root, name)` via FNV-1a over the UTF-8 service name XORed with `root_seed`; stable across processes.
 
     Args:
         root_seed (int): single seed from `experiment.json::seed`.
@@ -121,7 +121,7 @@ def derive_seed(root_seed: int, srv_name: str) -> int:
 
 
 class SvcReq(BaseModel):
-    """SvcReq pydantic wire schema for every component invocation.BaseModel is the abstract base class for request bodies.
+    """**SvcReq** pydantic wire schema for every component invocation. Inherits `BaseModel` for body validation.
     """
 
     # client UUID; stable across every hop
@@ -138,7 +138,7 @@ class SvcReq(BaseModel):
 
 
 class SvcResp(BaseModel):
-    """SvcResp Pydantic wire schema returned by every component. BaseModel is the abstract base class for request bodies.
+    """**SvcResp** pydantic wire schema returned by every component. Inherits `BaseModel` for body validation.
     """
 
     # echoes the request's UUID for end-to-end tracing
@@ -177,7 +177,7 @@ LOG_COLUMNS = (
 
 @dataclass
 class SvcCtx:
-    """SvcCtx mutable per-service state with c-semaphore + K-gate."""
+    """**SvcCtx** mutable per-service state with c-semaphore + K-gate."""
 
     # immutable per-service knobs
     spec: SvcSpec
@@ -215,7 +215,7 @@ class SvcCtx:
         self.sem = asyncio.Semaphore(max(int(self.spec.c_srv), 1))
 
     def record_row(self, row: Dict[str, Any]) -> None:
-        """record_row append a log row; count a drop if the deque was already full. Silently drops the left-most element on append when full;
+        """*record_row()* append a log row; count a drop if the deque was already full. Silently drops the left-most element on append when full.
 
         Args:
             row (Dict[str, Any]): one CSV row in the `LOG_COLUMNS` shape.
@@ -226,7 +226,7 @@ class SvcCtx:
         self.log.append(row)
 
     def drain(self) -> List[Dict[str, Any]]:
-        """drain swap the current log buffer for a fresh empty one and return the old contents. O(1) rebind; safe under concurrent appends.
+        """*drain()* swap the current log buffer for a fresh empty one and return the old contents. O(1) rebind; safe under concurrent appends.
 
         Returns:
             List[Dict[str, Any]]: all rows buffered since the previous drain (or construction).
@@ -238,7 +238,7 @@ class SvcCtx:
 
     @property
     def c_in_use(self) -> int:
-        """c_in_use number of currently busy servers slots.
+        """*c_in_use* number of currently busy server slots.
 
         Returns:
             int: number of permits currently held (server slots busy). Used by `@logger` to sample the PASTA observation `c_used_at_start`.
@@ -249,9 +249,9 @@ class SvcCtx:
         return max(_cap - _free, 0)
 
     def try_admit(self) -> bool:
-        """try_admit cheks and count the in-flight requests against the spec.K max buffer capacity.
+        """*try_admit()* check and count the in-flight requests against the spec.K max buffer capacity.
 
-        Doesnt need lock due to asyncio the read+increment is one Python step (no awaits between the compare and the bump),
+        No lock needed: under asyncio the read + increment runs as one Python step (no awaits between the compare and the bump).
 
         Returns:
             bool: True when admitted (counter incremented); False when rejected (counter unchanged).
@@ -272,14 +272,13 @@ class SvcCtx:
         return True
 
     def release(self) -> None:
-        """release reduce the inf_flight counter, signaling that a request has completed and freed up capacity.
-        """
+        """*release()* decrement `in_flight` to signal that a request has completed and freed K-gate capacity."""
         # dont allow negative counter
         if self.in_flight > 0:
             self.in_flight -= 1
 
     def draw_svc_time(self) -> float:
-        """draw_svc_time simulate the service time by drawing from the seeded RNG's exponential distribution at rate `mu`.
+        """*draw_svc_time()* simulate one service time by drawing from the seeded RNG's exponential distribution at rate `mu`.
 
         Returns:
             float: service time in seconds. Returns 0 when `mu` is 0 or negative (no sleep).
@@ -289,7 +288,7 @@ class SvcCtx:
         return self.rng.expovariate(self.spec.mu)
 
     def draw_eps(self) -> bool:
-        """draw_eps simulate the probability of error of the service by comparing the a random number from the seeded RNG to `epsilon`.
+        """*draw_eps()* simulate one Bernoulli failure draw by comparing a seeded-RNG sample to `epsilon`.
 
         Returns:
             bool: True means the services failed, False means it succeeded. When `epsilon` is 0 or negative, always returns False (no failure)..
@@ -299,7 +298,7 @@ class SvcCtx:
     def flush_log(self,
                   csv_path: Path,
                   columns: tuple[str, ...] = LOG_COLUMNS) -> int:
-        """flush_log writes all buffered log rows to a CSV at `csv_path` with the given column order, then clears the buffer. Overwrites (not appends) so a stale-schema CSV at the same path can never misalign new rows.
+        """*flush_log()* write all buffered log rows to a CSV at `csv_path` with the given column order, then clear the buffer. Overwrites (not appends) so a stale-schema CSV at the same path cannot misalign new rows.
 
         Args:
             csv_path (Path): target CSV; parent directory is created if missing.
@@ -328,7 +327,7 @@ def make_base_app(title: str,
                   *,
                   healthz_fn: Optional[Callable[[], Dict[str, Any]]] = None,
                   ) -> FastAPI:
-    """make_base_app exposes the FastAPI `/healthz` and no other route. Practitioners attach invoke routes wuth the functions `mount_atomic_svc` or `mount_composite_svc`, and attach service state via `app.state`.
+    """*make_base_app()* return a FastAPI app exposing only `/healthz`. Callers attach invoke routes via `mount_atomic_svc` / `mount_composite_svc` and attach service state via `app.state`.
 
     Args:
         title (str): FastAPI app title.
@@ -353,7 +352,7 @@ ExtFwdFn = Callable[[str, SvcReq], Awaitable[SvcResp]]
 
 
 class HttpForward:
-    """ HttpForward async callback `(target, req) -> SvcResp` over HTTP. Closes over a shared `httpx.AsyncClient` and a `SvcRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
+    """**HttpForward** async callback `(target, req) -> SvcResp` over HTTP. Holds a shared `httpx.AsyncClient` and a `SvcRegistry`. The client is routed by port to the in-process ASGI mesh by default; the launcher can swap the transport for real TCP.
     """
 
     def __init__(self,
