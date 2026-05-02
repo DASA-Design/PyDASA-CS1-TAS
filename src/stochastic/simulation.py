@@ -8,14 +8,14 @@ SimPy DES engine for the open Jackson queueing network used by the CS-01 TAS cas
     - **QueueNode** per-node SimPy `Resource` with finite capacity K and c parallel servers, plus per-job timing collection (service time, queue wait, total system time) and event-driven L / Lq tracking for time-weighted averages.
     - **simulate_net()** top-level driver. Spawns a `QueueNode` per slot, fires Poisson arrivals at the externally-driven nodes, runs each replication for `horizon` seconds with a `warmup` cut-off, repeats `reps` times, and returns one summary DataFrame with mean and std per node across replications.
 
+`horizon` and `warmup` are SimPy SECONDS, not invocation counts; the method-config JSON declares the latter and the orchestrator in `src.methods.stochastic` converts via `seconds = invocations / sum(lambda_z)` before calling here.
+
 Public API:
     - `QueueNode` node class.
     - `job(env, node_id, nodes, P, results)` single-job SimPy generator.
     - `job_generator(env, node_id, rate, nodes, P, results)` Poisson source.
     - `simulate_net(mu, lam_z, c, K, P, ...)` multi-rep driver.
     - `solve_net(cfg, method_cfg)` NetCfg adapter mirroring `src.analytic.jackson.solve_net`.
-
-*IMPORTANT:* `horizon` and `warmup` are SimPy SECONDS, not invocation counts. The method-config JSON declares the latter; the orchestrator in `src.methods.stochastic` converts via `seconds = invocations / sum(lambda_z)` before calling here.
 
 # TODO: replace the per-job blocked-after-warmup approximation with a state-conditioned counter (event-driven) once a regression test exists for the M/M/1/K Erlang-B formula.
 """
@@ -300,24 +300,17 @@ def simulate_net(mu: List[float],
     Returns:
         pd.DataFrame: per-node summary with `_mean` / `_std` columns for `lambda`, `mu`, `rho`, `L`, `Lq`, `W`, `Wq`, `Jobs_Served`, `Jobs_Blocked`, `Blocking_Prob`.
     """
-    # seed both PRNGs once so the run is reproducible end-to-end
+    # seed both PRNGs once so the multi-rep run is reproducible end-to-end
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
-
     _n = len(mu)
-
-    # collect one row per (replication, node) and aggregate at the end
     _all: List[dict] = []
-
     for _r in range(reps):
         if verbose:
             print(f"--- Running Replication {_r + 1}/{reps} ---")
-
         _env = simpy.Environment()
         _results: List[List[float]] = [[] for _ in range(_n)]
-
-        # build the nodes
         _nodes: List[QueueNode] = []
         for _i in range(_n):
             _nodes.append(QueueNode(_env,
@@ -328,12 +321,10 @@ def simulate_net(mu: List[float],
                                     P,
                                     _results,
                                     horizon))
-
-        # initialise the time-weighted bookkeeping at t=0
+        # open the first time-weighted interval at t=0; without this seed event the L / Lq integrals miss the pre-arrival idle window
         for _node in _nodes:
             _node.record_state_change(_env)
-
-        # arm the Poisson sources at every externally-driven node
+        # arm the Poisson sources at every externally-driven node (lam_z[i] > 0)
         for _i, _rate in enumerate(lam_z):
             if _rate > 0:
                 _env.process(job_generator(_env,
@@ -342,10 +333,8 @@ def simulate_net(mu: List[float],
                                            _nodes,
                                            P,
                                            _results))
-
         _env.run(until=horizon)
-
-        # final length-interval snapshot at t=horizon
+        # close the trailing length interval at t=horizon so time-weighted means cover the full run
         for _node in _nodes:
             _delta = horizon - _node.last_event_time
             if _delta > 0:
@@ -353,8 +342,6 @@ def simulate_net(mu: List[float],
                     (_node.current_queue_length, _delta))
                 _node.system_len_data.append(
                     (_node.current_system_length, _delta))
-
-        # per-node summary for this replication
         _all.extend(_summarise_replication(_nodes,
                                            _r + 1,
                                            mu,
@@ -362,7 +349,6 @@ def simulate_net(mu: List[float],
                                            warmup))
 
     _df_all = pd.DataFrame(_all)
-
     # aggregate mean / std across replications, one row per node
     _df_summary = _df_all.groupby("node").agg({
         "lambda": ["mean", "std"],
@@ -411,25 +397,26 @@ def _summarise_replication(nodes: List[QueueNode],
 
     _rows: List[dict] = []
     for _i, _node in enumerate(nodes):
-        # length intervals: keep only the post-warm-up portion
         _q_data = _filter_length_data(_node.queue_len_data, warmup)
         _s_data = _filter_length_data(_node.system_len_data, warmup)
-
-        # per-job samples: filter by collection timestamp
-        _service_times = [_t for _t, _ts in _node.coll_service_times if _ts >= warmup]
-        _queue_times = [_t for _t, _ts in _node.coll_queue_times if _ts >= warmup]
-        _system_times = [_t for _t, _ts in _node.coll_system_times if _ts >= warmup]
+        _service_times: List[float] = []
+        for _t, _ts in _node.coll_service_times:
+            if _ts >= warmup:
+                _service_times.append(_t)
+        _queue_times: List[float] = []
+        for _t, _ts in _node.coll_queue_times:
+            if _ts >= warmup:
+                _queue_times.append(_t)
+        _system_times: List[float] = []
+        for _t, _ts in _node.coll_system_times:
+            if _ts >= warmup:
+                _system_times.append(_t)
         _jobs_served = len(_system_times)
-
-        # blocking: assume rate is roughly constant across the run, so post-warm-up blocked count ~ total * (post / total) ratio
+        # block-count rescaling: arrivals are roughly stationary so the post-warmup share equals the time share
         _blocked = int(_node.blocked_jobs * _block_ratio)
         _arrivals = _jobs_served + _blocked
-
-        # time-weighted L and Lq
         _L = compute_time_weighted_mean(_s_data, _coll_duration)
         _Lq = compute_time_weighted_mean(_q_data, _coll_duration)
-
-        # per-job W and Wq
         if _system_times:
             _W = float(np.mean(_system_times))
         else:
@@ -438,12 +425,11 @@ def _summarise_replication(nodes: List[QueueNode],
             _Wq = float(np.mean(_queue_times))
         else:
             _Wq = 0.0
-
-        # arrival rate and effective service rate (per-server)
         if _coll_duration > 0:
             _lambda = _jobs_served / _coll_duration
         else:
             _lambda = 0.0
+        # measured per-server service rate; falls back to the nominal mu when no samples landed in the warmup window
         if _service_times:
             _avg_service = float(np.mean(_service_times))
         else:
@@ -456,9 +442,7 @@ def _summarise_replication(nodes: List[QueueNode],
             _rho = min(1.0, _lambda / (_node.c * _mu_eff))
         else:
             _rho = 0.0
-
         _model = format_model_string(_node.c, _node.K)
-
         if _arrivals > 0:
             _blocking_prob = _blocked / _arrivals
         else:
@@ -535,7 +519,7 @@ def solve_net(cfg: NetCfg,
               method_cfg: Dict[str, Any]) -> pd.DataFrame:
     """*solve_net()* run the SimPy DES engine for one resolved `(profile, scenario)` pair and return per-node metrics with the same schema the analytic method produces, plus `<metric>_std` columns for the stochastic CI machinery.
 
-    *IMPORTANT:* the method config declares the horizon / warmup in *invocations*, but `simulate_net` runs in SimPy seconds. Conversion `seconds = invocations / sum(lambda_z)` happens here so callers can stay in the natural "invocation count" unit.
+    The method config declares horizon / warmup in *invocations* but `simulate_net` runs in SimPy seconds; the `seconds = invocations / sum(lambda_z)` conversion happens here so callers stay in the natural "invocation count" unit.
 
     Args:
         cfg (NetCfg): resolved network configuration. Provides `mu`, `c`, `K`, `lambda_z`, and `routing` per artifact.
@@ -548,26 +532,24 @@ def solve_net(cfg: NetCfg,
     Returns:
         pd.DataFrame: one row per artifact with columns `node`, `key`, `name`, `type`, `lambda`, `mu`, `c`, `K`, `rho`, `L`, `Lq`, `W`, `Wq`, plus `<metric>_std` for every stochastic metric.
     """
-    # unpack the NetCfg into per-node arrays the engine expects
-    _mu = [float(_a.mu) for _a in cfg.artifacts]
-    _c = [int(_a.c) for _a in cfg.artifacts]
+    _mu: List[float] = []
+    _c: List[int] = []
     _K: List[Optional[int]] = []
     for _a in cfg.artifacts:
+        _mu.append(float(_a.mu))
+        _c.append(int(_a.c))
         if _a.K is not None:
             _K.append(int(_a.K))
         else:
             _K.append(None)
     _lambda_z = cfg.build_lam_z_vec().tolist()
     _P = cfg.routing
-
-    # convert invocation counts into SimPy seconds. With Poisson sources totalling sum(lambda_z) jobs/s, reaching N invocations takes roughly N / sum(lambda_z) seconds in expectation. Fall back to 1.0 for an all-zero lambda_z vector.
+    # invocation count -> SimPy seconds: with sum(lambda_z) jobs/s, reaching N invocations takes ~ N / sum(lambda_z) s in expectation; fall back to 1.0 on an all-zero lambda_z vector
     _total_rate = float(sum(_lambda_z))
     if _total_rate <= 0:
         _total_rate = 1.0
     _horizon = float(method_cfg["horizon_invocations"]) / _total_rate
     _warmup = float(method_cfg["warmup_invocations"]) / _total_rate
-
-    # run the SimPy engine
     _summary = simulate_net(
         mu=_mu,
         lam_z=_lambda_z,

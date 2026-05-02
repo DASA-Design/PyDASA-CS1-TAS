@@ -84,20 +84,20 @@ class TestServiceStateRNG:
         assert isinstance(_s2.draw_svc_time(), float)
 
 
-class TestLauncherThreadsSeed:
-    """**TestLauncherThreadsSeed** method_cfg::seed flows into every service spec via derive_seed."""
+class TestArchitectureThreadsSeed:
+    """**TestArchitectureThreadsSeed** method_cfg::seed flows into every service spec via derive_seed."""
 
     @pytest.mark.asyncio
     async def test_every_service_has_derived_seed(self):
-        from src.experiment.launcher import ExperimentLauncher
+        from src.experiment.architecture import TasArchitecture
         from src.io import load_method_cfg, load_profile
 
         _cfg = load_profile(adaptation="baseline")
         _mcfg = load_method_cfg("experiment")
         _root = int(_mcfg["seed"])
 
-        async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
-                                      adaptation="baseline") as _lnc:
+        async with TasArchitecture(cfg=_cfg, method_cfg=_mcfg,
+                                   adaptation="baseline") as _lnc:
             assert _lnc.specs, "launcher built no specs"
             for _name, _spec in _lnc.specs.items():
                 _expected = derive_seed(_root, _name)

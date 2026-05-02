@@ -3,14 +3,12 @@
 Module stochastic.py
 ====================
 
-Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case study. Mirrors the analytic method's contract call-for-call so the two can be compared directly downstream.
+Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case study. Mirrors the analytic method's contract call-for-call so the two can be compared directly downstream. Aggregation and threshold checks reuse `src.analytic.metrics` (`aggregate_net` / `check_reqs`) since the math is identical across the two methods.
+
+The engine runs in SimPy SECONDS while the method config declares horizon and warmup in INVOCATIONS; the conversion happens in `src.stochastic.simulation.solve_net`.
 
 Public API:
     - `run(adp, prf, scn, wrt)` loads a resolved `NetCfg` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_net`), and returns per-node metrics + network aggregate + R1 / R2 / R3 verdict.
-
-Aggregation and threshold checks reuse `src.analytic.metrics` (`aggregate_net` / `check_reqs`) since the math is identical across the two methods.
-
-*IMPORTANT:* the engine runs in SimPy SECONDS; the method config declares the horizon and warmup in INVOCATIONS. Conversion happens in `src.stochastic.simulation.solve_net`.
 
 CLI::
 
@@ -67,19 +65,14 @@ def run(adp: Optional[str] = None,
             - `requirements` (Dict): R1 / R2 / R3 verdict dict.
             - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
-    # load the profile (artifact nodes + routing); method config is either passed in (tests) or loaded from disk (CLI / notebook)
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
     if method_cfg is not None:
         _method_cfg = method_cfg
     else:
         _method_cfg = load_method_cfg("stochastic")
-
-    # run the DES engine end-to-end
     _nds = solve_net(_cfg, _method_cfg)
     _net = aggregate_net(_nds)
     _req = check_reqs(_nds)
-
-    # write the result envelope when requested
     _paths: Dict[str, str] = {}
     if wrt:
         _paths = _write_results(_cfg, _method_cfg, _nds, _net, _req)
@@ -113,8 +106,7 @@ def _write_results(cfg: NetCfg,
     """
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
-
-    # topology carried alongside metrics so the blob is self-contained for later path reconstruction
+    # routing + lambda_z embedded so the blob reconstructs cross-artifact without re-reading configs
     _doc = {
         "profile": cfg.profile,
         "scenario": cfg.scenario,
@@ -148,30 +140,25 @@ def main() -> None:
     """
     _parser = argparse.ArgumentParser(
         description="Stochastic SimPy DES solver for CS-01 TAS.",)
-
     _parser.add_argument(
         "--adaptation",
         choices=["baseline", "s1", "s2", "aggregate"],
         default=None,
         help=("adaptation state (resolves to profile + scenario); "
               "defaults to the profile's _setpoint"),)
-
     _parser.add_argument(
         "--profile",
         choices=["dflt", "opti"],
         default=None,
         help="explicit profile file stem (overrides adaptation's profile)",)
-
     _parser.add_argument(
         "--scenario",
         default=None,
         help="explicit scenario name within the profile",)
-
     _parser.add_argument(
         "--no-write",
         action="store_true",
         help="skip writing result files (useful for dry runs)",)
-
     _args = _parser.parse_args()
 
     _result = run(
@@ -179,26 +166,21 @@ def main() -> None:
         prf=_args.profile,
         scn=_args.scenario,
         wrt=not _args.no_write,)
-
     _cfg = _result["config"]
     _net = _result["network"].iloc[0]
     _req = _result["requirements"]
     _mc = _result["method_config"]
 
-    # header block
     print(f"profile={_cfg.profile}  scenario={_cfg.scenario}")
     print(f"label: {_cfg.label}")
     print(f"seed={_mc['seed']}  reps={_mc['replications']}  "
           f"horizon={_mc['horizon_invocations']} inv.  "
           f"warmup={_mc['warmup_invocations']} inv.")
-
-    # network-wide summary
     print(f"  nodes={int(_net['nodes'])}  "
           f"avg_rho={_net['avg_rho']:.4f}  "
           f"max_rho={_net['max_rho']:.4f}  "
           f"W_net={_net['W_net']:.6f}s")
 
-    # R1 / R2 / R3 verdict
     print("requirements:")
     for _k, _v in _req.items():
         if _v["pass"]:
@@ -211,8 +193,6 @@ def main() -> None:
         else:
             _val_str = "n/a"
         print(f"  {_k}: {_status}  ({_v['metric']}={_val_str})")
-
-    # written-file paths
     if _result["paths"]:
         for _k, _p in _result["paths"].items():
             print(f"  wrote {_k}: {_p}")
