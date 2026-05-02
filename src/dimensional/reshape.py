@@ -13,7 +13,7 @@ Public API:
     - `aggregate_sweep_to_arch(sweep_data, tag="TAS")` collapse per-artifact sweep arrays into flat architecture-level arrays.
     - `compute_net_delta(net_dflt, net_other, *, pct=True)` network-wide delta frame.
 
-*IMPORTANT:* in `coefs_to_nodes` / `coefs_to_net` / `compute_coefs_delta` coefficient names drop the artifact subscript (the symbol `\\theta_{TAS_{1}}` becomes column `theta`) so plotters see uniform column names across artifacts; `aggregate_arch_coefs` and `aggregate_sweep_to_arch` keep the subscript (their output already represents a single architecture-level entity tagged once).
+In `coefs_to_nodes` / `coefs_to_net` / `compute_coefs_delta` coefficient names drop the artifact subscript (`\\theta_{TAS_{1}}` becomes column `theta`) so plotters see uniform column names across artifacts. `aggregate_arch_coefs` and `aggregate_sweep_to_arch` keep the subscript because their output already represents a single architecture-level entity tagged once.
 """
 # native python modules
 from __future__ import annotations
@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 
-# short-name map: PACS LaTeX coefficient keys -> flat pandas column names
+# short coefficient column names emitted by the per-node / per-net reshapers
 _COEF_NAMES = ("theta", "sigma", "eta", "phi")
 
 
@@ -74,7 +74,6 @@ def _extract_coef_column(full_sym: str) -> str:
     Returns:
         str: the short name (one of `theta`, `sigma`, `eta`, `phi`, ...); returns the stem after the leading backslash if no match.
     """
-    # strip the leading backslash and split off the first subscript brace
     _stem = full_sym.lstrip("\\").split("_", 1)[0]
     return _stem
 
@@ -89,17 +88,12 @@ def coefs_to_nodes(result: Dict[str, Any]) -> pd.DataFrame:
         pd.DataFrame: one row per artifact with columns `key`, `name`, `type`, and one per derived coefficient (`theta`, `sigma`, `eta`, `phi`).
     """
     _rows: List[dict] = []
-
-    # walk artifacts in declared order to preserve topology alignment
+    # walk artifacts in declared order so the row order matches topology / Jackson node ids
     for _k, _a in result["artifacts"].items():
         _row = {"key": _k, "name": _a["name"], "type": _a["type"]}
-
-        # flatten each derived coefficient to a short column name
         for _sym, _co in _a["coefficients"].items():
             _row[_extract_coef_column(_sym)] = float(_co["setpoint"])
-
         _rows.append(_row)
-
     return pd.DataFrame(_rows)
 
 
@@ -118,19 +112,16 @@ def coefs_to_net(result: Dict[str, Any],
     Returns:
         pd.DataFrame: single-row frame with `nodes` (count) and one column per derived coefficient carrying the aggregate value.
     """
-    # guard against typos in the reducer name
     _fn_lt = {
         "mean": np.mean,
         "median": np.median,
         "max": np.max,
-        "min": np.min
+        "min": np.min,
     }
-
     if agg not in _fn_lt:
         _msg = f"unknown aggregator {agg!r}; expected one of {list(_fn_lt)}"
         raise ValueError(_msg)
-
-    # reuse the per-node frame so the reducer sees a single numeric column
+    # reuse the per-node frame so the reducer sees one numeric column per coefficient
     _nds = coefs_to_nodes(result)
     _row: Dict[str, float] = {"nodes": float(len(_nds))}
     for _c in _COEF_NAMES:
@@ -213,8 +204,6 @@ def aggregate_arch_coefs(result: Dict[str, Any],
     """
     _cfg = result["config"]
     _arts = _cfg.artifacts
-
-    # accumulators across every artifact in the resolved NetCfg
     _sum_L = 0.0
     _sum_K = 0.0
     _sum_lamW = 0.0
@@ -223,13 +212,10 @@ def aggregate_arch_coefs(result: Dict[str, Any],
     _sum_m_act = 0.0
     _sum_m_buf = 0.0
     _prod_1_minus_eps = 1.0
-
-    # walk artifacts in declared order; one setpoint read per variable
+    # per-node setpoints are already seeded from the analytic solver upstream
     for _a in _arts:
         _key = _a.key
         _v = _a.vars
-
-        # raw per-node setpoints (these are already seeded from analytic)
         _L = float(_v[f"L_{{{_key}}}"]["_setpoint"])
         _K = float(_v[f"K_{{{_key}}}"]["_setpoint"])
         _W = float(_v[f"W_{{{_key}}}"]["_setpoint"])
@@ -250,14 +236,12 @@ def aggregate_arch_coefs(result: Dict[str, Any],
         _sum_m_buf += _m_buf
         _prod_1_minus_eps *= (1.0 - _eps)
 
-    # derive architecture-level coefficients (zero-denominator guard via _safe_div)
+    # zero-denominator guard via _safe_div; an empty network collapses to zeros instead of NaN
     _theta_arch = _safe_div(_sum_L, _sum_K)
     _sigma_arch = _safe_div(_sum_lamW, _sum_K)
     _eta_arch = _safe_div(_sum_chi_K, _sum_mu_c)
     _phi_arch = _safe_div(_sum_m_act, _sum_m_buf)
     _eps_arch = 1.0 - _prod_1_minus_eps
-
-    # assemble the single-row envelope; keys follow the PACS-style subscript
     _row = {
         "nodes": float(len(_arts)),
         f"\\theta_{{{tag}}}": _theta_arch,
@@ -303,8 +287,6 @@ def aggregate_sweep_to_arch(sweep_data: Dict[str, Dict[str, np.ndarray]],
     # one artifact decides the sweep length; sweep_arch guarantees alignment across artifacts
     _first = _art_keys[0]
     _n = len(sweep_data[_first][f"\\theta_{{{_first}}}"])
-
-    # point-by-point accumulators
     _sum_L = np.zeros(_n)
     _sum_K = np.zeros(_n)
     _sum_lamW = np.zeros(_n)
@@ -374,7 +356,7 @@ def compute_net_delta(net_dflt: pd.DataFrame,
     Returns:
         pd.DataFrame: single-row frame with one column per shared coefficient.
     """
-    # work only with shared coefficient columns, ignore `nodes` etc.
+    # only the shared coefficient columns; the `nodes` count and other metadata are ignored
     _metrics: List[str] = []
     for _c in _COEF_NAMES:
         _in_dflt = _c in net_dflt.columns

@@ -8,7 +8,7 @@ Config-driven PyDASA `Schema` construction for the TAS case study. Kept delibera
 Public API:
     - `build_schema(fdus, fwk="CUSTOM")` returns a `Schema` with `_setup_fdus()` already applied, ready to attach to an `AnalysisEngine`.
 
-*IMPORTANT:* every FDU dict must carry `_fwk == fwk`; mismatches raise early with an explicit list of offenders.
+Every FDU dict must carry `_fwk == fwk`; mismatches raise `ValueError` with an explicit list of offenders before PyDASA is touched.
 """
 # native python modules
 from __future__ import annotations
@@ -35,15 +35,14 @@ def build_schema(fdus: list[dict[str, Any]],
     Returns:
         Schema: initialised `Schema` with `_setup_fdus()` already called.
     """
-    # guard against silent FDU/framework mismatch before handing off to pydasa
+    # FDU/framework mismatch must surface here, before PyDASA's silent _setup_fdus accept
     _bad = [_f for _f in fdus if _f.get("_fwk") != fwk]
     if _bad:
         _syms = ", ".join(_f.get("_sym", "?") for _f in _bad)
         _msg = f"FDUs with _fwk != {fwk!r}: {_syms}"
         raise ValueError(_msg)
-
+    # PyDASA's Schema declares _fdu_lt: List[Dimension] but accepts dicts and materialises them internally; the ignore is scoped to this call only.
     _sch = Schema(_fwk=fwk,
-                  _fdu_lt=list(fdus),
-                  _idx=0)  # type: ignore[call-arg]
-    _sch._setup_fdus()
+                  _fdu_lt=list(fdus),  # type: ignore[arg-type]
+                  _idx=0)
     return _sch

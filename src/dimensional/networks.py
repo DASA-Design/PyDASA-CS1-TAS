@@ -18,7 +18,7 @@ The three sweep functions return dicts shape-compatible with the `src.view.plot_
     - eta = chi * K / (mu * c) (Effective-yield)
     - phi = (L * delta) / (K * delta) (Memory-use; explicit byte arithmetic, reduces to L/K under constant delta)
 
-*IMPORTANT:* the sweep is deterministic (not Monte Carlo). For stochastic sampling go through `src.methods.dimensional` plus the dimensional notebook.
+The sweep is deterministic (not Monte Carlo); for stochastic sampling go through `src.methods.dimensional` plus the dimensional notebook.
 """
 # native python modules
 from __future__ import annotations
@@ -92,7 +92,6 @@ def sweep_artifact(artifact_key: str,
     Returns:
         Dict[str, np.ndarray]: arrays keyed by full LaTeX symbol. Same length across keys; one entry per stable trace point.
     """
-    # baselines
     _mu_base = read_setpoint(vars_block, "\\mu", artifact_key)
     _eps = read_setpoint(vars_block, "\\epsilon", artifact_key)
     # per-request payload (kB); 1 kB fallback so M_act/M_buf reduces to L/K cleanly
@@ -101,12 +100,8 @@ def sweep_artifact(artifact_key: str,
         _delta_kB = float(vars_block[_d_sym].get("_setpoint", 1.0))
     else:
         _delta_kB = 1.0
-
-    # lambda iteration parameters from the sweep grid (with safe defaults)
     _n_steps = int(sweep_grid.get("lambda_steps", 30))
     _lam_min_frac = float(sweep_grid.get("lambda_factor_min", 0.05))
-
-    # accumulators (lists for now; converted to ndarrays at the end)
     _theta_lt: List[float] = []
     _sigma_lt: List[float] = []
     _eta_lt: List[float] = []
@@ -131,8 +126,6 @@ def sweep_artifact(artifact_key: str,
                 _lam_max = util_threshold * _mu * _c_int
                 _lam_min = _lam_max * _lam_min_frac
                 _lambdas = np.linspace(_lam_min, _lam_max, _n_steps)
-
-                # ramp lambda; each step contributes one trace point
                 for _lam in _lambdas:
                     try:
                         _q = Queue(model=model,
@@ -173,8 +166,6 @@ def sweep_artifact(artifact_key: str,
                     _mu_lt.append(_mu)
                     _K_lt.append(float(_K_int))
                     _lam_lt.append(float(_lam))
-
-    # subscripted symbol map ready for the src.view.plot_yoly_chart family
     return {
         f"\\theta_{{{artifact_key}}}": np.asarray(_theta_lt, dtype=float),
         f"\\sigma_{{{artifact_key}}}": np.asarray(_sigma_lt, dtype=float),
@@ -285,7 +276,6 @@ def sweep_arch(cfg: NetCfg,
     Returns:
         Dict[str, Dict[str, np.ndarray]]: nested `{artifact_key: per_artifact_sweep}` with the same symbol keys as `sweep_artifact`. Arrays across artifacts are aligned (row i is the same whole-network sweep point) so `aggregate_sweep_to_arch` can collapse them into architecture-level arrays.
     """
-    # resolve thresholds + grid knobs
     if util_threshold is not None:
         _util = util_threshold
     else:
@@ -295,13 +285,10 @@ def sweep_arch(cfg: NetCfg,
     _K_vals = sweep_grid.get("K", [10])
     _n_steps = int(sweep_grid.get("lambda_steps", 10))
     _lam_min_frac = float(sweep_grid.get("lambda_factor_min", 0.05))
-
     # pre-read per-node mu setpoints + entry lambda_z; reused across every (mu_factor, c, K) combo
     _arts = cfg.artifacts
     _mu_base = np.array([float(_a.mu) for _a in _arts], dtype=float)
     _lz_base = cfg.build_lam_z_vec()
-
-    # per-node accumulators (lists now, ndarrays at return time)
     _per_art: Dict[str, Dict[str, List[float]]] = {}
     for _a in _arts:
         _k = _a.key
@@ -316,7 +303,6 @@ def sweep_arch(cfg: NetCfg,
             f"\\lambda_{{{_k}}}": [],
         }
 
-    # walk the (mu_factor, c, K) grid
     for _mf in _mu_factors:
         _mu_vec = _mu_base * float(_mf)
         for _c in _c_vals:
@@ -333,12 +319,9 @@ def sweep_arch(cfg: NetCfg,
                                                      _util)
                 if _f_max <= 0.0:
                     continue
-
-                # linspace factors from lambda_factor_min to just below f_max
                 _factors = np.linspace(_lam_min_frac * _f_max,
                                        _f_max * 0.999,
                                        _n_steps)
-
                 for _f in _factors:
                     _lams = solve_jackson_lams(cfg.routing,
                                                float(_f) * _lz_base)
@@ -365,11 +348,8 @@ def sweep_arch(cfg: NetCfg,
                             break
                         _solved.append((_a, _lam_i, _mu_i, _q))
 
-                    # stop this combo's lambda ramp on the first unstable point
                     if _unstable:
                         break
-
-                    # record one stable sweep point per artifact
                     for _a, _lam_i, _mu_i, _q in _solved:
                         _k = _a.key
                         _L = float(_q.avg_len)
@@ -402,8 +382,6 @@ def sweep_arch(cfg: NetCfg,
                         _per_art[_k][f"\\mu_{{{_k}}}"].append(_mu_i)
                         _per_art[_k][f"K_{{{_k}}}"].append(float(_K_int))
                         _per_art[_k][f"\\lambda_{{{_k}}}"].append(_lam_i)
-
-    # cast accumulators to ndarrays
     _out: Dict[str, Dict[str, np.ndarray]] = {}
     for _k, _block in _per_art.items():
         _out[_k] = {_s: np.asarray(_v, dtype=float) for _s, _v in _block.items()}

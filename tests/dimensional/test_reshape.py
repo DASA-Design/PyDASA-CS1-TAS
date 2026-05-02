@@ -31,14 +31,14 @@ from src.methods.dimensional import run
 
 
 @pytest.fixture(scope="module")
-def _dim_baseline() -> Dict[str, Any]:
-    """*_dim_baseline()* cached dimensional run for baseline."""
+def _dim_baseline() -> Dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    """*_dim_baseline()* cached dimensional run for baseline (consumed by every test method via pytest's name-based fixture injection)."""
     return run(adp="baseline", wrt=False)
 
 
 @pytest.fixture(scope="module")
-def _dim_aggregate() -> Dict[str, Any]:
-    """*_dim_aggregate()* cached dimensional run for aggregate (16 nodes)."""
+def _dim_aggregate() -> Dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    """*_dim_aggregate()* cached dimensional run for aggregate (16 nodes); consumed by every test that compares against baseline."""
     return run(adp="aggregate", wrt=False)
 
 
@@ -60,11 +60,12 @@ class TestNodeShape:
         _nds = coefs_to_nodes(_dim_baseline)
         assert {"key", "name", "type", "theta", "sigma", "eta", "phi"} <= set(_nds.columns)
 
-    def test_theta_varies_per_artifact_on_baseline(self, _dim_baseline: Dict[str, Any]) -> None:
-        """*test_theta_varies_per_artifact_on_baseline()* after analytic seeding, theta reflects real per-artifact L/K ratios (Jackson-solved L varies); baseline should no longer be uniform."""
+    def test_theta_varies_per_art(self, _dim_baseline: Dict[str, Any]) -> None:
+        """*test_theta_varies_per_art()* `theta.max() - theta.min() > 0.05` after analytic seeding (Jackson-solved L varies per artifact, so theta is not uniform)."""
         _nds = coefs_to_nodes(_dim_baseline)
         _range = _nds["theta"].max() - _nds["theta"].min()
-        assert _range > 0.05, f"theta range {_range} too small; seed may have failed"
+        _msg = f"theta range {_range} too small; seed may have failed"
+        assert _range > 0.05, _msg
 
 
 class TestNetworkShape:

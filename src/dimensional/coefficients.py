@@ -17,7 +17,7 @@ Config-driven derivation of operationally meaningful coefficients (theta, sigma,
 Public API:
     - `derive_coefs(engine, specs, artifact_key)` apply every spec in order and return `{full_sym: Coefficient}` for the derived ones only.
 
-*IMPORTANT:* Pi-index ordering is stable across adaptations for a given artifact but can shift if the variable set changes. Re-verify with a spot test when the profile schema is edited.
+Pi-index ordering is stable across adaptations for a given artifact but can shift if the variable set changes; re-verify with a spot test when the profile schema is edited.
 """
 # native python modules
 from __future__ import annotations
@@ -75,30 +75,20 @@ def derive_coefs(engine: AnalysisEngine,
 
     Returns:
         dict[str, Any]: `{full_sym: Coefficient}` for the derived coefficients only; raw Pi-groups remain in `engine.coefficients`.
-
-    Raises:
-        IndexError: when an `expr_pattern` references a Pi-group index outside `engine.coefficients` (propagated from `_resolve_expr`).
-        KeyError: when a spec dict lacks one of the required keys (`symbol`, `expr_pattern`, `name`, `description`).
     """
-    # collect the Pi-group keys in order so expr_pattern indices line up
+    # collect Pi-group keys in order so `expr_pattern` indices line up with engine.coefficients
     _pi_keys = [_k for _k in engine.coefficients.keys() if _k.startswith("\\Pi_")]
-
-    # apply each spec in declaration order
+    # apply specs in declaration order; iteration order matters for any pi[i] resolution
     _der: dict[str, Any] = {}
     for _sp in specs:
-        # build the artifact-qualified coefficient symbol
         _sym = _sp["symbol"]
         _full = f"\\{_sym}_{{{artifact_key}}}"
-
-        # resolve the expression against the actual Pi-keys
         _exp = _resolve_expr(_sp["expr_pattern"], _pi_keys)
-
-        # `idx=-1` appends to pydasa's coefficient list rather than overwriting a slot
+        # idx=-1 appends to pydasa's coefficient list rather than overwriting a slot
         _coeff = engine.derive_coefficient(_exp,
                                            _full,
                                            f"{artifact_key} {_sp['name']} coefficient",
                                            _sp["description"],
                                            -1)
         _der[_full] = _coeff
-
     return _der

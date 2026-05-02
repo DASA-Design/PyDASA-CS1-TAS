@@ -3,9 +3,9 @@
 Module dimensional.py
 =====================
 
-Dimensional method orchestrator for the CS-01 TAS case study.
+Dimensional method orchestrator for the CS-01 TAS case study. Walks the 13 (or 16) artifacts in a resolved `NetCfg`, builds a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via Buckingham's theorem, applies the operationally meaningful coefficient specs (theta, sigma, eta, phi) from `data/config/method/dimensional.json`, runs a symbolic sensitivity pass at the variable means, and emits a PyDASA-style JSON.
 
-Walks the 13 (or 16) artifacts in a resolved `NetCfg`, builds a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via Buckingham's theorem, applies the operationally meaningful coefficient specs (theta, sigma, eta, phi) from `data/config/method/dimensional.json`, runs a symbolic sensitivity pass at the variable means, and emits a PyDASA-style JSON.
+The dimensional method is static (no `requirements.json`); it characterises the design space, while R1 / R2 / R3 verdicts come from the analytic / stochastic methods and are aggregated by `comparison`.
 
 Public API:
     - `run(adp, prf, scn, wrt)` resolves the profile + method config, loops artifacts, and returns per-artifact `pi_groups`, `coefficients`, `sensitivity` blocks.
@@ -13,8 +13,6 @@ Public API:
 Private helpers:
     - `_analyse_artifact(artifact, schema, ...)` full DA workflow on one artifact.
     - `_write_results(cfg, method_cfg, results)` serialises the envelope to `data/results/dimensional/<scenario>/<profile>.json`.
-
-*IMPORTANT:* the dimensional method is static (no `requirements.json`). It characterises the design space; R1 / R2 / R3 verdicts come from the analytic / stochastic methods and are aggregated by `comparison`.
 
 CLI::
 
@@ -64,26 +62,18 @@ def _analyse_artifact(artifact: ArtifactSpec,
     Returns:
         Dict[str, Any]: per-artifact block with `name`, `type`, `lambda_z`, `L_z`, `pi_groups`, `coefficients`, `sensitivity`.
     """
-    # build engine and derive Pi-groups via Buckingham's theorem
     _eng = build_engine(artifact.key, artifact.vars, schema)
     _eng.run_analysis()
-
-    # evaluate setpoints for every raw Pi-group
+    # raw Pi-groups need an explicit setpoint pass; PyDASA leaves them lazy after run_analysis
     _pi_keys = [_k for _k in _eng.coefficients.keys() if _k.startswith("\\Pi_")]
     for _k in _pi_keys:
         _eng.coefficients[_k].calculate_setpoint()
-
-    # derive the named coefficients from the spec list
     _der = derive_coefs(_eng, coef_specs, artifact_key=artifact.key)
     for _c in _der.values():
         _c.calculate_setpoint()
-
-    # run symbolic sensitivity at the configured value type
     _sens = analyse_symbolic(_eng, schema,
                              val_type=sens_cfg.get("val_type", "mean"),
                              cat=sens_cfg.get("cat", "SYM"))
-
-    # serialise Pi-groups and coefficients into plain dicts
     _pi_out = {_k: {"expr": str(_eng.coefficients[_k].pi_expr),
                     "setpoint": _eng.coefficients[_k].setpoint,
                     "var_dims": dict(_eng.coefficients[_k].var_dims)}
@@ -131,24 +121,18 @@ def run(adp: Optional[str] = None,
             - `artifacts` (Dict[str, Dict]): per-artifact analysis blocks keyed by artifact key.
             - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
-    # resolve profile + method config (disk or injected override)
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
     if method_cfg is not None:
         _mcfg = method_cfg
     else:
         _mcfg = load_method_cfg("dimensional")
-
-    # build the framework schema once; reused across all artifacts
+    # one schema reused across every artifact: PyDASA validates the framework once
     _sch = build_schema(_mcfg["fdus"])
-
-    # loop artifacts in declared order and collect per-artifact blocks
     _arts: Dict[str, Dict[str, Any]] = {}
     for _a in _cfg.artifacts:
         _arts[_a.key] = _analyse_artifact(_a, _sch,
                                           _mcfg["coefficients"],
                                           _mcfg["sensitivity"])
-
-    # write the envelope when requested
     _paths: Dict[str, str] = {}
     if wrt:
         _paths = _write_results(_cfg, _mcfg, _arts)
@@ -174,11 +158,9 @@ def _write_results(cfg: NetCfg,
     Returns:
         Dict[str, str]: on-disk paths of the written file, keyed by `profile`, relative to the repo root.
     """
-    # scenario-scoped output directory
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
-
-    # envelope carries topology so the blob is self-contained for later cross-artifact reconstruction without re-reading configs
+    # routing + lambda_z embedded so the blob reconstructs cross-artifact without re-reading configs
     _doc = {
         "profile": cfg.profile,
         "scenario": cfg.scenario,
@@ -202,56 +184,42 @@ def main() -> None:
 
     Parses command-line flags, calls `run()`, and prints a concise one-screen summary plus the path of any written file.
     """
-    # build the argument parser with the four CLI flags
     _parser = argparse.ArgumentParser(
         description="Dimensional-analysis solver for CS-01 TAS.",)
-
     _parser.add_argument(
         "--adaptation",
         choices=["baseline", "s1", "s2", "aggregate"],
         default=None,
         help=("adaptation state (resolves to profile + scenario); "
               "defaults to the profile's _setpoint"),)
-
     _parser.add_argument(
         "--profile",
         choices=["dflt", "opti"],
         default=None,
         help="explicit profile file stem (overrides adaptation's profile)",)
-
     _parser.add_argument(
         "--scenario",
         default=None,
         help="explicit scenario name within the profile",)
-
     _parser.add_argument(
         "--no-write",
         action="store_true",
         help="skip writing result files (useful for dry runs)",)
-
     _args = _parser.parse_args()
-
-    # run the pipeline end-to-end with the parsed flags
     _result = run(
         adp=_args.adaptation,
         prf=_args.profile,
         scn=_args.scenario,
         wrt=not _args.no_write,)
-
-    # unpack for the summary print
     _cfg = _result["config"]
     _arts = _result["artifacts"]
     _mc = _result["method_config"]
-
-    # header block
     print(f"profile={_cfg.profile}  scenario={_cfg.scenario}")
     print(f"label: {_cfg.label}")
     print(f"framework={_mc['fdus'][0]['_fwk']}  "
           f"fdus={len(_mc['fdus'])}  "
           f"coefficients={len(_mc['coefficients'])}  "
           f"sensitivity={_mc['sensitivity']['cat']}@{_mc['sensitivity']['val_type']}")
-
-    # per-artifact coefficient values (one line each)
     print(f"artifacts ({len(_arts)}):")
     for _k, _a in _arts.items():
         _co = _a["coefficients"]
@@ -260,8 +228,6 @@ def main() -> None:
             for _sym in _co.keys()
         )
         print(f"  {_k:<14} {_vals}")
-
-    # written-file paths (only when wrt=True)
     if _result["paths"]:
         for _k, _p in _result["paths"].items():
             print(f"  wrote {_k}: {_p}")

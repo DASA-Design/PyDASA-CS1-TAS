@@ -11,7 +11,7 @@ Shape + invariant checks for the configuration-sweep helpers in `src.dimensional
     - **TestFindMaxStableLambdaFactor** the binary-search floor respects the utilisation cap.
     - **TestSweepArchitecture** Jackson-propagated whole-network sweep keeps rho < util_threshold at every stable point and aligns arrays across artifacts.
 
-*IMPORTANT:* sweeps can be slow; every test uses a trimmed `_QUICK_GRID` (one `mu_factor`, one `c`, one `K`, few `lambda_steps`) so the module stays under ~2 s.
+Sweeps can be slow; every test uses a trimmed `_QUICK_GRID` (one `mu_factor`, one `c`, one `K`, few `lambda_steps`) to keep the module under ~2 s.
 """
 # data types
 from typing import Any, Dict
@@ -100,20 +100,22 @@ class TestSweepArtifact:
 class TestSweepArtifacts:
     """**TestSweepArtifacts** walks every artifact, honours `artifact_filter`, and returns a dict keyed by artifact."""
 
-    def test_walks_every_artifact_by_default(self, _cfg: NetCfg) -> None:
-        """*test_walks_every_artifact_by_default()* without a filter the sweep emits one entry per artifact in the resolved profile."""
+    def test_walks_every_artifact(self, _cfg: NetCfg) -> None:
+        """*test_walks_every_artifact()* `set(out.keys()) == {a.key for a in cfg.artifacts}` (no-filter case)."""
         _out = sweep_artifacts(_cfg, _QUICK_GRID)
         _expected_keys = {_a.key for _a in _cfg.artifacts}
         assert set(_out.keys()) == _expected_keys
 
-    def test_filter_restricts_to_requested_artifacts(self, _cfg: NetCfg) -> None:
-        """*test_filter_restricts_to_requested_artifacts()* passing a non-empty `artifact_filter` drops every other artifact."""
+    def test_filter_limits_keys(self, _cfg: NetCfg) -> None:
+        """*test_filter_limits_keys()* `set(out.keys()) == artifact_filter` when a non-empty filter is passed."""
         _want = {"TAS_{1}", "MAS_{1}"}
         _out = sweep_artifacts(_cfg, _QUICK_GRID, artifact_filter=_want)
         assert set(_out.keys()) == _want
 
-    def test_per_artifact_block_matches_sweep_artifact_shape(self, _cfg: NetCfg, _tas1_vars: Dict[str, Dict[str, Any]]) -> None:
-        """*test_per_artifact_block_matches_sweep_artifact_shape()* each nested dict matches the single-artifact sweep's key set."""
+    def test_block_matches_solo_shape(self,
+                                      _cfg: NetCfg,
+                                      _tas1_vars: Dict[str, Dict[str, Any]]) -> None:
+        """*test_block_matches_solo_shape()* `set(multi["TAS_{1}"].keys()) == set(sweep_artifact(...).keys())` (the multi-artifact wrapper preserves the per-artifact key set)."""
         _multi = sweep_artifacts(_cfg, _QUICK_GRID,
                                  artifact_filter={"TAS_{1}"})
         _solo = sweep_artifact("TAS_{1}", _tas1_vars, _QUICK_GRID)
@@ -178,5 +180,5 @@ class TestSweepArchitecture:
             _mu = _block[f"\\mu_{{{_k}}}"]
             _c = _block[f"c_{{{_k}}}"]
             _cap = _util * _c * _mu
-            assert np.all(_lam < _cap), (
-                f"{_k}: lambda exceeded util cap at some sweep point")
+            _msg = f"{_k}: lambda exceeded util cap at some sweep point"
+            assert np.all(_lam < _cap), _msg

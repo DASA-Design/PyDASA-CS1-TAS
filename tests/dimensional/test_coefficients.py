@@ -25,16 +25,20 @@ from src.dimensional import build_engine, derive_coefs
 
 
 def _std_mean(engine: AnalysisEngine, sym: str) -> float:
-    """*_std_mean()* returns `_std_mean` for a variable on the engine; this is the field PyDASA actually reads during `calculate_setpoint()`."""
-    return float(engine.variables[sym]._std_mean)
+    """*_std_mean()* returns `std_mean` for a variable on the engine; this is the field PyDASA actually reads during `calculate_setpoint()`. Raises `ValueError` when the variable has no mean set (every variable in the test profiles does, so this is a defensive narrow for the type checker)."""
+    _val = engine.variables[sym].std_mean
+    if _val is None:
+        _msg = f"variable {sym!r} has no std_mean set on the engine"
+        raise ValueError(_msg)
+    return float(_val)
 
 
 class TestCoefficientDerivation:
     """**TestCoefficientDerivation** every artifact produces the four named derived coefficients (theta, sigma, eta, phi) after `run_analysis()`."""
 
-    def test_four_derived_for_tas1(self,
-                                   engine_ready: Tuple[AnalysisEngine, Dict[str, Any]]) -> None:
-        """*test_four_derived_for_tas1()* `derive_coefs` on the post-analysis TAS_{1} engine returns 4 entries."""
+    def test_four_coefs_for_tas1(self,
+                                 engine_ready: Tuple[AnalysisEngine, Dict[str, Any]]) -> None:
+        """*test_four_coefs_for_tas1()* `derive_coefs` on the post-analysis TAS_{1} engine returns 4 entries."""
         _, _derived = engine_ready
         assert len(_derived) == 4
 
@@ -50,23 +54,20 @@ class TestCoefficientDerivation:
         }
         assert set(_derived.keys()) == _expected
 
-    def test_all_artifacts_get_four_coefficients(
-        self,
-        schema: Any,
-        method_cfg: Dict[str, Any],
-        dflt_profile: Dict[str, Any],
-    ) -> None:
-        """*test_all_artifacts_get_four_coefficients()* every artifact in `dflt.json` yields exactly 4 derived coefficients."""
-        _artifacts = dflt_profile["artifacts"]
-        for _artifact_key, _artifact in _artifacts.items():
-            _engine = build_engine(_artifact_key, _artifact["vars"], schema)
+    def test_four_coefs_per_art(self,
+                                schema: Any,
+                                method_cfg: Dict[str, Any],
+                                dflt_profile: Dict[str, Any]) -> None:
+        """*test_four_coefs_per_art()* every artifact in `dflt.json` yields exactly 4 derived coefficients."""
+        _arts = dflt_profile["artifacts"]
+        for _a_key, _a in _arts.items():
+            _engine = build_engine(_a_key, _a["vars"], schema)
             _engine.run_analysis()
-            _derived = derive_coefs(
-                _engine, method_cfg["coefficients"], artifact_key=_artifact_key
-            )
-            assert len(_derived) == 4, (
-                f"{_artifact_key}: expected 4 derived coefficients, got {len(_derived)}"
-            )
+            _derived = derive_coefs(_engine,
+                                    method_cfg["coefficients"],
+                                    artifact_key=_a_key)
+            _msg = f"{_a_key}: expected 4 derived coefficients, got {len(_derived)}"
+            assert len(_derived) == 4, _msg
 
 
 class TestCoefficientValues:
@@ -114,9 +115,9 @@ class TestCoefficientValues:
         _expected = _chi * _K / (_mu * _c)
         assert _eta == pytest.approx(_expected, rel=1e-6)
 
-    def test_phi_equals_memory_ratio(self,
-                                     engine_ready: Tuple[AnalysisEngine, Dict[str, Any]]) -> None:
-        """*test_phi_equals_memory_ratio()* phi = M_act / M_buf (memory occupancy) at the seeded setpoint."""
+    def test_phi_equals_M_act_over_M_buf(self,
+                                         engine_ready: Tuple[AnalysisEngine, Dict[str, Any]]) -> None:
+        """*test_phi_equals_M_act_over_M_buf()* phi = M_act / M_buf (memory occupancy) at the seeded setpoint."""
         _eng, _derived = engine_ready
         _phi = _derived["\\phi_{TAS_{1}}"].setpoint
         _m_act = _std_mean(_eng, "M_{act_{TAS_{1}}}")

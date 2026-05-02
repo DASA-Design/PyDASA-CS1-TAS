@@ -8,7 +8,7 @@ Per-artifact PyDASA `AnalysisEngine` construction for the TAS case study. One en
 Public API:
     - `build_engine(artifact_key, artifact_vars, schema)` instantiate an engine for the named artifact and attach its `Variable` dict.
 
-*IMPORTANT:* pydasa takes ownership of the Variables on assignment; if the caller mutates the source dict afterwards, the engine does not re-sync.
+PyDASA takes ownership of the Variables on assignment; later mutation of the source dict does not propagate back to the engine.
 """
 # native python modules
 from __future__ import annotations
@@ -40,16 +40,13 @@ def build_engine(artifact_key: str,
     Returns:
         AnalysisEngine: engine with `engine.variables` already populated. Call `engine.run_analysis()` next to derive Pi-groups.
     """
-    # wrap each param dict into a pydasa Variable
     _vars = {_s: Variable(**_p) for _s, _p in artifact_vars.items()}
-
-    # spin up the engine with the schema and descriptive metadata (pydasa field order is SymBasis/IdxBasis/Foundation/WorkflowBase — positional args would misalign, so pass by keyword)
+    # pass-by-keyword: pydasa's field order across SymBasis/IdxBasis/Foundation/WorkflowBase makes positional args fragile
     _eng = AnalysisEngine(_idx=idx,
                           _fwk=fwk,
                           _schema=schema,
                           _name=f"TAS {artifact_key} dimensional analysis",
                           description=f"Dimensional analysis for artifact {artifact_key} (M/M/c/K queueing node).")
-
-    # attach variables; pydasa takes ownership from here
+    # pydasa takes ownership; later mutation of the source dict does not propagate
     _eng.variables = _vars
     return _eng

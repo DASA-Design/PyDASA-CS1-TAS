@@ -3,14 +3,12 @@
 Module sensitivity.py
 =====================
 
-Symbolic sensitivity analysis wrapper around PyDASA's `SensitivityAnalysis`.
+Symbolic sensitivity analysis wrapper around PyDASA's `SensitivityAnalysis`. Runs one symbolic-differentiation sweep at a single evaluation point (mean, setpoint, min, or max) and reshapes the raw output into a numeric-only nested dict.
 
-Runs one symbolic-differentiation sweep at a single evaluation point (mean, setpoint, min, or max) and reshapes the raw output into a numeric-only nested dict.
+PyDASA keys sensitivity entries as `SEN_{<coeff_symbol>}`, so raw Pi entries become `SEN_{\\Pi_{0}}` and derived ones e.g. `SEN_{\\theta_{TAS_{1}}}`; callers that want the raw coefficient symbol back need to strip the prefix.
 
 Public API:
     - `analyse_symbolic(engine, schema, val_type="mean")` returns `{SEN_{coeff}: {var: float}}`.
-
-*IMPORTANT:* pydasa keys sensitivity entries as `SEN_{<coeff_symbol>}`, so raw Pi entries become `SEN_{\\Pi_{0}}` and derived ones e.g. `SEN_{\\theta_{TAS_{1}}}`. Callers that want the raw coefficient symbol back need to strip the prefix.
 """
 # native python modules
 from __future__ import annotations
@@ -47,7 +45,7 @@ def analyse_symbolic(engine: AnalysisEngine,
     Raises:
         ValueError: when `val_type` is not one of `{"mean", "setpoint", "min", "max"}` (propagated from `pydasa.SensitivityAnalysis.analyze_symbolic`).
     """
-    # spin up the pydasa workflow and attach the same variables/coefficients (pass by keyword — dataclass field order differs from our arg order)
+    # pass by keyword: SensitivityAnalysis dataclass field order differs from this function's arg order
     _sen = SensitivityAnalysis(_idx=idx,
                                _fwk=fwk,
                                _schema=schema,
@@ -55,11 +53,9 @@ def analyse_symbolic(engine: AnalysisEngine,
                                _cat=cat)
     _sen.variables = engine.variables
     _sen.coefficients = engine.coefficients
-
-    # run the symbolic pass at the requested evaluation point
     _raw = _sen.analyze_symbolic(val_type=val_type)
 
-    # reshape: keep only numeric leaves, drop sympy residues
+    # drop sympy residues; keep only numeric leaves so callers can index without isinstance checks
     _out: Dict[str, Dict[str, float]] = {}
     for _coef, _vmap in _raw.items():
         _numeric: Dict[str, float] = {}
