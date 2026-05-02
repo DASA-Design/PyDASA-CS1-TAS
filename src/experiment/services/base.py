@@ -81,7 +81,7 @@ class SvcSpec:
         """*buffer_budget_bytes* declared memory budget in bytes; 0 when undeclared.
 
         Returns:
-            int: `K * avg_request_size_bytes * MEM_HEADROOM_FACTOR`; 0 when undeclared.
+            int: `K * avg_req_size_b * MEM_HEADROOM_FACTOR`; 0 when undeclared.
         """
         return int(self.mem_per_buffer)
 
