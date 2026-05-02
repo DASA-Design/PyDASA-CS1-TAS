@@ -1,12 +1,16 @@
-﻿"""
-Module test_helpers.py
-======================
-
-Usable fixtures, builders, and helper callables for service tests. These are not test-specific but are only used in tests, so they live here instead of `src/experiment/services`.
 """
+Module helpers.py
+=================
+
+Shared fixtures, builders, and callable mocks for service / instance tests.
+"""
+# native python modules
+from typing import List, Tuple
 
 # modules for tests
-from src.experiment.services.base import SvcSpec
+from src.experiment.architecture import TasArchitecture
+from src.experiment.services import LOG_COLUMNS, SvcReq, SvcResp, SvcSpec
+
 
 class _SpecBuilder:
     """*_SpecBuilder* callable that builds a `SvcSpec` with sensible defaults; tests call it like `spec_builder(name=...)`."""
@@ -29,3 +33,36 @@ class _SpecBuilder:
                         K=K,
                         seed=seed)
         return specs
+
+
+async def _no_forward(_tgt: str, _req: SvcReq) -> SvcResp:
+    """*_no_forward()* raise `AssertionError` on call; used as `ext_fwd` for terminal / in-process-only paths."""
+    raise AssertionError(f"unexpected external forward to {_tgt!r}")
+
+
+class _RecordedForward:
+    """*_RecordedForward* append `(target, req.req_id)` to `self.calls` and return a success `SvcResp`."""
+
+    def __init__(self, calls: List[Tuple[str, str]]) -> None:
+        self.calls = calls
+
+    async def __call__(self, target: str, req: SvcReq) -> SvcResp:
+        self.calls.append((target, req.req_id))
+        return SvcResp(req_id=req.req_id,
+                       srv_name=target,
+                       success=True,
+                       message="recorded")
+
+
+def _seed_one_row_per_tas_member(arch: TasArchitecture) -> None:
+    """*_seed_one_row_per_tas_member()* append one stub `LOG_COLUMNS`-shaped row to every TAS member's log; deduplicates by `id(app.state.tas_components)`."""
+    _seen: set = set()
+    for _name, _app in arch.apps.items():
+        if not _name.startswith("TAS_"):
+            continue
+        _members = _app.state.tas_components
+        if id(_members) in _seen:
+            continue
+        _seen.add(id(_members))
+        for _ctx in _members.values():
+            _ctx.log.append({_col: 0 for _col in LOG_COLUMNS})
