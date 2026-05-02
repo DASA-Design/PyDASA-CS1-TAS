@@ -20,7 +20,7 @@ import pytest
 import httpx
 
 # modules under test
-from src.experiment.registry import SvcRegistry
+from src.experiment.wire import SvcRegistry
 from src.experiment.services import (LOG_COLUMNS,
                                      HttpForward,
                                      SvcCtx,

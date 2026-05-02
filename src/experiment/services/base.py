@@ -32,7 +32,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from src.experiment.registry import SvcRegistry
+    from src.experiment.wire import SvcRegistry
 
 
 # ---------------------------------------------------------------------------

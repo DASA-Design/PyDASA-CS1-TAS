@@ -20,7 +20,7 @@ import httpx
 from fastapi import FastAPI
 
 # modules under test
-from src.experiment.payload import generate_payload
+from src.experiment.wire import generate_payload
 from src.experiment.services import (LOG_COLUMNS,
                                      SvcReq,
                                      SvcSpec,

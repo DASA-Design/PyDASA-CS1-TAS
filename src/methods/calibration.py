@@ -75,7 +75,7 @@ import httpx
 from fastapi import FastAPI
 
 # local modules
-from src.experiment.payload import generate_payload
+from src.experiment.wire import generate_payload
 from src.experiment.services import (SvcReq,
                                      SvcSpec,
                                      make_base_app,
@@ -2216,7 +2216,7 @@ async def _drive_lambda_step(port: int,
                              body: Dict[str, Any]) -> Dict[str, float]:
     """*_drive_lambda_step()* return latency stats after firing at `target_rate` for `window_s`.
 
-    Follows the absolute-deadline recipe documented in `.claude/skills/develop/async-rate-precision.md`: every request anchors on `_start + idx * interarrival` so the actual arrival rate tracks the target across the window. Each request runs as its own task; observed latencies reflect concurrent in-flight, not serialised arrivals.
+    Follows the absolute-deadline recipe: every request anchors on `_start + idx * interarrival` so the actual arrival rate tracks the target across the window. Each request runs as its own task; observed latencies reflect concurrent in-flight, not serialised arrivals.
 
     Args:
         port (int): vernier server port.

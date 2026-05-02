@@ -19,7 +19,7 @@ from src.experiment.client.config import ClientCfg
 from src.experiment.client.driver import RateDriver
 from src.experiment.client.guard import StopGuard
 from src.experiment.client.sender import RequestSender
-from src.experiment.registry import SvcRegistry
+from src.experiment.wire import SvcRegistry
 
 
 class ClientSimulator:

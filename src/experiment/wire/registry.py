@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Module registry.py
-==================
+Module wire/registry.py
+=======================
 
-Resolve service-name to HTTP URL using the layout declared in `data/config/method/experiment.json::service_registry`. The registry is built once at experiment startup and shared across the composite services, the client simulator, and the launcher's health barrier. Per-deployment host resolution (`local` / `loopback_aliased` / `remote`) lives in `_pick_host`.
+Address book: maps each service name in `experiment.json::service_registry` to its `(host, port)` and renders the per-endpoint URLs the experiment mesh issues HTTP against. Built once at startup and shared across the architecture, the client simulator, and the launcher health barrier. Per-deployment host policy lives in `_pick_host`.
 
 Public API:
-    - `SvcRegistry(host, base_port, table, host_overrides)` maps names to URLs.
-    - `SvcRegistry.from_config(method_cfg)` builds one from the loaded method config.
-    - `SvcRegistry.host_for(name)` returns the resolved host address.
-    - `SvcRegistry.resolve_base_url(name)` returns the fully-qualified base URL.
-    - `SvcRegistry.build_invoke_url(name)` returns the per-service invoke endpoint.
-    - `SvcRegistry.build_healthz_url(name)` returns the `/healthz` endpoint.
+    - `SvcRegistry(host, base_port, table, host_overrides)` immutable address book.
+    - `SvcRegistry.from_config(method_cfg)` factory from a parsed `experiment.json`.
+    - `SvcRegistry.host_for(name)` resolved host for one service.
+    - `SvcRegistry.resolve_base_url(name)` `http://host:port` base URL.
+    - `SvcRegistry.build_invoke_url(name)` per-service `/invoke` URL (path-disambiguated for TAS_{i}).
+    - `SvcRegistry.build_healthz_url(name)` per-port `/healthz` URL.
     - `SvcRegistry.list_names()` / `filter_names_role(role)` enumerate the table.
 """
 # native python modules
@@ -35,19 +35,24 @@ _ATOMIC_ROLE = "atomic"
 
 @dataclass(frozen=True)
 class RegistryEntry:
-    """*RegistryEntry* one row of the registry; carries the service name, role label, and resolved port."""
+    """*RegistryEntry* one row of the address book; carries the service name, role label, and resolved port."""
 
     # service name (e.g. `TAS_{1}`, `MAS_{1}`)
     name: str
+
     # role label such as `"atomic"`, `"composite_client"`, etc. Used for filtering the registry table by workflow stage.
     role: str
+
     # resolved 16-bit port number (base_port + port_offset from config)
     port: int
 
 
 @dataclass(frozen=True)
 class SvcRegistry:
-    """*SvcRegistry* immutable resolver from service name to fully-qualified URL. Per-service host can vary by deployment mode (`local` collapses to one address; `loopback_aliased` / `remote` route by role bucket with optional per-name override). Field-level docs are inline above each field below."""
+    """*SvcRegistry* immutable address book that turns a service name into a fully-qualified URL.
+
+    Per-service host can vary by deployment mode: `local` collapses every service to one address; `loopback_aliased` and `remote` route by role bucket with optional per-service-name override. The four URL builders below all funnel through `host_for(name)` so the deployment policy applies uniformly.
+    """
 
     # default host address used when host_overrides has no entry for a service
     host: str
@@ -65,23 +70,23 @@ class SvcRegistry:
     def from_config(cls,
                     method_cfg: Dict[str, Any],
                     *,
-                    base_port_override: int = 0) -> "SvcRegistry":
-        """*from_config()* build a registry from a loaded `experiment.json`.
+                    base_port_ovrd: int = 0) -> "SvcRegistry":
+        """*from_config()* hydrate an address book from a parsed `experiment.json`.
 
-        Delegates to `_pick_host` once per registry entry to populate `host_overrides`; see that method for the per-deployment resolution rule.
+        Per-service host resolution is delegated to `_pick_host` once at construction so the caller never re-evaluates the policy at lookup time.
 
         Args:
             method_cfg (Dict[str, Any]): parsed method config.
-            base_port_override (int): when non-zero, replaces `method_cfg["base_port"]`. Used for CI / parallel runs via env var.
+            base_port_ovrd (int): when non-zero, replaces `method_cfg["base_port"]`. Used for CI / parallel runs via env var.
 
         Returns:
-            SvcRegistry: populated registry with per-service `host_overrides`.
+            SvcRegistry: populated address book with per-service `host_overrides`.
         """
         _host = method_cfg.get("host", "127.0.0.1")
         _hosts_block = method_cfg.get("hosts") or {}
         _deployment = str(method_cfg.get("deployment", "local"))
-        if base_port_override > 0:
-            _base = base_port_override
+        if base_port_ovrd > 0:
+            _base = base_port_ovrd
         else:
             _base = int(method_cfg["base_port"])
         _table: Dict[str, RegistryEntry] = {}
@@ -111,7 +116,7 @@ class SvcRegistry:
                    role: str,
                    hosts_block: Dict[str, Any],
                    default_host: str) -> str:
-        """*_pick_host()* resolve the host for one service per deployment mode.
+        """*_pick_host()* policy decision: which host serves one service under the given deployment.
 
         Resolution rule per `deployment`:
 
@@ -128,7 +133,7 @@ class SvcRegistry:
             default_host (str): top-level `host` fallback.
 
         Returns:
-            str: resolved host address for this service.
+            str: chosen host address for this service.
         """
         if deployment == "local":
             return default_host
@@ -148,11 +153,11 @@ class SvcRegistry:
         return default_host
 
     def host_for(self, name: str) -> str:
-        """*host_for()* return the resolved host for `name`; falls back to the registry-wide default."""
+        """*host_for()* host of `name` from the per-service override map; falls back to the registry-wide default."""
         return self.host_overrides.get(name, self.host)
 
     def resolve_base_url(self, name: str) -> str:
-        """*resolve_base_url()* return the `http://host:port` base URL for `name`.
+        """*resolve_base_url()* assemble `http://host:port` for `name` (no path).
 
         Args:
             name (str): service name (e.g. `"TAS_{1}"`, `"MAS_{1}"`).
@@ -161,15 +166,15 @@ class SvcRegistry:
             KeyError: if `name` is not in the registry table.
 
         Returns:
-            str: fully-qualified base URL, without a trailing path.
+            str: `http://<host>:<port>` (no trailing slash, no path).
         """
         _e = self.table[name]
         return f"http://{self.host_for(name)}:{_e.port}"
 
     def build_invoke_url(self, name: str) -> str:
-        """*build_invoke_url()* return the per-service invoke endpoint URL.
+        """*build_invoke_url()* per-service POST endpoint URL.
 
-        TAS_{i} routes share one port and disambiguate by URL path (`/TAS_<i>/invoke`); third-party services use a single `/invoke` per port.
+        TAS_{i} components share a single uvicorn port (Option B) and disambiguate by URL path (`/TAS_<i>/invoke`); third-party services use a single `/invoke` per port.
 
         Args:
             name (str): service name.
@@ -178,7 +183,7 @@ class SvcRegistry:
             KeyError: if `name` is not in the registry table.
 
         Returns:
-            str: the `POST /invoke` URL for this service.
+            str: full `http://host:port/...invoke` URL clients POST against.
         """
         _m = _TAS_KEY_RE.match(name)
         if _m is not None:
@@ -186,21 +191,21 @@ class SvcRegistry:
         return f"{self.resolve_base_url(name)}/invoke"
 
     def build_healthz_url(self, name: str) -> str:
-        """*build_healthz_url()* return the `/healthz` endpoint URL for `name`."""
+        """*build_healthz_url()* `/healthz` URL for `name` (one path per port; not per TAS member)."""
         return f"{self.resolve_base_url(name)}/healthz"
 
     def list_names(self) -> List[str]:
-        """*list_names()* return every service name in declaration order."""
+        """*list_names()* every service name in declaration order."""
         return list(self.table.keys())
 
     def filter_names_role(self, role: str) -> List[str]:
-        """*filter_names_role()* return every service name whose entry carries the given role label.
+        """*filter_names_role()* every service name whose entry carries the given role label.
 
         Args:
             role (str): role label such as `"atomic"`, `"composite_client"`, `"composite_medical"`, `"composite_alarm"`, `"composite_drug"`.
 
         Returns:
-            List[str]: matching service names in declaration order.
+            List[str]: matching service names in declaration order; empty when no entry matches.
         """
         _matching: List[str] = []
         for _name, _entry in self.table.items():

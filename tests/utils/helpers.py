@@ -14,7 +14,7 @@ import httpx
 # modules for tests
 from src.experiment.architecture import TasArchitecture
 from src.experiment.client.records import RequestRecord
-from src.experiment.registry import SvcRegistry
+from src.experiment.wire import SvcRegistry
 from src.experiment.services import LOG_COLUMNS, SvcReq, SvcResp, SvcSpec
 
 

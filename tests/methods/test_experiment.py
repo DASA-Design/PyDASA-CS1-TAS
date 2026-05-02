@@ -161,11 +161,11 @@ class TestRhoGridPath:
 
 
 class TestRampValidation:
-    """**TestRampValidation** (FR-3.5) `validate_ramp` rejects ambiguous or empty `rates`/`rho_grid` combinations."""
+    """**TestRampValidation** (FR-3.5) `load_ramp_cfg` rejects ambiguous or empty `rates`/`rho_grid` combinations."""
 
     def test_both_rates_and_rho_grid_raises(self):
         """*test_both_rates_and_rho_grid_raises()* supplying both is ambiguous and raises."""
-        from src.experiment.client import validate_ramp
+        from src.io import load_ramp_cfg as validate_ramp
         with pytest.raises(ValueError, match="either 'rates' or 'rho_grid'"):
             validate_ramp({"min_samples_per_kind": 32,
                            "rates": [1.0],
@@ -173,20 +173,20 @@ class TestRampValidation:
 
     def test_neither_raises(self):
         """*test_neither_raises()* missing both knobs raises."""
-        from src.experiment.client import validate_ramp
+        from src.io import load_ramp_cfg as validate_ramp
         with pytest.raises(ValueError, match="'rates' .* or 'rho_grid'"):
             validate_ramp({"min_samples_per_kind": 32})
 
     def test_rho_grid_out_of_range_raises(self):
         """*test_rho_grid_out_of_range_raises()* values outside (0, 1) are rejected."""
-        from src.experiment.client import validate_ramp
+        from src.io import load_ramp_cfg as validate_ramp
         with pytest.raises(ValueError, match="in \\(0, 1\\)"):
             validate_ramp({"min_samples_per_kind": 32,
                            "rho_grid": [1.2]})
 
     def test_rho_grid_non_monotonic_raises(self):
         """*test_rho_grid_non_monotonic_raises()* unsorted grids are rejected."""
-        from src.experiment.client import validate_ramp
+        from src.io import load_ramp_cfg as validate_ramp
         with pytest.raises(ValueError, match="monotonically increasing"):
             validate_ramp({"min_samples_per_kind": 32,
                            "rho_grid": [0.5, 0.2]})
@@ -203,10 +203,10 @@ class TestSeededReproducibility:
         _res_b = run_experiment(adp="baseline", wrt=False,
                                 method_cfg=_QUICK_CFG,
                                 skip_calibration=True, verbose=False)
-        _ids_a = [_r.request_id
+        _ids_a = [_r.req_id
                   for _p in _res_a["probes"]
                   for _r in _p["records"]]
-        _ids_b = [_r.request_id
+        _ids_b = [_r.req_id
                   for _p in _res_b["probes"]
                   for _r in _p["records"]]
         assert _ids_a == _ids_b
@@ -238,10 +238,10 @@ class TestReplicates:
     def test_replicates_have_distinct_request_ids(self, _result_r2):
         """*test_replicates_have_distinct_request_ids()* distinct seeds -> distinct request_id sequences (independence)."""
         _reps = _result_r2["replicates"]
-        _ids_0 = [_r.request_id
+        _ids_0 = [_r.req_id
                   for _p in _reps[0]["probes"]
                   for _r in _p["records"]]
-        _ids_1 = [_r.request_id
+        _ids_1 = [_r.req_id
                   for _p in _reps[1]["probes"]
                   for _r in _p["records"]]
         assert _ids_0 != _ids_1

@@ -20,9 +20,9 @@ _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]
 sys.path.insert(0, str(_ROOT))
 
-from src.experiment.payload import (MockPayload,  # noqa: E402
-                                    generate_payload,
-                                    resolve_size_for_kind)
+from src.experiment.wire import (MockPayload,  # noqa: E402
+                                 generate_payload,
+                                 resolve_size_for_kind)
 from src.io import load_method_cfg  # noqa: E402
 
 

@@ -20,9 +20,8 @@ import httpx
 # local modules
 from src.experiment.client.config import ClientCfg
 from src.experiment.client.records import RequestRecord
-from src.experiment.payload import generate_payload, resolve_size_for_kind
-from src.experiment.registry import SvcRegistry
 from src.experiment.services import SvcReq
+from src.experiment.wire import SvcRegistry, generate_payload, resolve_size_for_kind
 
 
 class RequestSender:
