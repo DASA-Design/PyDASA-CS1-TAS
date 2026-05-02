@@ -3,7 +3,7 @@
 Module io/tooling.py
 ====================
 
-Loader + small derivation helpers for the per-host noise-floor calibration JSON produced by `src.methods.calibration.run`.
+Loader + small derivation helpers for the per-host noise-floor calibration JSON produced by `src.methods.calibration.run`, plus the typed-spec loader for the client load generator.
 
 Every `experiment` run is gated on having a recent calibration for the current host so measured latencies can be reported as `value - loopback_median +/- jitter_p99`. This module owns the filesystem lookup, timestamp parsing, and the small set of numeric accessors the reporting path needs.
 
@@ -16,6 +16,8 @@ Public API (in code-body order):
     - `rate_sweep_loss_at(envelope, target_rate)` -> mean loss percent at `target_rate`, or None when the rate was not measured.
     - `load_dim_card(host, payload_size_bytes)` -> dimensional card dict for the latest envelope (lazy-derived if absent on disk), or None.
     - `calibration_age_hours(envelope)` -> hours since the envelope was written.
+    - `load_ramp_cfg(ramp_block)` -> validated `RampCfg` from the raw `experiment.json::ramp` dict.
+    - `load_client_cfg(method_cfg, *, kind_prob, entry_service)` -> full `ClientCfg` from a method config dict + arch-derived kind probabilities.
 """
 # native python modules
 from __future__ import annotations
@@ -25,6 +27,9 @@ import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# local modules
+from src.experiment.client.config import CascadeCfg, ClientCfg, RampCfg
 
 
 _CALIB_DIR = (Path(__file__).resolve().parents[2] / "data" / "results" / "experiment" / "calibration")
@@ -220,3 +225,121 @@ def calibration_age_hours(envelope: Dict[str, Any]) -> float:
         return float("inf")
     _delta = datetime.now() - _when
     return _delta.total_seconds() / 3600.0
+
+
+# ---------------------------------------------------------------------------
+# Client load-generator config loader
+
+
+def _validate_ramp_block(ramp: Dict[str, Any]) -> None:
+    """*_validate_ramp_block()* gate the raw `ramp` sub-dict of `experiment.json`.
+
+    Accepts either `rates` (direct list) or `rho_grid` (utilisation list inverted upstream); never both.
+
+    Raises:
+        ValueError: when any field is out of the supported range or both lists are supplied.
+    """
+    _n = int(ramp.get("min_samples_per_kind", 32))
+    if _n < 32:
+        _msg = f"ramp.min_samples_per_kind must be >= 32 for CLT validity; got {_n}"
+        raise ValueError(_msg)
+
+    _rates = ramp.get("rates", [])
+    _rho_grid = ramp.get("rho_grid", [])
+    if _rates and _rho_grid:
+        _msg = "ramp accepts either 'rates' or 'rho_grid', not both"
+        raise ValueError(_msg)
+    if not _rates and not _rho_grid:
+        _msg = "ramp must specify 'rates' (legacy) or 'rho_grid' (FR-3.5)"
+        raise ValueError(_msg)
+
+    if _rates:
+        if any(float(_r) <= 0 for _r in _rates):
+            _msg = "ramp.rates must be a list of positive floats"
+            raise ValueError(_msg)
+        if _rates != sorted(_rates):
+            _msg = "ramp.rates must be monotonically increasing"
+            raise ValueError(_msg)
+
+    if _rho_grid:
+        if any(not 0.0 < float(_r) < 1.0 for _r in _rho_grid):
+            _msg = "ramp.rho_grid values must be in (0, 1)"
+            raise ValueError(_msg)
+        if _rho_grid != sorted(_rho_grid):
+            _msg = "ramp.rho_grid must be monotonically increasing"
+            raise ValueError(_msg)
+
+    _cas = ramp.get("cascade", {})
+    _mode = _cas.get("mode", "rolling")
+    if _mode not in ("rolling", "fail_fast"):
+        _msg = f"cascade.mode must be 'rolling' or 'fail_fast', got {_mode!r}"
+        raise ValueError(_msg)
+    if _mode == "rolling":
+        _w = int(_cas.get("window", 50))
+        _t = float(_cas.get("threshold", 0.10))
+        if _w < 10:
+            _msg = f"cascade.window must be >= 10, got {_w}"
+            raise ValueError(_msg)
+        if not 0.0 < _t < 1.0:
+            _msg = f"cascade.threshold must be in (0, 1), got {_t}"
+            raise ValueError(_msg)
+
+
+def load_ramp_cfg(ramp: Dict[str, Any]) -> RampCfg:
+    """*load_ramp_cfg()* validate and materialise the `ramp` block into a `RampCfg`.
+
+    Args:
+        ramp (Dict[str, Any]): raw `ramp` block from the method config.
+
+    Returns:
+        RampCfg: populated ramp spec.
+
+    Raises:
+        ValueError: propagated from `_validate_ramp_block`.
+    """
+    _validate_ramp_block(ramp)
+    _cas = ramp.get("cascade", {})
+    return RampCfg(
+        min_n_per_kind=int(ramp.get("min_samples_per_kind", 32)),
+        max_probe_s=float(ramp.get("max_probe_window_s", 60.0)),
+        rates=[float(_r) for _r in ramp.get("rates", [])],
+        cascade=CascadeCfg(
+            mode=_cas.get("mode", "rolling"),
+            threshold=float(_cas.get("threshold", 0.10)),
+            window=int(_cas.get("window", 50)),
+        ),
+    )
+
+
+def load_client_cfg(method_cfg: Dict[str, Any],
+                    *,
+                    kind_prob: Dict[str, float],
+                    entry_service: str = "TAS_{1}") -> ClientCfg:
+    """*load_client_cfg()* build a full `ClientCfg` from a method-config dict.
+
+    `kind_prob` is injected by the caller because it is derived from the live `TasArchitecture` (entry-router routing row), not from the JSON.
+
+    Args:
+        method_cfg (Dict[str, Any]): parsed `data/config/method/experiment.json`.
+        kind_prob (Dict[str, float]): kind probability map from the architecture.
+        entry_service (str): entry-router service name; defaults to `TAS_{1}`.
+
+    Returns:
+        ClientCfg: spec ready for `ClientSimulator(...)`.
+
+    Raises:
+        ValueError: propagated from `load_ramp_cfg`.
+        KeyError: when `method_cfg` is missing `seed`.
+    """
+    _seed = int(method_cfg["seed"])
+    _sizes_by_kind = dict(method_cfg.get("request_size_bytes", {}))
+    _req_size = int(_sizes_by_kind.get("analyse_request", 256))
+    _ramp_block = dict(method_cfg.get("ramp", {}))
+    return ClientCfg(
+        entry_service=entry_service,
+        seed=_seed,
+        req_size_b=_req_size,
+        req_sizes_by_kind=_sizes_by_kind,
+        kind_prob=dict(kind_prob),
+        ramp=load_ramp_cfg(_ramp_block),
+    )
