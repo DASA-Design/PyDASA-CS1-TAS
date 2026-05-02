@@ -65,7 +65,9 @@ class TestMMcK:
         """*test_probs_sum_to_one()* `sum(P(n) for n in range(K_max + 1)) == 1.0` (state distribution integrates to one over the reachable range)."""
         _q = Queue("M/M/c/K", lamb=1.0, mu=2.0, c_max=2, K_max=5)
         _q.calculate_metrics()
-        _total = sum(_q.calculate_prob_n(n) for n in range(_q.K_max + 1))
+        # M/M/c/K always has finite K; the cast narrows Optional[int] -> int for the type checker
+        _k_max = int(_q.K_max or 0)
+        _total = sum(_q.calculate_prob_n(n) for n in range(_k_max + 1))
         assert _total == pytest.approx(1.0, abs=1e-9)
 
 
