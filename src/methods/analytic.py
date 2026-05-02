@@ -11,15 +11,13 @@ Public API:
     - `run(adp, prf, scn, wrt)` standard orchestrator contract.
     - `main()` CLI entry point.
 
-*IMPORTANT:* the written result blob carries the full `routing` matrix and `lambda_z` vector so downstream consumers can reconstruct node paths without re-opening the config files.
+The written result blob carries the full `routing` matrix and `lambda_z` vector so downstream consumers can reconstruct node paths without re-opening the config files.
 
 CLI::
 
     python -m src.methods.analytic --adaptation baseline
     python -m src.methods.analytic --adaptation s1 --profile opti
     python -m src.methods.analytic  # uses _setpoint
-
-# TODO: wire a real cost model (from the service catalogue) through the verdict writer so R3 carries a numeric value.
 """
 # native python modules
 from __future__ import annotations
@@ -55,18 +53,14 @@ def _build_vars_from_nodes(nds: pd.DataFrame,
         Dict[str, dict]: PACS-style `variables` block keyed by artifact key. Each entry carries `name`, `type`, `lambda_z`, `L_z`, `rho`, and a `vars` sub-dict with refreshed setpoints.
     """
     _out: Dict[str, dict] = {}
-
-    # walk artifacts in declared order; row index matches node id
+    # walk artifacts in declared order; row index matches the solver's node id
     for _i, _a in enumerate(cfg.artifacts):
         _row = nds.iloc[_i]
-
-        # copy the config variables so we do not mutate the input dict
+        # deep-copy so the input config dict is not mutated
         _vars = {_sym: dict(_var) for _sym, _var in _a.vars.items()}
-
-        # LaTeX subscript form of the artifact key (after the key migration this is just `_a.key` verbatim, e.g. `TAS_{1}`)
+        # LaTeX subscript form of the artifact key (`TAS_{1}` etc.)
         _sub = _a.format_sub()
-
-        # calculate output-variable refresh values from the solver row. Variable names follow the post-migration convention: `L_{q, ...}` / `W_{q, ...}` (split q-subscript, valid LaTeX)
+        # output-variable names follow the split-q-subscript convention: `L_{q, ...}` / `W_{q, ...}` (valid LaTeX)
         _updates = {
             f"\\lambda_{{{_sub}}}": float(_row["lambda"]),
             f"L_{{{_sub}}}": float(_row["L"]),
@@ -126,8 +120,7 @@ def run(adp: Optional[str] = None,
     _nds = solve_network(_cfg)
     _net = aggregate_net(_nds)
     _req = check_reqs(_nds)
-
-    # write results only when the caller asked for it
+    # write only when the caller asks; keeps `run(wrt=False)` side-effect-free for tests + sweeps
     _paths: Dict[str, str] = {}
     if wrt:
         _paths = _write_results(_cfg, _nds, _net, _req)
@@ -160,7 +153,7 @@ def _write_results(cfg: NetCfg,
     _out_dir = _RESULTS_DIR / cfg.scenario
     _out_dir.mkdir(parents=True, exist_ok=True)
 
-    # assemble the result envelope. topology (routing + lambda_z) is carried alongside metrics so the blob is self-contained for later path reconstruction without re-reading the config file.
+    # # assemble the result envelope. topology (routing + lambda_z)
     _doc = {
         "profile": cfg.profile,
         "scenario": cfg.scenario,
@@ -221,7 +214,6 @@ def main() -> None:
         help="skip writing result files (useful for dry runs)",)
 
     _args = _parser.parse_args()
-
     # run the solver end-to-end with the parsed flags
     _result = run(
         adp=_args.adaptation,
@@ -233,11 +225,9 @@ def main() -> None:
     _cfg = _result["config"]
     _net = _result["network"].iloc[0]
     _req = _result["requirements"]
-
     # header: which (profile, scenario) was solved
     print(f"profile={_cfg.profile}  scenario={_cfg.scenario}")
     print(f"label: {_cfg.label}")
-
     # network-wide summary line
     print(f"  nodes={int(_net['nodes'])}  "
           f"avg_rho={_net['avg_rho']:.4f}  "

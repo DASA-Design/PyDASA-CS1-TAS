@@ -5,13 +5,9 @@ Module test_queues.py
 
 Sanity checks for the closed-form queue models in `src.analytic.queues`.
 
-Each class groups tests by the contract under verification:
-
-    - **TestMM1**: M/M/1 closed-form formulas and guard-rails.
-    - **TestMMcK**: M/M/c/K formulas, M/M/s/K alias, and capacity-vs- server-count invariants.
-    - **TestFactoryErrors**: registry-level errors from the `Queue()` factory when the model string is not supported.
-
-# TODO: extend with M/M/s and M/M/1/K coverage as those paths get used.
+    - **TestMM1** M/M/1 closed-form formulas and guard-rails.
+    - **TestMMcK** M/M/c/K formulas, M/M/s/K alias, and capacity-vs-server-count invariants.
+    - **TestFactoryErrors** registry-level errors from the `Queue()` factory when the model string is not supported.
 """
 # testing framework
 import pytest
@@ -21,72 +17,63 @@ from src.analytic.queues import Queue
 
 
 class TestMM1:
-    """**TestMM1** verifies the M/M/1 closed-form against the textbook worked example: lamb=1, mu=2 => rho=0.5, L=1, Lq=0.5, W=1, Wq=0.5."""
+    """**TestMM1** the M/M/1 closed form at the textbook point `lamb=1, mu=2` -> `rho=0.5, L=1, Lq=0.5, W=1, Wq=0.5`."""
 
-    def test_textbook(self):
-        """*test_textbook()* all five M/M/1 metrics match the closed-form solution at rho = 0.5."""
-        # build the M/M/1 instance with textbook parameters
+    def test_textbook(self) -> None:
+        """*test_textbook()* `rho == 0.5, L == 1.0, Lq == 0.5, W == 1.0, Wq == 0.5` at `lamb=1, mu=2`."""
         _q = Queue("M/M/1", lamb=1.0, mu=2.0)
         _q.calculate_metrics()
-
-        # Utilization and performance metrics
         assert _q.rho == pytest.approx(0.5)
         assert _q.avg_len == pytest.approx(1.0)
         assert _q.avg_len_q == pytest.approx(0.5)
         assert _q.avg_wait == pytest.approx(1.0)
         assert _q.avg_wait_q == pytest.approx(0.5)
 
-    def test_unstable_raises(self):
-        """*test_unstable_raises()* lamb > mu (rho >= 1) must be rejected by the model's `_validate_params` hook."""
+    def test_unstable_raises(self) -> None:
+        """*test_unstable_raises()* `lamb > mu` (rho >= 1) raises `ValueError` matching `"unstable"`."""
         with pytest.raises(ValueError, match="unstable"):
             Queue("M/M/1", lamb=2.0, mu=1.0)
 
-    def test_rejects_finite_capacity(self):
-        """*test_rejects_finite_capacity()* M/M/1 rule is 'infinite' capacity; passing K_max must be rejected by the factory."""
+    def test_rejects_finite_capacity(self) -> None:
+        """*test_rejects_finite_capacity()* passing `K_max` to an M/M/1 raises `ValueError` matching `"infinite"`."""
         with pytest.raises(ValueError, match="infinite"):
             Queue("M/M/1", lamb=1.0, mu=2.0, K_max=10)
 
 
 class TestMMcK:
-    """**TestMMcK** verifies the M/M/c/K closed-form and the shared shape invariants (K >= c, factory aliasing, probability mass)."""
+    """**TestMMcK** M/M/c/K closed form and the shape invariants (K >= c, factory aliasing, probability mass)."""
 
-    def test_basic_rho(self):
-        """*test_basic_rho()* c=1, K=2, lamb=1, mu=2 => rho=0.5, and the mean length stays bounded within [0, K]."""
+    def test_basic_rho(self) -> None:
+        """*test_basic_rho()* `rho == 0.5` and `0 < avg_len < 2` at `c=1, K=2, lamb=1, mu=2`."""
         _q = Queue("M/M/c/K", lamb=1.0, mu=2.0, c_max=1, K_max=2)
         _q.calculate_metrics()
-
-        # Utilization
         assert _q.rho == pytest.approx(0.5)
-        # L should be strictly positive and bounded above by K
         assert 0 < _q.avg_len < 2
 
-    def test_slash_s_slash_k_alias(self):
-        """*test_slash_s_slash_k_alias()* 'M/M/s/K' (as declared in the config) resolves to the same class as 'M/M/c/K'."""
-        # both model strings must point at the same concrete class
+    def test_slash_s_slash_k_alias(self) -> None:
+        """*test_slash_s_slash_k_alias()* `Queue("M/M/s/K", ...)` and `Queue("M/M/c/K", ...)` produce instances of the same class."""
         _q_alias = Queue("M/M/s/K", lamb=1.0, mu=2.0, c_max=1, K_max=2)
         _q_canon = Queue("M/M/c/K", lamb=1.0, mu=2.0, c_max=1, K_max=2)
         assert type(_q_alias).__name__ == type(_q_canon).__name__
 
-    def test_rejects_k_below_c(self):
-        """*test_rejects_k_below_c()* K < c is impossible (cannot hold more servers than slots); the factory must reject it."""
+    def test_rejects_k_below_c(self) -> None:
+        """*test_rejects_k_below_c()* `K_max < c_max` raises `ValueError` matching `"K >= c"`."""
         with pytest.raises(ValueError, match="K >= c"):
             Queue("M/M/c/K", lamb=1.0, mu=2.0, c_max=3, K_max=2)
 
-    def test_probs_sum_to_one(self):
-        """*test_probs_sum_to_one()* the state distribution P(n) must integrate to 1 over the reachable range [0, K_max]."""
+    def test_probs_sum_to_one(self) -> None:
+        """*test_probs_sum_to_one()* `sum(P(n) for n in range(K_max + 1)) == 1.0` (state distribution integrates to one over the reachable range)."""
         _q = Queue("M/M/c/K", lamb=1.0, mu=2.0, c_max=2, K_max=5)
         _q.calculate_metrics()
-
-        # Sum P(n) over the full reachable state space
         _total = sum(_q.calculate_prob_n(n) for n in range(_q.K_max + 1))
         assert _total == pytest.approx(1.0, abs=1e-9)
 
 
 class TestFactoryErrors:
-    """**TestFactoryErrors** covers registry-level errors that the `Queue()` factory raises before any class is instantiated."""
+    """**TestFactoryErrors** registry-level errors that `Queue()` raises before any class is instantiated."""
 
-    def test_unknown_model(self):
-        """*test_unknown_model()* a model string that is not in the `_QUEUE_MODELS` registry must raise `NotImplementedError`."""
+    def test_unknown_model(self) -> None:
+        """*test_unknown_model()* an unknown model string raises `NotImplementedError` matching `"Unsupported queue model"`."""
         with pytest.raises(NotImplementedError,
                            match="Unsupported queue model"):
             Queue("G/G/1", lamb=1.0, mu=2.0)

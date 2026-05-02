@@ -18,8 +18,6 @@ Formulas are drawn from standard queueing theory:
 
     - Kleinrock, L. (1975), *Queueing Systems, Vol. 1: Theory*.
     - Gross, D. et al. (2008), *Fundamentals of Queueing Theory*, 4th ed.
-
-# TODO: implement additional queue models (M/G/1, G/G/1, priority queues).
 """
 # native python modules
 from __future__ import annotations
@@ -51,33 +49,31 @@ class BasicQueue(ABC):
         avg_wait_q (float): Wq, mean waiting time in the queue.
         lamb_eff (float): effective arrival rate for finite-K models.
     """
-    # input parameters
-    # arrival rate
     lamb: float = -1.0
-    # service rate
+
     mu: float = -1.0
-    # number of servers
+
     c_max: int = 1
-    # system capacity (None means infinite)
+
     K_max: Optional[int] = None
-    # derived metrics (set by calculate_metrics)
-    # server utilisation (rho = lamb / (c * mu))
+
     rho: float = field(default=0.0, init=False)
-    # traffic intensity (tau = lamb / mu)
+
     tau: float = field(default=0.0, init=False)
-    # probability of zero requests in the system
+
     p_z: float = field(default=0.0, init=False)
-    # probability of n requests in the system (set by calculate_prob_n)
+
     p_n: float = field(default=0.0, init=False)
-    # mean number in system (L)
+
     avg_len: float = field(default=0.0, init=False)
-    # mean number in queue (Lq)
+
     avg_len_q: float = field(default=0.0, init=False)
-    # mean waiting time in system (W)
+
     avg_wait: float = field(default=0.0, init=False)
-    # mean waiting time in queue (Wq)
+
     avg_wait_q: float = field(default=0.0, init=False)
-    # effective arrival rate (lamb_eff = lamb * (1 - P(K)) for finite-K models)
+
+    # effective arrival rate `lamb * (1 - P(K))`; only set on finite-K models
     lamb_eff: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
@@ -89,8 +85,6 @@ class BasicQueue(ABC):
         self.c_max = int(self.c_max)
         if self.K_max is not None:
             self.K_max = int(self.K_max)
-
-        # run validation hooks (common first, then model-specific)
         self._validate_basic_params()
         self._validate_params()
 
@@ -236,18 +230,14 @@ class QueueMM1(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
+        # utilisation rho = lamb / mu (single-server form); traffic intensity tau coincides at c=1
         self.rho = self.lamb / self.mu
         self.tau = self.lamb / self.mu
-
-        # state-zero probability
         self.p_z = self.calculate_prob_zero()
-
-        # mean number in system (L) and in queue (Lq)
+        # closed-form M/M/1: L = rho / (1 - rho), Lq = rho^2 / (1 - rho)
         self.avg_len = self.rho / (1 - self.rho)
         self.avg_len_q = self.rho ** 2 / (1 - self.rho)
-
-        # mean time in system (W) and in queue (Wq) via Little's Law
+        # Little's Law (W = L / lamb, Wq = Lq / lamb); lamb=0 short-circuits to avoid 0 / 0
         if self.lamb > 0:
             self.avg_wait = self.avg_len / self.lamb
             self.avg_wait_q = self.avg_len_q / self.lamb
@@ -315,24 +305,22 @@ class QueueMMs(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `p_z`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
+        # rho = lamb / (c * mu); tau = lamb / mu (offered load before sharing across c servers)
         self.rho = self.lamb / (self.c_max * self.mu)
         self.tau = self.lamb / self.mu
-
-        # state-zero probability
         self.p_z = self.calculate_prob_zero()
-
-        # mean number in queue (Lq) via the Erlang-C expression
-        _numerator = self.p_z * (self.tau ** self.c_max) * self.rho
-        _denominator = gfactorial(self.c_max) * ((1 - self.rho) ** 2)
-        self.avg_len_q = _numerator / _denominator
-
-        # mean number in system (L) and waits via Little's Law
+        # Erlang-C: Lq = P0 * tau^c * rho / (c! * (1 - rho)^2)
+        _num = self.p_z * (self.tau ** self.c_max) * self.rho
+        _den = gfactorial(self.c_max) * ((1 - self.rho) ** 2)
+        self.avg_len_q = _num / _den
+        # L = Lq + tau (mean in service equals offered load tau)
         self.avg_len = self.avg_len_q + self.tau
+        # Wq via Little's Law; lamb=0 short-circuits to avoid 0 / 0
         if self.lamb > 0:
             self.avg_wait_q = self.avg_len_q / self.lamb
         else:
             self.avg_wait_q = 0.0
+        # W = Wq + 1/mu (queue wait plus service time)
         self.avg_wait = self.avg_wait_q + self.mu ** -1
 
     def calculate_prob_zero(self) -> float:
@@ -341,15 +329,13 @@ class QueueMMs(BasicQueue):
         Returns:
             float: probability of 0 requests in the system.
         """
-        # probability mass for up to c-1 in service
+        # mass under the c saturation point
         _p_under_c = sum((self.tau ** i) / gfactorial(i)
                          for i in range(self.c_max))
-
-        # tail mass for c or more in the system
-        _numerator = (self.tau ** self.c_max)
-        _denominator = gfactorial(self.c_max) * (1 - self.rho)
-        _p_over_c = _numerator / _denominator
-
+        # tail mass at and above c
+        _num = self.tau ** self.c_max
+        _den = gfactorial(self.c_max) * (1 - self.rho)
+        _p_over_c = _num / _den
         return (_p_under_c + _p_over_c) ** -1
 
     def calculate_prob_n(self, n: int) -> float:
@@ -361,23 +347,16 @@ class QueueMMs(BasicQueue):
         Returns:
             float: probability of n requests; `-1.0` when n is negative.
         """
-        _p_n = -1.0
-
         if n < 0:
-            self.p_n = _p_n
-            return _p_n
-
-        _numerator = self.tau ** n
-
-        # fewer requests than servers: full factorial
+            self.p_n = -1.0
+            return -1.0
+        _num = self.tau ** n
         if n <= self.c_max:
-            _denominator = gfactorial(n)
-        # otherwise: servers saturated, scale by c-to-excess power
+            _den = gfactorial(n)
         else:
-            _power = self.c_max ** (n - self.c_max)
-            _denominator = gfactorial(self.c_max) * _power
-
-        _p_n = (_numerator / _denominator) * self.p_z
+            # servers saturated; scale by c-to-excess power
+            _den = gfactorial(self.c_max) * self.c_max ** (n - self.c_max)
+        _p_n = (_num / _den) * self.p_z
         self.p_n = _p_n
         return _p_n
 
@@ -417,37 +396,32 @@ class QueueMM1K(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `lamb_eff`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
+        # rho = lamb / mu (single-server); tau coincides at c=1
         self.rho = self.lamb / self.mu
         self.tau = self.lamb / self.mu
-
-        # block probability and effective arrival rate
+        # block probability P(K) drives the loss / effective arrival rate
         _p_kmax = self.calculate_prob_n(self.K_max)
+        # lamb_eff = lamb * (1 - P(K)) is what actually enters the system
         self.lamb_eff = self.lamb * (1 - _p_kmax)
-
-        # rho < 1 regime: use the truncated geometric closed form
         if self.rho < 1.0:
+            # truncated-geometric closed form (rho < 1 regime)
+            # mean in service = rho / (1 - rho) (geometric expectation)
             _in_server = self.rho / (1 - self.rho)
-
-            # excess carried by the finite truncation
-            _numerator = (self.K_max + 1) * self.rho ** (self.K_max + 1)
-            _denominator = (1 - self.rho ** (self.K_max + 1))
-            _in_queue = _numerator / _denominator
-
-            # mean number in system (L) and in queue (Lq)
+            # finite-truncation excess at state K
+            _num = (self.K_max + 1) * self.rho ** (self.K_max + 1)
+            _den = 1 - self.rho ** (self.K_max + 1)
+            _in_queue = _num / _den
             self.avg_len = _in_server - _in_queue
-            # equivalent to: avg_len - rho * (1 - p_kmax)
+            # equivalent to: L - rho * (1 - P(K))
             self.avg_len_q = self.avg_len - self.lamb_eff / self.mu
-
-        # rho == 1 regime: saturation, use the uniform-mass closed form
         else:
+            # rho = 1 saturation: uniform state distribution => L = K/2
             self.avg_len = self.K_max / 2.0
-
-            _numerator = self.K_max * (self.K_max - 1)
-            _denominator = 2 * self.K_max + 1
-            self.avg_len_q = _numerator / _denominator
-
-        # mean waits via Little's Law on the effective arrival rate
+            # Lq closed form at saturation: K(K-1) / (2K+1)
+            _num = self.K_max * (self.K_max - 1)
+            _den = 2 * self.K_max + 1
+            self.avg_len_q = _num / _den
+        # Little's Law on the effective rate: W = L / lamb_eff, Wq = Lq / lamb_eff
         if self.lamb_eff > 0:
             self.avg_wait = self.avg_len / self.lamb_eff
             self.avg_wait_q = self.avg_len_q / self.lamb_eff
@@ -458,14 +432,13 @@ class QueueMM1K(BasicQueue):
         Returns:
             float: probability of 0 requests in the system.
         """
-        # saturation regime: uniform state distribution
+        # saturation regime: uniform mass over K+1 states
         if self.rho == 1.0:
             return 1.0 / (self.K_max + 1)
-
-        # stable regime: truncated geometric series sum
-        _numerator = 1 - self.rho
-        _denominator = 1 - self.rho ** (self.K_max + 1)
-        return _numerator / _denominator
+        # truncated-geometric: P(0) = (1 - rho) / (1 - rho^(K+1))
+        _num = 1 - self.rho
+        _den = 1 - self.rho ** (self.K_max + 1)
+        return _num / _den
 
     def calculate_prob_n(self, n: int) -> float:
         """*calculate_prob_n()* return P(n) for M/M/1/K.
@@ -476,13 +449,14 @@ class QueueMM1K(BasicQueue):
         Returns:
             float: probability of n requests in the system.
         """
+        # saturation: uniform over K+1 states
         if self.rho == 1.0:
             _p_n = 1.0 / (self.K_max + 1)
         else:
-            _numerator = (1 - self.rho) * (self.rho ** n)
-            _denominator = (1 - self.rho ** (self.K_max + 1))
-            _p_n = _numerator / _denominator
-
+            # truncated-geometric: P(n) = (1 - rho) * rho^n / (1 - rho^(K+1))
+            _num = (1 - self.rho) * (self.rho ** n)
+            _den = 1 - self.rho ** (self.K_max + 1)
+            _p_n = _num / _den
         self.p_n = _p_n
         return _p_n
 
@@ -520,29 +494,22 @@ class QueueMMsK(BasicQueue):
 
         Side effects: sets `rho`, `tau`, `p_z`, `lamb_eff`, `avg_len`, `avg_len_q`, `avg_wait`, `avg_wait_q` on the instance.
         """
-        # utilisation and traffic intensity
+        # rho = lamb / (c * mu); tau = lamb / mu (offered load)
         self.rho = self.lamb / (self.c_max * self.mu)
         self.tau = self.lamb / self.mu
-
-        # state-zero probability
         self.p_z = self.calculate_prob_zero()
-
-        # block probability and effective arrival rate
+        # block probability P(K) drives the loss / effective arrival rate
         _p_kmax = self.calculate_prob_n(self.K_max)
+        # lamb_eff = lamb * (1 - P(K)) is what actually enters the system
         self.lamb_eff = self.lamb * (1 - _p_kmax)
-
-        # mean number in system L = sum_{i=0..K} i * P(i)
         _k = self.K_max
-        _L = sum(i * self.calculate_prob_n(i) for i in range(_k + 1))
-        self.avg_len = _L
-
-        # mean number in queue Lq = sum_{i=c..K} (i - c) * P(i)
         _c = self.c_max
-        _Lq = sum((i - _c) * self.calculate_prob_n(i)
-                  for i in range(_c, _k + 1))
-        self.avg_len_q = _Lq
-
-        # mean waits via Little's Law on the effective arrival rate
+        # truncated state-space sums: L = sum_{i=0..K} i * P(i), Lq counts only i >= c
+        self.avg_len = sum(i * self.calculate_prob_n(i)
+                           for i in range(_k + 1))
+        self.avg_len_q = sum((i - _c) * self.calculate_prob_n(i)
+                             for i in range(_c, _k + 1))
+        # Little's Law on the effective rate
         if self.lamb_eff > 0:
             self.avg_wait = self.avg_len / self.lamb_eff
             self.avg_wait_q = self.avg_len_q / self.lamb_eff
@@ -553,18 +520,13 @@ class QueueMMsK(BasicQueue):
         Returns:
             float: probability of 0 requests in the system.
         """
-        # local shortcuts for the closed-form expressions
         _tau = self.tau
         _c = self.c_max
         _k = self.K_max
-
-        # partial sum under capacity (states 0..c-1)
+        # mass at states 0..c-1 (no saturation) plus states c..K (saturated tail)
         _sum_under_c = sum((_tau ** i) / gfactorial(i) for i in range(_c))
-
-        # partial sum over capacity (states c..K)
         _sum_over_c = sum((_tau ** i) / (gfactorial(_c) * (_c ** (i - _c)))
                           for i in range(_c, _k + 1))
-
         return (_sum_under_c + _sum_over_c) ** -1
 
     def calculate_prob_n(self, n: int) -> float:
@@ -578,33 +540,18 @@ class QueueMMsK(BasicQueue):
         """
         if n < 0 or n > self.K_max:
             return 0.0
-
-        _numerator = self.tau ** n
-
-        # fewer requests than servers: full factorial
+        _num = self.tau ** n
         if n < self.c_max:
-            _denominator = gfactorial(n)
-        # otherwise: servers saturated, scale by c-to-excess power
+            _den = gfactorial(n)
         else:
-            _power = self.c_max ** (n - self.c_max)
-            _denominator = gfactorial(self.c_max) * _power
-
-        _p_n = (_numerator / _denominator) * self.p_z
+            # servers saturated; scale by c-to-excess power
+            _den = gfactorial(self.c_max) * self.c_max ** (n - self.c_max)
+        _p_n = (_num / _den) * self.p_z
         self.p_n = _p_n
         return _p_n
 
 
-# Registry of supported queue models. Maps the canonical model string to
-# a shape spec:
-#
-#     class   (type[BasicQueue]): concrete implementation class.
-#     c_rule  (str):              "single" means c_max must be exactly 1;
-#                                 "multi"  means c_max must be >= 1.
-#     K_rule  (str):              "infinite" means K_max must be None;
-#                                 "finite"   means K_max must be set.
-#
-# M/M/s/K is kept as an alias for M/M/c/K (same class, same rules).
-# Adding a new model = adding a new entry here plus its class above.
+# registry: model string -> {class, c_rule (single|multi), K_rule (infinite|finite)}; "M/M/s/K" is an alias for "M/M/c/K"
 _QUEUE_MODELS: Dict[str, Dict[str, Any]] = {
     "M/M/1": {
         "class": QueueMM1,
@@ -662,42 +609,25 @@ def Queue(model: str,
         _msg = f"Unsupported queue model: {model}. "
         _msg += f"Supported models: {list(_QUEUE_MODELS.keys())}"
         raise NotImplementedError(_msg)
-
     _spec = _QUEUE_MODELS[model]
     _cls = _spec["class"]
     _c_rule = _spec["c_rule"]
     _K_rule = _spec["K_rule"]
-
-    # validate server count (c_max) against the model's shape
-    _c1 = (_c_rule == "single" and c_max == 1)
-    _c2 = (_c_rule == "multi" and c_max >= 1)
-    _c_ok = _c1 or _c2
-    if not _c_ok:
-        _msg = f"{model} requires {_c_rule}-server shape. "
-        _msg += f"c={c_max}"
+    # validate c_max against the model's c_rule
+    _c_single_ok = _c_rule == "single" and c_max == 1
+    _c_multi_ok = _c_rule == "multi" and c_max >= 1
+    if not (_c_single_ok or _c_multi_ok):
+        _msg = f"{model} requires {_c_rule}-server shape. c={c_max}"
         raise ValueError(_msg)
-
-    # validate system capacity (K_max) against the model's shape
-    _c1 = (_K_rule == "infinite" and K_max is None)
-    _c2 = (_K_rule == "finite" and K_max is not None)
-    _K_ok = _c1 or _c2
-    if not _K_ok:
-        _msg = f"{model} requires {_K_rule} capacity. "
-        _msg += f"K={K_max}"
+    # validate K_max against the model's K_rule
+    _k_inf_ok = _K_rule == "infinite" and K_max is None
+    _k_fin_ok = _K_rule == "finite" and K_max is not None
+    if not (_k_inf_ok or _k_fin_ok):
+        _msg = f"{model} requires {_K_rule} capacity. K={K_max}"
         raise ValueError(_msg)
-
     # finite multi-server models additionally require K >= c
-    _finite = _K_rule == "finite"
-    _multi = _c_rule == "multi"
-    _undersized = _finite and _multi and K_max < c_max
-    if _undersized:
-        _msg = f"{model} requires capacity K >= c. "
-        _msg += f"K={K_max}, c={c_max}"
+    _is_finite_multi = _K_rule == "finite" and _c_rule == "multi"
+    if _is_finite_multi and K_max is not None and K_max < c_max:
+        _msg = f"{model} requires capacity K >= c. K={K_max}, c={c_max}"
         raise ValueError(_msg)
-
-    # every concrete class accepts the full (lamb, mu, c_max, K_max) shape through the inherited dataclass fields; validation above guarantees the values match the model
-    _queue = _cls(lamb, mu, c_max, K_max)
-
-    # TODO: implement additional queue models (M/G/1, G/G/1, priority).
-
-    return _queue
+    return _cls(lamb, mu, c_max, K_max)
