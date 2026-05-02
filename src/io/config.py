@@ -3,9 +3,7 @@
 Module config.py
 ================
 
-Profile + scenario loader for the CS-01 TAS case study.
-
-Resolves a `(profile, scenario)` selection into a flat `NetCfg` by reading the PACS-style JSONs under `data/config/profile/`.
+Profile + scenario loader for the CS-01 TAS case study. Resolves a `(profile, scenario)` selection into a flat `NetCfg` by reading the PACS-style JSONs under `data/config/profile/`.
 
 Expected envelope shape::
 
@@ -15,6 +13,8 @@ Expected envelope shape::
     environments._labels    -> {scenario: str}
     artifacts[<key>]        -> {name, type, lambda_z, L_z, vars: {sym: {...}}}
 
+For the `opti` profile, `_nodes[scenario]` at the three swap slots picks different artifacts per scenario: slot 5 carries `MAS_{3}` under s1 vs `MAS_{4}` under s2 / aggregate; slot 8 carries `AS_{3}` vs `AS_{4}`; slot 10 carries `DS_{3}` vs `DS_{1}`.
+
 Public API:
     - `ArtifactSpec` frozen per-node dataclass with setpoint accessors (`mu`, `c`, `K`, `epsilon`, `d_kb`, `d_bytes`).
     - `NetCfg` normalised view of a resolved (profile, scenario) pair.
@@ -22,16 +22,9 @@ Public API:
     - `load_method_cfg(name)` method-config JSON reader.
     - `load_reference(name)` reference-file JSON reader.
 
-*IMPORTANT:* for the `opti` profile, `_nodes[scenario]` at the three swap slots picks different artifacts per scenario:
-
-    - slot  5: s1 -> MAS_3 (dflt);  s2 / aggregate -> MAS_4 (opti)
-    - slot  8: s1 -> AS_3  (dflt);  s2 / aggregate -> AS_4  (opti)
-    - slot 10: s1 -> DS_3  (dflt);  s2 / aggregate -> DS_1  (opti)
-
 # TODO: validate row-stochasticity on the routing matrix at load time once we add more scenarios (keeps typos from reaching the solver).
 """
 # native python modules
-# forward references + postpone eval type hints
 from __future__ import annotations
 
 import json
@@ -92,11 +85,11 @@ class ArtifactSpec:
         Returns:
             float: setpoint value of the matching variable.
         """
-        # walk the variable dict and return the first match
         for _sym, _var in self.vars.items():
             if _sym.startswith(prefix):
                 return float(_var["_setpoint"])
-        raise KeyError(f"no variable with prefix {prefix!r} on {self.key}")
+        _msg = f"no variable with prefix {prefix!r} on {self.key}"
+        raise KeyError(_msg)
 
     def format_sub(self) -> str:
         """*format_sub()* return the LaTeX subscript form of the artifact key.
@@ -209,25 +202,17 @@ def _resolve_source(adaptation: Optional[str],
     Returns:
         Tuple[str, str]: `(profile_stem, scenario_name)`.
     """
-    # 1. both explicit -> use as-is
     if profile and scenario:
         return profile, scenario
-
-    # 2. adaptation shorthand -> registry lookup
     if adaptation:
         if adaptation not in _ADAPTATION_TO_SOURCE:
             _allowed = sorted(_ADAPTATION_TO_SOURCE.keys())
-            _msg = f"unknown adaptation {adaptation!r}; "
-            _msg += f"allowed: {_allowed}"
+            _msg = f"unknown adaptation {adaptation!r}; allowed: {_allowed}"
             raise ValueError(_msg)
         return _ADAPTATION_TO_SOURCE[adaptation]
-
-    # 3. profile only -> read its _setpoint scenario from disk
     if profile:
         _doc = _read_profile(profile)
         return profile, _doc["environments"]["_setpoint"]
-
-    # 4. nothing given -> hard default
     return "dflt", "baseline"
 
 
@@ -245,7 +230,8 @@ def _read_profile(profile_stem: str) -> Dict[str, Any]:
     """
     _path = _PROFILE_DIR / f"{profile_stem}.json"
     if not _path.exists():
-        raise FileNotFoundError(f"profile not found: {_path}")
+        _msg = f"profile not found: {_path}"
+        raise FileNotFoundError(_msg)
     with _path.open(encoding="utf-8") as _fh:
         return json.load(_fh)
 
@@ -269,28 +255,22 @@ def load_profile(adaptation: Optional[str] = None,
         NetCfg: resolved artifacts plus the aligned routing matrix for the requested scenario.
     """
     if source not in ("artifacts", "specs"):
-        raise ValueError(
-            f"source must be 'artifacts' or 'specs'; got {source!r}")
-
+        _msg = f"source must be 'artifacts' or 'specs'; got {source!r}"
+        raise ValueError(_msg)
     _profile, _scenario = _resolve_source(adaptation, profile, scenario)
-
     _doc = _read_profile(_profile)
     _env = _doc["environments"]
-
     if _scenario not in _env["_scenarios"]:
-        _msg = f"scenario {_scenario!r} not in {_profile}.json "
-        _msg += f"(available: {_env['_scenarios']})"
+        _msg = (f"scenario {_scenario!r} not in {_profile}.json "
+                f"(available: {_env['_scenarios']})")
         raise ValueError(_msg)
-
     if source not in _doc:
-        raise ValueError(
-            f"profile {_profile}.json has no top-level {source!r} block; "
-            "schema migration may be incomplete.")
-
+        _msg = (f"profile {_profile}.json has no top-level {source!r} block; "
+                "schema migration may be incomplete.")
+        raise ValueError(_msg)
     _node_keys = _env["_nodes"][_scenario]
     _routing = np.array(_env["_routs"][_scenario], dtype=float)
     _label = _env["_labels"].get(_scenario, "")
-
     _block = _doc[source]
     _enforce = bool(_block.get("enforce_limits", True))
     _artifacts: List[ArtifactSpec] = []
@@ -302,20 +282,16 @@ def load_profile(adaptation: Optional[str] = None,
                                        float(_a["lambda_z"]),
                                        float(_a["L_z"]),
                                        _a["vars"],))
-
-    # sanity-check that routing and node count agree
     if _routing.shape != (len(_artifacts), len(_artifacts)):
-        _msg = f"routing matrix shape {_routing.shape} does not match "
-        _msg += f"node count {len(_artifacts)} for scenario {_scenario!r}"
+        _msg = (f"routing matrix shape {_routing.shape} does not match "
+                f"node count {len(_artifacts)} for scenario {_scenario!r}")
         raise ValueError(_msg)
-
-    _cfg = NetCfg(_profile,
+    return NetCfg(_profile,
                   _scenario,
                   _label,
                   _artifacts,
                   _routing,
                   _enforce,)
-    return _cfg
 
 
 def load_method_cfg(name: str) -> Dict[str, Any]:
@@ -332,7 +308,8 @@ def load_method_cfg(name: str) -> Dict[str, Any]:
     """
     _path = _METHOD_DIR / f"{name}.json"
     if not _path.exists():
-        raise FileNotFoundError(f"method config not found: {_path}")
+        _msg = f"method config not found: {_path}"
+        raise FileNotFoundError(_msg)
     with _path.open(encoding="utf-8") as _fh:
         return json.load(_fh)
 
@@ -353,6 +330,7 @@ def load_reference(name: str = "baseline") -> Dict[str, Any]:
     """
     _path = _REFERENCE_DIR / f"{name}.json"
     if not _path.exists():
-        raise FileNotFoundError(f"reference file not found: {_path}")
+        _msg = f"reference file not found: {_path}"
+        raise FileNotFoundError(_msg)
     with _path.open(encoding="utf-8") as _fh:
         return json.load(_fh)

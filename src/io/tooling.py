@@ -47,7 +47,7 @@ def find_latest_calibration(host: Optional[str] = None) -> Optional[Path]:
         _host = socket.gethostname()
     else:
         _host = str(host)
-    # normalise hostname to match the path `src.methods.calibration.run` writes
+    # match the `<hostname>_<YYYYMMDD_HHMMSS>.json` shape `src.methods.calibration.run` writes
     _host_norm = _host.replace(" ", "-")
     _prefix = f"{_host_norm}_"
     _candidates: List[Path] = []
@@ -77,9 +77,9 @@ def load_latest_calibration(host: Optional[str] = None) -> Optional[Dict[str, An
     if _path is None:
         return None
     with _path.open(encoding="utf-8") as _fh:
-        _envelope = json.load(_fh)
-    _envelope["output_path"] = str(_path)
-    return _envelope
+        _env = json.load(_fh)
+    _env["output_path"] = str(_path)
+    return _env
 
 
 def calibration_floor_us(envelope: Dict[str, Any]) -> float:
@@ -158,11 +158,9 @@ def rate_sweep_loss_at(envelope: Dict[str, Any],
     _key = str(target_rate)
     _agg = _aggs.get(_key)
     if _agg is None:
-        # fallback for int-valued keys (e.g. "100" vs "100.0")
-        _rate_float = float(target_rate)
-        _rate_int = int(_rate_float)
-        _key_int = str(_rate_int)
-        _agg = _aggs.get(_key_int)
+        # fall back to int-stringified key ("100" instead of "100.0") since older envelopes used int rates
+        _rate_int = int(float(target_rate))
+        _agg = _aggs.get(str(_rate_int))
     if _agg is None:
         return None
     _loss = _agg.get("mean_loss_pct", 0.0)
@@ -187,18 +185,16 @@ def load_dim_card(host: Optional[str] = None,
         json.JSONDecodeError: propagated from `load_latest_calibration` when the on-disk envelope is malformed.
         Exception: any error raised by the lazy `derive_calib_coefs` path (e.g. PyDASA pipeline failure) propagates unmodified.
     """
-    _envelope = load_latest_calibration(host=host)
-    if _envelope is None:
+    _env = load_latest_calibration(host=host)
+    if _env is None:
         return None
-
-    _card = _envelope.get("dimensional_card")
+    _card = _env.get("dimensional_card")
     if isinstance(_card, dict) and _card:
         return _card
-
-    # lazy import so this module's import surface stays light (calibration drags in fastapi/uvicorn/httpx)
+    # lazy import: calibration drags in fastapi/uvicorn/httpx, which the experiment-gate path does not need
     from src.methods.calibration import derive_calib_coefs
-
-    _derived = derive_calib_coefs(_envelope, payload_size_bytes=payload_size_bytes)
+    _derived = derive_calib_coefs(_env,
+                                  payload_size_bytes=payload_size_bytes)
     if not _derived:
         return None
     return _derived
@@ -222,7 +218,5 @@ def calibration_age_hours(envelope: Dict[str, Any]) -> float:
         _when = datetime.fromisoformat(str(_ts))
     except ValueError:
         return float("inf")
-    _now = datetime.now()
-    _delta = _now - _when
-    _seconds = _delta.total_seconds()
-    return _seconds / 3600.0
+    _delta = datetime.now() - _when
+    return _delta.total_seconds() / 3600.0
