@@ -3,155 +3,307 @@
 Module test_architecture.py
 ===========================
 
-Integration tests for `src.experiment.architecture.sweep_arch_exp`. Mirror of the dimensional `tests/dimensional/test_networks.py` shape but each combo launches the FastAPI mesh, so the contract is exercised on a single 1x1x1 grid (one combo only) with `_QUICK_CFG` ramp settings to keep per-file runtime under ~30 s.
+Integration tests for `TasArchitecture`: spin up the in-process 13-service mesh and pin the prototype-component contract — every service answers `/healthz`, the entry-router kind map comes from TAS_{1}'s routing row, `flush_logs` writes per-service CSVs, the deployment gate raises on non-local until G5 ships, and the deployment helpers behave per spec.
 
-Test contracts:
+Tests that drive traffic against the architecture go through `TasUser` (the public client-side ctxmgr) instead of building `ClientSimulator` directly. Sweep tests live in `tests/experiment/test_scanner.py`; end-to-end ramp tests in `tests/experiment/test_executor.py`.
 
-    - **TestSweepArchExpShape** the returned dict has the canonical nested shape and every per-artifact array carries the eight expected keys.
-    - **TestSweepArchExpValues** measured coefficients fall inside the dimensional bounds (theta in `[0, 1]`, sigma equals theta under Little's law, eta >= 0) for the smallest stable combo.
-    - **TestSweepArchExpStability** a combo where every node hits the saturation cap is dropped (returns empty arrays).
+    - **TestTasArchitecture** startup health, kind-prob derivation, shared TAS app, ramp-driven log flush, deployment-helper surface, deployment-mode gate.
 """
 # native python modules
-import nest_asyncio
-nest_asyncio.apply()
-
-# data types
-from typing import Any, Dict  # noqa: E402
-
-# scientific stack
-import numpy as np  # noqa: E402
+from typing import Any, Dict
 
 # testing framework
-import pytest  # noqa: E402
+import pytest
 
 # modules under test
-from src.experiment.architecture import sweep_arch_exp  # noqa: E402
-from src.io import NetCfg, load_method_cfg, load_profile  # noqa: E402
-
-
-# small grid + tight ramp; one combo only to exercise the launch -> log -> coefficient pipeline (test-layout convention)
-_QUICK_GRID: Dict[str, Any] = {
-    "mu_factor": [1.0],
-    "c": [1],
-    "K": [32],
-    "util_threshold": 0.95,
-}
-
-_QUICK_RAMP = {
-    "min_samples_per_kind": 32,
-    "max_probe_window_s": 3.0,
-    "rates": [50],
-    "cascade": {"mode": "rolling", "threshold": 0.10, "window": 50},
-}
-
-
-@pytest.fixture(scope="module")
-def _profile_cfg() -> NetCfg:
-    """*_profile_cfg()* module-cached baseline profile config."""
-    return load_profile(adaptation="baseline")
+from src.experiment.architecture import TasArchitecture
+from src.experiment.users import TasUser
+from src.io import NetCfg, load_method_cfg, load_profile
 
 
 @pytest.fixture(scope="module")
 def _method_cfg() -> Dict[str, Any]:
-    """*_method_cfg()* module-cached experiment method config with a tight ramp."""
-    _cfg = load_method_cfg("experiment")
-    _cfg = dict(_cfg)
-    _cfg["ramp"] = dict(_QUICK_RAMP)
-    return _cfg
+    """*_method_cfg()* parsed `experiment.json`, cached for the module."""
+    return load_method_cfg("experiment")
 
 
 @pytest.fixture(scope="module")
-def _quick_sweep(
-    _profile_cfg: NetCfg,
-    _method_cfg: Dict[str, Any],
-) -> Dict[str, Dict[str, np.ndarray]]:
-    """*_quick_sweep()* run the 1-combo prototype sweep once for the whole module."""
-    return sweep_arch_exp(_profile_cfg,
-                          _QUICK_GRID,
-                          method_cfg=_method_cfg,
-                          adp="baseline")
+def _profile_cfg() -> NetCfg:
+    """*_profile_cfg()* baseline profile `dflt.json`, cached for the module."""
+    return load_profile(adaptation="baseline")
 
 
-class TestSweepArchExpShape:
-    """**TestSweepArchExpShape** returned dict carries one block per artifact with the canonical key set."""
+def _tiny_ramp_block(rate: float,
+                     min_samples: int = 32,
+                     max_probe_s: float = 10.0) -> Dict[str, Any]:
+    """*_tiny_ramp_block()* single-rate ramp dict in the JSON shape `load_ramp_cfg` consumes; permissive cascade keeps in-test ramps fast.
 
-    def test_returns_one_block_per_artifact(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]], _profile_cfg: NetCfg) -> None:
-        """*test_returns_one_block_per_artifact()* every artifact in the input cfg shows up as a top-level key."""
-        _expected = {_a.key for _a in _profile_cfg.artifacts}
-        assert set(_quick_sweep.keys()) == _expected
+    Args:
+        rate (float, req/s): target rate placed in `rates`.
+        min_samples (int): per-kind sample floor.
+        max_probe_s (float, seconds): per-probe safety timeout.
 
-    def test_each_block_has_eight_keys(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """*test_each_block_has_eight_keys()* each per-artifact block carries theta / sigma / eta / phi plus c / mu / K / lambda arrays."""
-        _expected_short = ("\\theta", "\\sigma", "\\eta", "\\phi",
-                           "c", "\\mu", "K", "\\lambda")
-        for _key, _block in _quick_sweep.items():
-            assert len(_block) == 8, f"{_key}: got {list(_block.keys())}"
-            for _short in _expected_short:
-                _hits = [_s for _s in _block.keys() if _s.startswith(_short)]
-                assert _hits, f"{_key}: missing {_short}"
-
-    def test_arrays_are_aligned(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """*test_arrays_are_aligned()* every array within an artifact block has the same length (one row per sweep point)."""
-        for _key, _block in _quick_sweep.items():
-            _lens = {len(_v) for _v in _block.values()}
-            assert len(_lens) == 1, f"{_key}: misaligned {_lens}"
+    Returns:
+        Dict[str, Any]: ramp block; rolling cascade at threshold 0.5 over a 50-sample window.
+    """
+    return {
+        "rates": [rate],
+        "min_samples_per_kind": min_samples,
+        "max_probe_window_s": max_probe_s,
+        "cascade": {"mode": "rolling",
+                    "threshold": 0.5,
+                    "window": 50},
+    }
 
 
-class TestSweepArchExpValues:
-    """**TestSweepArchExpValues** measured coefficients fall inside dimensional bounds."""
+class TestTasArchitecture:
+    """**TestTasArchitecture** every deployed service answers `/healthz`; entry-router kind map sums to 1 and only targets deployed artifacts; TAS_{1..6} share one FastAPI app; a tiny baseline ramp through `TasUser` populates per-service log buffers and `flush_logs` writes them to disk; `bind_addr` and `local_services()` behave per the deployment / role spec; `__aenter__` raises `NotImplementedError` on `loopback_aliased` and `remote` until the real-uvicorn launcher ships."""
 
-    def test_theta_bounded(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """*test_theta_bounded()* theta = L/K is in `[0, 1]` for every active artifact."""
-        for _key, _block in _quick_sweep.items():
-            _th = _block[f"\\theta_{{{_key}}}"]
-            if len(_th) == 0:
-                continue
-            assert (_th >= 0).all(), f"{_key}: negative theta"
-            assert (_th <= 1.0).all(), f"{_key}: theta > 1 ({_th.max()})"
+    @pytest.mark.asyncio
+    async def test_all_services_healthy(self,
+                                        _profile_cfg: NetCfg,
+                                        _method_cfg: Dict[str, Any]) -> None:
+        """*test_all_services_healthy()* every key in `arch.apps` answers `/healthz` with HTTP 200 and reports its own name in `body["components"][*]["name"]`."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline") as _arch:
+            assert _arch.client is not None
+            assert _arch.registry is not None
+            for _name in _arch.apps.keys():
+                _url = _arch.registry.build_healthz_url(_name)
+                _r = await _arch.client.get(_url)
+                assert _r.status_code == 200, f"{_name} not healthy"
+                _body = _r.json()
+                _comp_names = {_c["name"] for _c in _body.get("components", [])}
+                assert _name in _comp_names, f"{_name} not in healthz body"
 
-    def test_sigma_close_to_theta(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """*test_sigma_close_to_theta()* on the prototype, sigma = lambda*W/K and theta = L/K are NOT exactly equal (operational lambda counts every arrival including failed completions, while L = X*W uses successful-throughput X), so Little's-law equality `lambda*W = L` only holds approximately. Loose 50% tolerance absorbs the failed-completion gap on a small-sample run (tighter requires closed-form values; the dimensional test `tests/dimensional/test_networks.py::test_sigma_matches_theta` covers the exact equality)."""
-        for _key, _block in _quick_sweep.items():
-            _si = _block[f"\\sigma_{{{_key}}}"]
-            _th = _block[f"\\theta_{{{_key}}}"]
-            if len(_si) == 0 or len(_th) == 0:
-                continue
-            assert np.allclose(_si, _th, rtol=0.5, atol=1e-9), \
-                f"{_key}: sigma != theta (max rel diff {np.abs(_si - _th).max() / max(_th.max(), 1e-9):.3f})"
+    @pytest.mark.asyncio
+    async def test_kind_prob_from_routing(self,
+                                          _profile_cfg: NetCfg,
+                                          _method_cfg: Dict[str, Any]) -> None:
+        """*test_kind_prob_from_routing()* `arch.kind_prob` and `arch.kind_to_tgt` are populated, weights sum to 1 (within 1e-9), and every kind's target is in `arch.apps`."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline") as _arch:
+            assert _arch.kind_prob, "architecture did not derive kind_prob"
+            assert _arch.kind_to_tgt, "architecture did not derive kind_to_tgt"
+            _s = sum(_arch.kind_prob.values())
+            assert abs(_s - 1.0) < 1e-9, f"kind_prob sum={_s}"
+            for _k, _t in _arch.kind_to_tgt.items():
+                assert _t in _arch.apps, f"kind {_k} -> target {_t} not deployed"
 
-    def test_eta_non_negative(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """*test_eta_non_negative()* eta = chi*K/(mu*c) >= 0 since chi, K, mu, c are all positive."""
-        for _key, _block in _quick_sweep.items():
-            _et = _block[f"\\eta_{{{_key}}}"]
-            if len(_et) == 0:
-                continue
-            assert (_et >= 0).all(), f"{_key}: negative eta"
+    @pytest.mark.asyncio
+    async def test_shared_tas_app(self,
+                                  _profile_cfg: NetCfg,
+                                  _method_cfg: Dict[str, Any]) -> None:
+        """*test_shared_tas_app()* `len({id(app) for name, app in arch.apps.items() if name.startswith("TAS_")}) == 1` (all six TAS keys alias to one FastAPI app)."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline") as _arch:
+            _tas_app_ids = {id(_app) for _name, _app in _arch.apps.items()
+                            if _name.startswith("TAS_")}
+            assert len(_tas_app_ids) == 1, (
+                f"expected one shared TAS app, found {len(_tas_app_ids)}")
 
-    def test_phi_equals_theta(self, _quick_sweep: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """*test_phi_equals_theta()* phi = M_act / M_buf collapses to L/K in the CS-01 TAS schema, so it equals theta point-for-point."""
-        for _key, _block in _quick_sweep.items():
-            _th = _block[f"\\theta_{{{_key}}}"]
-            _ph = _block[f"\\phi_{{{_key}}}"]
-            if len(_th) == 0:
-                continue
-            assert np.allclose(_th, _ph), f"{_key}: phi != theta"
+    @pytest.mark.asyncio
+    async def test_baseline_quick_run(self,
+                                      _profile_cfg: NetCfg,
+                                      _method_cfg: Dict[str, Any],
+                                      tmp_path) -> None:
+        """*test_baseline_quick_run()* one ramp at lam_entry/10 collects >= 5 records with >= 1 success, the cascade does not trip, and `flush_logs` writes non-empty rows for `TAS_{1}` plus at least one `MAS_{*}`."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline") as _arch:
+            assert _arch.client is not None
+            assert _arch.registry is not None
+            _rate = _arch.get_lam_z_entry() / 10.0
+            _patched_method_cfg = dict(_method_cfg)
+            _patched_method_cfg["seed"] = 42
+            _patched_method_cfg["ramp"] = _tiny_ramp_block(_rate)
+            async with TasUser(client=_arch.client,
+                               registry=_arch.registry,
+                               method_cfg=_patched_method_cfg,
+                               kind_prob=dict(_arch.kind_prob)) as _user:
+                _result = await _user.run_ramp()
+            assert len(_result["probes"]) == 1
+            _probe = _result["probes"][0]
+            _records = _probe["records"]
+            assert len(_records) >= 5, "expected at least a handful of requests"
+            _succ = sum(1 for _r in _records if _r.success)
+            assert _succ >= 1, "no requests succeeded end-to-end"
+            assert _result["saturation_rate"] is None
+            _counts = _arch.flush_logs(tmp_path)
+            assert _counts.get("TAS_{1}", 0) > 0, "TAS_{1} has no logged invocations"
+            assert any(_counts.get(_n, 0) > 0
+                       for _n in ("MAS_{1}", "MAS_{2}", "MAS_{3}")), \
+                "no MAS_{*} invocations logged"
 
+    @pytest.mark.asyncio
+    async def test_flush_csv_per_service(self,
+                                         _profile_cfg: NetCfg,
+                                         _method_cfg: Dict[str, Any],
+                                         tmp_path) -> None:
+        """*test_flush_csv_per_service()* after a small ramp, `tmp_path.glob("TAS_*.csv")` returns at least one file."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline") as _arch:
+            assert _arch.client is not None
+            assert _arch.registry is not None
+            _rate = _arch.get_lam_z_entry() / 20.0
+            _patched_method_cfg = dict(_method_cfg)
+            _patched_method_cfg["seed"] = 7
+            _patched_method_cfg["ramp"] = _tiny_ramp_block(_rate)
+            async with TasUser(client=_arch.client,
+                               registry=_arch.registry,
+                               method_cfg=_patched_method_cfg,
+                               kind_prob=dict(_arch.kind_prob)) as _user:
+                await _user.run_ramp()
+            _arch.flush_logs(tmp_path)
+        _files = list(tmp_path.glob("TAS_*.csv"))
+        assert len(_files) >= 1
 
-class TestSweepArchExpStability:
-    """**TestSweepArchExpStability** combos that breach the utilisation cap are dropped."""
+    def test_bind_addr_local(self,
+                             _profile_cfg: NetCfg,
+                             _method_cfg: Dict[str, Any]) -> None:
+        """*test_bind_addr_local()* `deployment="local"` gives `arch.bind_addr == "127.0.0.1"` even before `__aenter__`."""
+        _arch = TasArchitecture(cfg=_profile_cfg,
+                                method_cfg=_method_cfg,
+                                adaptation="baseline",
+                                deployment="local")
+        assert _arch.bind_addr == "127.0.0.1"
 
-    def test_unstable_combo_dropped(self, _profile_cfg: NetCfg, _method_cfg: Dict[str, Any]) -> None:
-        """*test_unstable_combo_dropped()* a crushed mu against a tight util_threshold forces saturation; the combo is dropped and every per-artifact array is empty. K=0 disables the per-service admission gate so the asyncio queue grows unbounded and the sweep-stability check is exercised on raw utilisation, not on rejection-bounded utilisation."""
-        _grid: Dict[str, Any] = {
-            "mu_factor": [0.01],   # crush mu so any rate saturates
-            "c": [1],
-            "K": [0],              # gate off; rely on util_threshold to catch saturation
-            "util_threshold": 0.50,
-        }
-        _out = sweep_arch_exp(_profile_cfg,
-                              _grid,
-                              method_cfg=_method_cfg,
-                              adp="baseline")
-        for _key, _block in _out.items():
-            for _sym, _arr in _block.items():
-                assert len(_arr) == 0, f"{_key}/{_sym}: expected empty"
+    def test_bind_addr_loopback_aliased(self,
+                                        _profile_cfg: NetCfg,
+                                        _method_cfg: Dict[str, Any]) -> None:
+        """*test_bind_addr_loopback_aliased()* `deployment="loopback_aliased"` gives `arch.bind_addr == "0.0.0.0"`."""
+        _arch = TasArchitecture(cfg=_profile_cfg,
+                                method_cfg=_method_cfg,
+                                adaptation="baseline",
+                                deployment="loopback_aliased")
+        assert _arch.bind_addr == "0.0.0.0"
+
+    def test_bind_addr_remote(self,
+                              _profile_cfg: NetCfg,
+                              _method_cfg: Dict[str, Any]) -> None:
+        """*test_bind_addr_remote()* `deployment="remote"` gives `arch.bind_addr == "0.0.0.0"`."""
+        _arch = TasArchitecture(cfg=_profile_cfg,
+                                method_cfg=_method_cfg,
+                                adaptation="baseline",
+                                deployment="remote")
+        assert _arch.bind_addr == "0.0.0.0"
+
+    @pytest.mark.asyncio
+    async def test_role_all(self,
+                            _profile_cfg: NetCfg,
+                            _method_cfg: Dict[str, Any]) -> None:
+        """*test_role_all()* `launcher_role="all"` gives `len(arch.local_services()) == len(arch.registry.table)`."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline",
+                                   launcher_role="all") as _arch:
+            assert _arch.registry is not None
+            _names = _arch.local_services()
+            assert len(_names) == len(_arch.registry.table)
+
+    @pytest.mark.asyncio
+    async def test_role_buckets(self,
+                                _profile_cfg: NetCfg,
+                                _method_cfg: Dict[str, Any]) -> None:
+        """*test_role_buckets()* `client` -> only `composite_client`; `composite` -> only `composite_*` minus `composite_client`; `atomic` -> only `atomic`; `composite-atomic` == composite | atomic; `client | composite-atomic` covers the full registry."""
+        async with TasArchitecture(cfg=_profile_cfg, method_cfg=_method_cfg,
+                                   adaptation="baseline",
+                                   launcher_role="client") as _arch_client:
+            assert _arch_client.registry is not None
+            _client = set(_arch_client.local_services())
+            _reg = _arch_client.registry
+        for _n in _client:
+            assert _reg.table[_n].role == "composite_client"
+
+        async with TasArchitecture(cfg=_profile_cfg, method_cfg=_method_cfg,
+                                   adaptation="baseline",
+                                   launcher_role="composite") as _arch_comp:
+            _comp = set(_arch_comp.local_services())
+        for _n in _comp:
+            assert _reg.table[_n].role.startswith("composite_")
+            assert _reg.table[_n].role != "composite_client"
+
+        async with TasArchitecture(cfg=_profile_cfg, method_cfg=_method_cfg,
+                                   adaptation="baseline",
+                                   launcher_role="atomic") as _arch_atomic:
+            _atomic = set(_arch_atomic.local_services())
+        for _n in _atomic:
+            assert _reg.table[_n].role == "atomic"
+
+        async with TasArchitecture(cfg=_profile_cfg, method_cfg=_method_cfg,
+                                   adaptation="baseline",
+                                   launcher_role="composite-atomic"
+                                   ) as _arch_ca:
+            _ca = set(_arch_ca.local_services())
+        assert _ca == (_comp | _atomic)
+        assert (_client | _ca) == set(_reg.list_names())
+
+    @pytest.mark.asyncio
+    async def test_unknown_role_empty(self,
+                                      _profile_cfg: NetCfg,
+                                      _method_cfg: Dict[str, Any]) -> None:
+        """*test_unknown_role_empty()* an unrecognised `launcher_role` returns `[]` from `local_services()`."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline",
+                                   launcher_role="not-a-role") as _arch:
+            assert _arch.local_services() == []
+
+    def test_local_services_unentered_raises(
+            self,
+            _profile_cfg: NetCfg,
+            _method_cfg: Dict[str, Any]) -> None:
+        """*test_local_services_unentered_raises()* `local_services()` on a fresh (un-entered) `TasArchitecture` raises `RuntimeError` whose message contains `"__aenter__"`."""
+        _arch = TasArchitecture(cfg=_profile_cfg,
+                                method_cfg=_method_cfg,
+                                adaptation="baseline")
+        with pytest.raises(RuntimeError) as _exc:
+            _arch.local_services()
+        assert "__aenter__" in str(_exc.value)
+
+    @pytest.mark.asyncio
+    async def test_default_resolves_local_all(
+            self,
+            _method_cfg: Dict[str, Any],
+            _profile_cfg: NetCfg) -> None:
+        """*test_default_resolves_local_all()* default deployment is `"local"`, default launcher_role is `"all"`, and `local_services()` lists every entry in `arch.registry.table`."""
+        async with TasArchitecture(cfg=_profile_cfg,
+                                   method_cfg=_method_cfg,
+                                   adaptation="baseline") as _arch:
+            assert _arch.registry is not None
+            assert _arch.resolved_deployment == "local"
+            assert _arch.resolved_launcher_role == "all"
+            assert len(_arch.local_services()) == len(_arch.registry.table)
+
+    @pytest.mark.asyncio
+    async def test_loopback_aliased_gated(
+            self,
+            _method_cfg: Dict[str, Any],
+            _profile_cfg: NetCfg) -> None:
+        """*test_loopback_aliased_gated()* entering an architecture with `deployment="loopback_aliased"` raises `NotImplementedError` whose message contains `"loopback_aliased"` and `"launch_services"`."""
+        with pytest.raises(NotImplementedError) as _exc:
+            async with TasArchitecture(cfg=_profile_cfg,
+                                       method_cfg=_method_cfg,
+                                       adaptation="baseline",
+                                       deployment="loopback_aliased"):
+                pass
+        assert "loopback_aliased" in str(_exc.value)
+        assert "launch_services" in str(_exc.value)
+
+    @pytest.mark.asyncio
+    async def test_remote_gated(self,
+                                _method_cfg: Dict[str, Any],
+                                _profile_cfg: NetCfg) -> None:
+        """*test_remote_gated()* entering an architecture with `deployment="remote"` raises `NotImplementedError` whose message contains `"remote"` and `"launch_services"`."""
+        with pytest.raises(NotImplementedError) as _exc:
+            async with TasArchitecture(cfg=_profile_cfg,
+                                       method_cfg=_method_cfg,
+                                       adaptation="baseline",
+                                       deployment="remote"):
+                pass
+        assert "remote" in str(_exc.value)
+        assert "launch_services" in str(_exc.value)

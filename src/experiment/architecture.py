@@ -3,262 +3,552 @@
 Module experiment/architecture.py
 =================================
 
-Configuration-sweep helper for the experimental method's yoly-experimental notebook.
+Server-side prototype component. Counterpart of `users.py::TasUser` (synthetic user population): the architecture builds the mesh, the user drives traffic against it; `executor.py` is the bridge that pairs the two for one cell.
 
-Mirror of `src.dimensional.networks.sweep_arch` in shape, but each sweep point spins up the FastAPI mesh and measures real per-node metrics instead of solving the M/M/c/K closed form. Returns the same nested `{artifact_key: {full_symbol: ndarray}}` shape, so `aggregate_sweep_to_arch`, `plot_yoly_chart`, `plot_system_behaviour`, and the per-node grid plotters work unchanged.
+Public API:
+    - `class TasArchitecture` async context manager that assembles the FastAPI mesh (composite + third-party services) for one adaptation, exposes the shared `httpx.AsyncClient`, and tears the mesh down on exit. The class also owns the deployment-helper surface (`bind_addr` property, `local_services()` method).
 
-Only one sweep:
+The profile JSON is the single source of truth for DASA knobs (mu, epsilon, c, K, routing); the method JSON (`experiment.json`) carries deployment plumbing (ports, request sizes, role tagging). The architecture only assembles + inspects; it does NOT drive traffic (that is `executor.py` + `users.py`).
 
-    - `sweep_arch_exp(cfg, sweep_grid, *, method_cfg, adp)` walks the `(mu_factor, c, K)` grid; at each combo it overrides every node's mu / c / K, launches the mesh once, and collects one coefficient point per artifact from the aggregated `nodes` DataFrame.
+Composite flavours wired per the `role` field in `experiment.json`:
 
-Coefficients (same closed form as `src.dimensional.networks`):
+    - `composite_client` (TAS_{1}, TAS_{5}, TAS_{6}): TAS_{1} routes by request kind via `mount_composite_svc`'s `kind_to_tgt` table; TAS_{5} and TAS_{6} are terminal.
+    - `composite_medical/alarm/drug` (TAS_{2..4}): dispatch siblings in-process via the shared `_handlers` dict from `mount_composite_svc`.
 
-    - theta = L / K                            (Occupancy)
-    - sigma = lambda * W / K                   (Stall, queueing share of capacity)
-    - eta   = chi * K / (mu * c)               (Effective-yield)
-    - phi   = (L * delta) / (K * delta)        (Memory-use; explicit byte arithmetic, reduces to L/K under constant delta)
+Shared `httpx.AsyncClient` over a per-port `httpx.MockTransport` handler closure; per-port apps register on `__aenter__` before any traffic flows.
 
-*IMPORTANT:* each sweep point is one full mesh launch + ramp; budget ~30 s
-per combo. Use a small grid (3 mu_factors x 2 c x 2 K = 12 combos minimum)
-unless you have hours to spare.
+Deployment modes: `local` (ASGI), `loopback_aliased` (`127.0.0.X` aliases), `remote` (LAN). Only `local` is implemented; non-local raises `NotImplementedError` until `src.scripts.launch_services` ships.
 """
 # native python modules
 from __future__ import annotations
 
-import copy
-import tempfile
-from dataclasses import replace
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
-
-# data types
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 # scientific stack
 import numpy as np
 
+# web stack
+import httpx
+from fastapi import FastAPI
+
 # local modules
-from src.io import ArtifactSpec, NetCfg
+from src.experiment.instances import build_tas, build_third_party
+from src.experiment.wire import SvcRegistry
+from src.experiment.services import (LOG_COLUMNS,
+                                     HttpForward,
+                                     SvcSpec,
+                                     derive_seed)
+from src.io import NetCfg
 
 
-def _override_artifact(art: ArtifactSpec,
-                       *,
-                       mu: float,
-                       c_int: int,
-                       K_int: int) -> ArtifactSpec:
-    """*_override_artifact()* return a copy of `art` with mu / c / K setpoints overridden inside its vars block.
-
-    The frozen `ArtifactSpec` is rebuilt via `dataclasses.replace`; the vars
-    dict is deep-copied so per-combo mutations do not leak back into the
-    caller's NetCfg.
-
-    Args:
-        art (ArtifactSpec): source spec.
-        mu (float): new mu setpoint.
-        c_int (int): new c setpoint.
-        K_int (int): new K setpoint.
-
-    Returns:
-        ArtifactSpec: new spec carrying the overridden setpoints.
-    """
-    _vars = copy.deepcopy(art.vars)
-    _key = art.key
-
-    _mu_sym = f"\\mu_{{{_key}}}"
-    _c_sym = f"c_{{{_key}}}"
-    _K_sym = f"K_{{{_key}}}"
-
-    if _mu_sym in _vars:
-        _vars[_mu_sym]["_setpoint"] = float(mu)
-    if _c_sym in _vars:
-        _vars[_c_sym]["_setpoint"] = int(c_int)
-    if _K_sym in _vars:
-        _vars[_K_sym]["_setpoint"] = int(K_int)
-
-    return replace(art, vars=_vars)
+# launcher_role -> registry-roles spawned locally
+_LAUNCHER_ROLE_BUCKETS: Dict[str, Tuple[str, ...]] = {
+    "all": (
+        "composite_client",
+        "composite_medical",
+        "composite_alarm",
+        "composite_drug",
+        "atomic"
+    ),
+    "client": (
+        "composite_client",
+    ),
+    "composite": (
+        "composite_medical",
+        "composite_alarm",
+        "composite_drug"
+    ),
+    "atomic": (
+        "atomic",
+    ),
+    "composite-atomic": (
+        "composite_medical",
+        "composite_alarm",
+        "composite_drug",
+        "atomic"
+    )
+}
 
 
-def _override_cfg(cfg: NetCfg,
-                  *,
-                  mu_factor: float,
-                  c_int: int,
-                  K_int: int) -> NetCfg:
-    """*_override_cfg()* rebuild `cfg` with per-node mu scaled by `mu_factor` and uniform c / K overrides.
+# --- module-level helpers -------------------------------------------------
+
+
+def _compute_avg_req_size(sizes_by_kind: Dict[str, int]) -> int:
+    """*_compute_avg_req_size()* mean payload size across kinds; the TAS buffer budget uses it.
 
     Args:
-        cfg (NetCfg): source resolved network configuration.
-        mu_factor (float): multiplicative scale applied to each artifact's seeded mu.
-        c_int (int): uniform server-count override across every node.
-        K_int (int): uniform capacity override across every node.
+        sizes_by_kind (Dict[str, int]): per-kind request sizes in bytes.
 
     Returns:
-        NetCfg: new configuration carrying the overridden artifact specs.
+        int: average; zero-valued entries are dropped, empty input yields 0.
     """
-    _new_arts: List[ArtifactSpec] = []
-    for _a in cfg.artifacts:
-        _mu = float(_a.mu) * float(mu_factor)
-        _new_arts.append(_override_artifact(_a,
-                                            mu=_mu,
-                                            c_int=c_int,
-                                            K_int=K_int))
-    return replace(cfg, artifacts=_new_arts)
+    # TODO check if this moves to another module
+    _vals = [int(_v) for _v in sizes_by_kind.values() if int(_v) > 0]
+    if not _vals:
+        return 0
+    return int(sum(_vals) / len(_vals))
 
 
-def _empty_per_art(art_keys: Iterable[str]) -> Dict[str, Dict[str, List[float]]]:
-    """*_empty_per_art()* allocate the per-artifact accumulator skeleton.
+# --- prototype component --------------------------------------------------
 
-    Args:
-        art_keys (Iterable[str]): artifact identifiers in LaTeX subscript form.
 
-    Returns:
-        Dict[str, Dict[str, List[float]]]: nested empty-list accumulators.
+@dataclass
+class TasArchitecture:
+    """*TasArchitecture* the server side of one adaptation run; counterpart to `users.py::TasUser`.
+
+    Use as `async with TasArchitecture(...) as arch:` to bind mesh setup and teardown to the block.
     """
-    _per_art: Dict[str, Dict[str, List[float]]] = {}
-    for _k in art_keys:
-        _per_art[_k] = {
-            f"\\theta_{{{_k}}}": [],
-            f"\\sigma_{{{_k}}}": [],
-            f"\\eta_{{{_k}}}": [],
-            f"\\phi_{{{_k}}}": [],
-            f"c_{{{_k}}}": [],
-            f"\\mu_{{{_k}}}": [],
-            f"K_{{{_k}}}": [],
-            f"\\lambda_{{{_k}}}": [],
-        }
-    return _per_art
 
+    # experimental profile from configuration JSON
+    cfg: NetCfg
 
-def sweep_arch_exp(cfg: NetCfg,
-                   sweep_grid: Dict[str, Any],
+    # method config from JSON; carries deployment plumbing (ports, request sizes, role tagging)
+    method_cfg: Dict[str, Any]
+
+    # adaptation scenario from JSON; one of "baseline", "s1", "s2", "aggregate"
+    adaptation: str
+
+    # override for the base port; 0 reads the config value
+    base_port_ovrd: int = 0
+
+    # override for the deployment mode; None reads the config value; values: "local" / "loopback_aliased" / "remote"
+    deployment: Optional[str] = None
+
+    # override for the launcher role; None reads the config value; values: "all" / "client" / "composite" / "atomic" / "composite-atomic"
+    launcher_role: Optional[str] = None
+
+    # registry resolved on __aenter__
+    registry: Optional[SvcRegistry] = None
+
+    # per-artifact specs resolved on __aenter__
+    specs: Dict[str, SvcSpec] = field(default_factory=dict)
+
+    # service-name -> FastAPI app; TAS_{1..6} share one app
+    apps: Dict[str, FastAPI] = field(default_factory=dict)
+
+    # shared httpx client routing per-port via MockTransport handler
+    client: Optional[httpx.AsyncClient] = None
+
+    # per-port ASGI transports keyed by registered port; populated as apps mount
+    _port_tps: Dict[int, httpx.ASGITransport] = field(
+        default_factory=dict)
+
+    # entry-router kind probabilities derived from TAS_{1}'s routing row; values sum to 1
+    kind_prob: Dict[str, float] = field(default_factory=dict)
+
+    # entry-router kind label -> target artifact name
+    kind_to_tgt: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def resolved_deployment(self) -> str:
+        """*resolved_deployment* deployment mode in effect.
+
+        Returns:
+            str: constructor arg if set, else `method_cfg["deployment"]`, else `"local"`.
+        """
+        if self.deployment is not None:
+            return str(self.deployment)
+        return str(self.method_cfg.get("deployment", "local"))
+
+    @property
+    def resolved_launcher_role(self) -> str:
+        """*resolved_launcher_role* launcher role in effect.
+
+        Returns:
+            str: constructor arg if set, else `method_cfg["launcher_role"]`, else `"all"`.
+        """
+        if self.launcher_role is not None:
+            return str(self.launcher_role)
+        return str(self.method_cfg.get("launcher_role", "all"))
+
+    @property
+    def bind_addr(self) -> str:
+        """*bind_addr* uvicorn bind address selected from the deployment mode.
+
+        Returns:
+            str: `127.0.0.1` for `local`, `0.0.0.0` for `loopback_aliased` or `remote` (other aliases / LAN hosts must be reachable).
+        """
+        if self.resolved_deployment == "local":
+            return "127.0.0.1"
+        return "0.0.0.0"
+
+    @staticmethod
+    def services_for_role(launcher_role: str,
+                          registry: SvcRegistry) -> List[str]:
+        """*services_for_role()* registry names a launcher in this role spawns; callable without an entered architecture so distributed scripts can use it directly.
+
+        Args:
+            launcher_role (str): one of `"all"` / `"client"` / `"composite"` / `"atomic"` / `"composite-atomic"`.
+            registry (SvcRegistry): registry to filter.
+
+        Returns:
+            List[str]: service names; empty when the role string is unrecognised.
+        """
+        _allowed = _LAUNCHER_ROLE_BUCKETS.get(launcher_role, ())
+        if not _allowed:
+            return []
+        _names: List[str] = []
+        for _name, _entry in registry.table.items():
+            if _entry.role in _allowed:
+                _names.append(_name)
+        return _names
+
+    def local_services(self) -> List[str]:
+        """*local_services()* the names this architecture spawns under its resolved role.
+
+        Returns:
+            List[str]: service names; empty when the resolved role is unrecognised.
+
+        Raises:
+            RuntimeError: when called before `__aenter__`.
+        """
+        if self.registry is None:
+            _msg = "local_services() called before __aenter__ resolved the registry"
+            raise RuntimeError(_msg)
+        return self.services_for_role(self.resolved_launcher_role,
+                                      self.registry)
+
+    async def __aenter__(self) -> "TasArchitecture":
+        """*__aenter__()* stand the mesh up.
+
+        Raises:
+            NotImplementedError: on non-local deployment until the real-uvicorn launcher ships.
+
+        Returns:
+            TasArchitecture: this instance, ready for traffic.
+        """
+        self._gate_deployment()
+        self._init_registry_and_specs()
+        self._resolve_entry_router()
+        self._init_routed_client()
+        self._mount_apps()
+        return self
+
+    def _gate_deployment(self) -> None:
+        """*_gate_deployment()* refuse modes the in-process ASGI launcher cannot serve.
+
+        Raises:
+            NotImplementedError: when the resolved deployment is not `"local"`.
+        """
+        if self.resolved_deployment == "local":
+            return
+        _msg = (
+            f"deployment={self.resolved_deployment!r} requires the "
+            "real-uvicorn launcher (see `notes/distribute.md` G5); "
+            "the in-process ASGI launcher only supports "
+            "deployment='local'. Run `python -m src.scripts.launch_services` "
+            "on each host instead.")
+        raise NotImplementedError(_msg)
+
+    def _init_registry_and_specs(self) -> None:
+        """*_init_registry_and_specs()* fill `self.registry` and `self.specs`."""
+        _resolved_method_cfg = dict(self.method_cfg)
+        _resolved_method_cfg["deployment"] = self.resolved_deployment
+        self.registry = SvcRegistry.from_config(
+            _resolved_method_cfg, base_port_ovrd=self.base_port_ovrd)
+        _root_seed = int(self.method_cfg.get("seed", 0))
+        _avg_size = _compute_avg_req_size(
+            self.method_cfg.get("request_size_bytes", {}))
+        self.specs = self._build_specs(root_seed=_root_seed,
+                                       avg_req_size_b=_avg_size)
+
+    def _resolve_entry_router(self) -> None:
+        """*_resolve_entry_router()* fill `self.kind_to_tgt` and `self.kind_prob` from the first deployed `composite_client` with a non-empty row; leave both empty otherwise."""
+        if self.registry is None:
+            return
+        _entry_router: Optional[str] = None
+        for _name, _entry in self.registry.table.items():
+            if _entry.role != "composite_client":
+                continue
+            if _name not in self.specs:
+                continue
+            if self._read_routing_row(_name):
+                _entry_router = _name
+                break
+        if _entry_router is None:
+            return
+        _kt, _kw = self._build_router_kind_map(_entry_router)
+        self.kind_to_tgt = _kt
+        self.kind_prob = _kw
+
+    def _init_routed_client(self) -> None:
+        """*_init_routed_client()* build `self.client`: a shared `httpx.AsyncClient` that routes per request to the ASGI transport registered for the destination port (404 on miss)."""
+        async def _route_by_port(request: httpx.Request) -> httpx.Response:
+            _port = request.url.port
+            if _port is None:
+                _t = None
+            else:
+                _t = self._port_tps.get(_port)
+            if _t is None:
+                return httpx.Response(
+                    status_code=404,
+                    json={"detail": f"no app for port {_port}"})
+            return await _t.handle_async_request(request)
+
+        self.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_route_by_port),
+            limits=httpx.Limits(max_connections=4096,
+                                max_keepalive_connections=2048),
+            timeout=httpx.Timeout(connect=5.0,
+                                  read=30.0,
+                                  write=10.0,
+                                  pool=10.0))
+
+    def _mount_apps(self) -> None:
+        """*_mount_apps()* register every service app behind the shared client: one TAS app for TAS_{1..6}, one app per third-party."""
+        if self.client is None or self.registry is None:
+            return
+        _forward = HttpForward(self.client, self.registry)
+        self._mount_tas_app(_forward)
+        self._mount_third_party_apps(_forward)
+
+    def _mount_tas_app(self, forward: HttpForward) -> None:
+        """*_mount_tas_app()* mount one shared FastAPI app for every `TAS_*` spec on the entry port.
+
+        Args:
+            forward (HttpForward): downstream-call helper bound to the shared client and registry.
+        """
+        _tas_specs: Dict[str, SvcSpec] = {}
+        _tas_rows: Dict[str, List[Tuple[str, float]]] = {}
+        for _name, _spec in self.specs.items():
+            if _name.startswith("TAS_"):
+                _tas_specs[_name] = _spec
+                _tas_rows[_name] = self._read_routing_row(_name)
+        if not _tas_specs:
+            return
+        _tas_app = build_tas(_tas_specs,
+                             _tas_rows,
+                             self.kind_to_tgt,
+                             forward)
+        _tas_port: Optional[int] = None
+        for _name, _spec in _tas_specs.items():
+            self.apps[_name] = _tas_app
+            _tas_port = _spec.port
+        if _tas_port is not None:
+            self._port_tps[_tas_port] = httpx.ASGITransport(app=_tas_app)
+
+    def _mount_third_party_apps(self, forward: HttpForward) -> None:
+        """*_mount_third_party_apps()* mount one FastAPI app per non-TAS spec.
+
+        Args:
+            forward (HttpForward): downstream-call helper bound to the shared client and registry.
+        """
+        for _name, _spec in self.specs.items():
+            if _name.startswith("TAS_"):
+                continue
+            _targets = self._read_routing_row(_name)
+            _app = build_third_party(_spec, _targets, forward)
+            self.apps[_name] = _app
+            self._port_tps[_spec.port] = httpx.ASGITransport(app=_app)
+
+    async def __aexit__(self, _exc_type, _exc, _tb) -> None:
+        """*__aexit__()* close the shared httpx client and every per-port ASGI transport.
+
+        The three exception-context parameters are required by the protocol but unused: cleanup runs identically on success and on exception, and returning `None` lets in-flight exceptions propagate.
+
+        Args:
+            _exc_type: exception class or `None`; unused.
+            _exc: exception instance or `None`; unused.
+            _tb: traceback or `None`; unused.
+        """
+        if self.client is not None:
+            await self.client.aclose()
+        for _t in self._port_tps.values():
+            await _t.aclose()
+
+    def _build_specs(self,
+                     *,
+                     root_seed: int = 0,
+                     avg_req_size_b: int = 0) -> Dict[str, SvcSpec]:
+        """*_build_specs()* one `SvcSpec` per registered artifact, taking `(mu, epsilon, c, K)` from the profile and `(role, port)` from the registry.
+
+        Args:
+            root_seed (int): folded per service via `derive_seed` for stable independent RNG streams.
+            avg_req_size_b (int, bytes): expected per-kind payload size; sets `mem_per_buffer = K * avg * MEM_HEADROOM_FACTOR`.
+
+        Returns:
+            Dict[str, SvcSpec]: one entry per artifact present in both profile and registry; swap-slot artifacts inactive in the current adaptation are skipped silently.
+        """
+        _specs: Dict[str, SvcSpec] = {}
+        _headroom = SvcSpec.MEM_HEADROOM_FACTOR
+        _registry = self.registry
+        if _registry is None:
+            _msg = "_build_specs() called before __aenter__ resolved the registry"
+            raise RuntimeError(_msg)
+        for _a in self.cfg.artifacts:
+            if _a.key not in _registry.table:
+                continue
+            _entry = _registry.table[_a.key]
+            _K = int(_a.K)
+            _specs[_a.key] = SvcSpec(
+                name=_a.key,
+                role=_entry.role,
+                port=_entry.port,
+                mu=float(_a.mu),
+                epsilon=float(_a.epsilon),
+                c=int(_a.c),
+                K=_K,
+                seed=derive_seed(root_seed, _a.key),
+                mem_per_buffer=int(_K * int(avg_req_size_b) * _headroom),
+                enforce_limits=bool(self.cfg.enforce_limits),
+            )
+        return _specs
+
+    def _read_routing_row(self, name: str) -> List[Tuple[str, float]]:
+        """*_read_routing_row()* non-zero `(target_name, probability)` entries from one row of the routing matrix.
+
+        Args:
+            name (str): artifact key whose row to read.
+
+        Returns:
+            List[Tuple[str, float]]: pairs in column-declaration order; empty when the row has no non-zero entries.
+        """
+        _names = [_a.key for _a in self.cfg.artifacts]
+        _idx = _names.index(name)
+        _row = np.asarray(self.cfg.routing[_idx], dtype=float)
+        _out: List[Tuple[str, float]] = []
+        for _col_idx, _p in enumerate(_row):
+            if _p > 0:
+                _out.append((_names[_col_idx], float(_p)))
+        return _out
+
+    def _build_router_kind_map(self, name: str
+                               ) -> Tuple[Dict[str, str], Dict[str, float]]:
+        """*_build_router_kind_map()* derive the kind tables for a router composite from its routing row.
+
+        The kind label is the target artifact name (self-documenting); weights are normalised so the row sums to 1. Zero-row safe (returns all-zero weights).
+
+        Args:
+            name (str): router artifact key.
+
+        Returns:
+            Tuple[Dict[str, str], Dict[str, float]]: `(kind_to_tgt, kind_prob)`.
+        """
+        _row = self._read_routing_row(name)
+        _total = sum(_p for _, _p in _row)
+        _kt = {_t: _t for _t, _ in _row}
+        _kw: Dict[str, float] = {}
+        for _t, _p in _row:
+            if _total > 0:
+                _kw[_t] = _p / _total
+            else:
+                _kw[_t] = 0.0
+        return _kt, _kw
+
+    def _iter_component_ctxs(self) -> Iterator[Tuple[str, Any]]:
+        """*_iter_component_ctxs()* yield each deployed component's `SvcCtx` once, deduplicating the shared TAS context across TAS_{1..6}.
+
+        Yields:
+            Tuple[str, Any]: `(service_name, SvcCtx)` per unique deployed component.
+        """
+        _seen: set = set()
+        for _name in self.specs:
+            _app = self.apps.get(_name)
+            if _app is None:
+                continue
+            _components = getattr(_app.state, "tas_components", None)
+            if _components is not None and _name in _components:
+                _ctx = _components[_name]
+            else:
+                _ctx = getattr(_app.state, "ctx", None)
+                if _ctx is None:
+                    continue
+            if id(_ctx) in _seen:
+                continue
+            _seen.add(id(_ctx))
+            yield _name, _ctx
+
+    def collect_drop_counts(self) -> Dict[str, int]:
+        """*collect_drop_counts()* per-service log-buffer overflow count; a non-zero entry means the bounded deque silently evicted observations.
+
+        Returns:
+            Dict[str, int]: `{service_name: dropped_count}`; empty when every buffer stayed within its cap.
+        """
+        _drops: Dict[str, int] = {}
+        for _name, _ctx in self._iter_component_ctxs():
+            _n = int(getattr(_ctx, "dropped_count", 0))
+            if _n > 0:
+                _drops[_name] = _n
+        return _drops
+
+    def flush_logs(self,
+                   output_dir: Path,
                    *,
-                   method_cfg: Dict[str, Any],
-                   adp: str = "baseline",
-                   util_threshold: float = 0.95
-                   ) -> Dict[str, Dict[str, np.ndarray]]:
-    """*sweep_arch_exp()* prototype-driven whole-network sweep; mirrors `src.dimensional.networks.sweep_arch` but launches the FastAPI mesh per combo instead of solving M/M/c/K.
+                   replicate_id: Optional[int] = None) -> Dict[str, int]:
+        """*flush_logs()* drain each component's log buffer to a per-service CSV; with `replicate_id` set, files nest under `<output_dir>/rep_<id>/`.
 
-    For each `(mu_factor, c, K)` combo in `sweep_grid`:
+        Args:
+            output_dir (Path): cell-level output directory.
+            replicate_id (Optional[int]): 0-based replicate index; when set, nests into `rep_<id>/`.
 
-    1. Override every node's mu / c / K via `_override_cfg`.
-    2. Spin up the mesh inside a temp log dir and run the configured ramp
-       (`method_cfg.ramp.rates`) end-to-end.
-    3. Build the per-node DataFrame from the flushed CSV logs.
-    4. Per artifact: derive theta / sigma / eta / phi from L, W, lambda,
-       epsilon, mu, c, K. Skip nodes where lambda or L collapsed to 0
-       (idle artifacts produce no measurement).
-    5. Drop combos where any node hit `rho >= util_threshold` so the cloud
-       only contains feasible designs (matches the dimensional convention).
+        Returns:
+            Dict[str, int]: `{service_name: rows_written}`.
+        """
+        if replicate_id is None:
+            _dir = output_dir
+        else:
+            _dir = output_dir / f"rep_{int(replicate_id)}"
+        _dir.mkdir(parents=True, exist_ok=True)
+        _counts: Dict[str, int] = {}
+        for _name, _ctx in self._iter_component_ctxs():
+            _fname = _name.replace(
+                "{", "_").replace("}", "_").replace(",", "_")
+            _path = _dir / f"{_fname}.csv"
+            _counts[_name] = _ctx.flush_log(_path, LOG_COLUMNS)
+        return _counts
 
-    Args:
-        cfg (NetCfg): resolved network configuration (profile + scenario).
-        sweep_grid (Dict[str, Any]): grid declared in `data/config/method/experiment.json::sweep_grid`. Required keys: `mu_factor`, `c`, `K`. Optional: `util_threshold` (overrides the kwarg).
-        method_cfg (Dict[str, Any]): experiment method config; the per-combo run reuses its `ramp` block, `seed`, and `request_size_bytes`.
-        adp (str): adaptation label passed to the launcher (`baseline` / `s1` / `s2` / `aggregate`). Defaults to `"baseline"`.
-        util_threshold (float): drop combos with any per-node rho at or above this. Defaults to `0.95`.
+    def get_lam_z_entry(self, entry: str = "TAS_{1}") -> float:
+        """*get_lam_z_entry()* seeded external arrival rate at `entry`."""
+        for _a in self.cfg.artifacts:
+            if _a.key == entry:
+                return float(_a.lambda_z)
+        _msg = f"entry artifact {entry!r} not in config"
+        raise KeyError(_msg)
 
-    Returns:
-        Dict[str, Dict[str, np.ndarray]]: nested `{artifact_key: per_artifact_sweep}`. Per-artifact dict shape matches `src.dimensional.networks.sweep_arch` so the same plotters consume both.
+    def snapshot_config(self,
+                        output_dir: Path,
+                        *,
+                        extras: Optional[Dict[str, Any]] = None) -> Path:
+        """*snapshot_config()* freeze the resolved cell configuration to `<output_dir>/config.json` so downstream analysis can join on what actually ran (per-artifact specs, scenario labels, routing matrix, lambda_z, kind tables; `extras` folded under an `extras` key).
 
-    Raises:
-        ValueError: when `cfg` carries zero artifacts (no per-node entries to derive coefficients from).
-        KeyError: when `method_cfg` lacks one of the keys consumed by the inner `_run_async` (`ramp`, `seed`, `request_size_bytes`).
-    """
-    # lazy-import to break the circular dep with src.methods.experiment; pull the Jupyter-safe runner so notebooks can call sweep_arch_exp under an ambient asyncio loop
-    from src.methods.experiment import (_build_svc_df_from_logs,
-                                        _run_async,
-                                        _run_async_safe)
+        Args:
+            output_dir (Path): directory to write `config.json` into; created if missing.
+            extras (Optional[Dict[str, Any]]): cell-level fields the architecture itself does not own (seed, replicate index, ramp metadata).
 
-    # resolve thresholds + grid knobs (kwarg wins over grid value when set)
-    _util = float(sweep_grid.get("util_threshold", util_threshold))
-    _mu_factors = sweep_grid.get("mu_factor", [1.0])
-    _c_vals = sweep_grid.get("c", [1])
-    _K_vals = sweep_grid.get("K", [10])
-
-    # per-node accumulators (lists now, ndarrays at return time)
-    _art_keys = [_a.key for _a in cfg.artifacts]
-    _per_art = _empty_per_art(_art_keys)
-
-    # walk the (mu_factor, c, K) grid; one combo per (sub-)point in the cloud
-    for _mf in _mu_factors:
-        for _c in _c_vals:
-            _c_int = int(_c)
-            for _K in _K_vals:
-                _K_int = int(_K)
-                if _K_int < _c_int:
-                    continue
-
-                # rebuild cfg with per-combo overrides; mutated vars block is what the mesh deploys
-                _cfg_combo = _override_cfg(cfg,
-                                           mu_factor=float(_mf),
-                                           c_int=_c_int,
-                                           K_int=_K_int)
-
-                # one launch per combo; logs land in a throwaway temp dir
-                with tempfile.TemporaryDirectory() as _tmp_str:
-                    _log_dir = Path(_tmp_str)
-                    try:
-                        _run_out = _run_async_safe(
-                            lambda: _run_async(_cfg_combo,
-                                               method_cfg,
-                                               adp,
-                                               _log_dir))
-                    except (RuntimeError, OSError, ConnectionError):
-                        # mesh launch / ramp failure -> skip this combo so genuine bugs still propagate
-                        continue
-                    _nds = _build_svc_df_from_logs(_cfg_combo,
-                                                   _log_dir,
-                                                   _run_out["duration_s"])
-
-                # combo-wide stability gate: drop the whole combo if any node saturated
-                if (_nds["rho"] >= _util).any():
-                    continue
-
-                # one coefficient point per artifact for this combo
-                for _a in _cfg_combo.artifacts:
-                    _row = _nds.loc[_nds["key"] == _a.key]
-                    if _row.empty:
-                        continue
-                    _row = _row.iloc[0]
-
-                    _lam = float(_row["lambda"])
-                    _L = float(_row["L"])
-                    _W = float(_row["W"])
-                    _eps = float(_row["epsilon"])
-                    _mu = float(_a.mu)
-                    # per-artifact per-request payload (kB); 1 kB fallback when missing
-                    _d_sym = f"d_{{{_a.key}}}"
-                    if _d_sym in _a.vars:
-                        _delta_kB = float(_a.vars[_d_sym]["_setpoint"])
-                    else:
-                        _delta_kB = 1.0
-
-                    # idle / failed measurements have no coefficient signal
-                    if _lam <= 0 or _L <= 0:
-                        continue
-
-                    _chi = _lam * (1.0 - _eps)
-                    _theta = _L / _K_int
-                    _sigma = _lam * _W / float(_K_int)
-                    _eta = _chi * _K_int / (_mu * _c_int)
-                    # phi = M_act/M_buf with explicit delta; reduces to L/K under constant payload (sanity-check)
-                    _m_act = _L * _delta_kB
-                    _m_buf = _K_int * _delta_kB
-                    if _m_buf > 0:
-                        _phi = _m_act / _m_buf
-                    else:
-                        _phi = float("nan")
-
-                    _k = _a.key
-                    _per_art[_k][f"\\theta_{{{_k}}}"].append(_theta)
-                    _per_art[_k][f"\\sigma_{{{_k}}}"].append(_sigma)
-                    _per_art[_k][f"\\eta_{{{_k}}}"].append(_eta)
-                    _per_art[_k][f"\\phi_{{{_k}}}"].append(_phi)
-                    _per_art[_k][f"c_{{{_k}}}"].append(float(_c_int))
-                    _per_art[_k][f"\\mu_{{{_k}}}"].append(_mu)
-                    _per_art[_k][f"K_{{{_k}}}"].append(float(_K_int))
-                    _per_art[_k][f"\\lambda_{{{_k}}}"].append(_lam)
-
-    # cast accumulators to ndarrays for plotter compatibility
-    _out: Dict[str, Dict[str, np.ndarray]] = {}
-    for _k, _block in _per_art.items():
-        _out[_k] = {_s: np.asarray(_v, dtype=float) for _s, _v in _block.items()}
-    return _out
+        Returns:
+            Path: absolute path to the written `config.json`.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _artifacts: Dict[str, Any] = {}
+        for _name, _spec in self.specs.items():
+            _artifacts[_name] = {
+                "role": _spec.role,
+                "port": _spec.port,
+                "mu": _spec.mu,
+                "epsilon": _spec.epsilon,
+                "c": _spec.c,
+                "K": _spec.K,
+                "seed": _spec.seed,
+                "mem_per_buffer": _spec.mem_per_buffer,
+            }
+        _snapshot: Dict[str, Any] = {
+            "adaptation": self.adaptation,
+            "profile": self.cfg.profile,
+            "scenario": self.cfg.scenario,
+            "label": self.cfg.label,
+            "lambda_z": self.cfg.build_lam_z_vec().tolist(),
+            "routing": self.cfg.routing.tolist(),
+            "artifact_order": [_a.key for _a in self.cfg.artifacts],
+            "artifacts": _artifacts,
+            "kind_to_target": dict(self.kind_to_tgt),
+            "kind_weights": dict(self.kind_prob),
+        }
+        if extras:
+            _snapshot["extras"] = dict(extras)
+        _path = output_dir / "config.json"
+        with _path.open("w", encoding="utf-8") as _fh:
+            json.dump(_snapshot, _fh, indent=4, ensure_ascii=False)
+        return _path
