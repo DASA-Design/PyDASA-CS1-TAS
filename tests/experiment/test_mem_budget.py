@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 # modules under test
-from src.experiment.launcher import ExperimentLauncher, _compute_avg_req_size
+from src.experiment.architecture import TasArchitecture, _compute_avg_req_size
 from src.experiment.services import SvcReq, SvcResp, SvcSpec
 from src.io import load_method_cfg, load_profile
 
@@ -44,15 +44,15 @@ async def _noop_forward(_target: str, _req: SvcReq) -> SvcResp:
 class TestAvgRequestSize:
     """**TestAvgRequestSize** arithmetic mean across declared per-kind sizes."""
 
-    def test_mean_of_three_sizes(self):
+    def test_mean_of_three_sizes(self) -> None:
         """*test_mean_of_three_sizes()* `{100, 200, 300}` averages to 200."""
         assert _compute_avg_req_size({"a": 100, "b": 200, "c": 300}) == 200
 
-    def test_empty_map_is_zero(self):
+    def test_empty_map_is_zero(self) -> None:
         """*test_empty_map_is_zero()* an empty dict averages to 0 (guard against ZeroDivision)."""
         assert _compute_avg_req_size({}) == 0
 
-    def test_ignores_zeros(self):
+    def test_ignores_zeros(self) -> None:
         """*test_ignores_zeros()* zero-valued entries are dropped before averaging."""
         assert _compute_avg_req_size({"a": 0, "b": 200, "c": 300}) == 250
 
@@ -60,7 +60,7 @@ class TestAvgRequestSize:
 class TestServiceSpecBudget:
     """**TestServiceSpecBudget** spec exposes `mem_per_buffer` + `buffer_budget_bytes`."""
 
-    def test_explicit_budget_value(self):
+    def test_explicit_budget_value(self) -> None:
         """*test_explicit_budget_value()* declared bytes round-trip through the property."""
         _s = SvcSpec(name="MAS_{1}", role="atomic", port=9000,
                          mu=100.0, epsilon=0.0, c=1, K=10,
@@ -68,8 +68,8 @@ class TestServiceSpecBudget:
         assert _s.mem_per_buffer == 4096
         assert _s.buffer_budget_bytes == 4096
 
-    def test_default_budget_zero_when_undeclared(self):
-        """*test_default_budget_zero_when_undeclared()* default `mem_per_buffer == 0` and the property mirrors it."""
+    def test_default_budget_zero(self) -> None:
+        """*test_default_budget_zero()* default `mem_per_buffer == 0` and the property mirrors it."""
         _s = SvcSpec(name="MAS_{1}", role="atomic", port=9000,
                          mu=100.0, epsilon=0.0, c=1, K=10)
         assert _s.mem_per_buffer == 0
@@ -80,15 +80,15 @@ class TestLauncherPopulatesBudget:
     """**TestLauncherPopulatesBudget** launcher threads avg-request-size from method config into every spec."""
 
     @pytest.mark.asyncio
-    async def test_every_spec_has_expected_budget(self):
-        """*test_every_spec_has_expected_budget()* every resolved spec has `mem_per_buffer = K * avg * headroom`."""
+    async def test_spec_budget_match(self) -> None:
+        """*test_spec_budget_match()* every resolved spec has `mem_per_buffer = K * avg * headroom`."""
         _cfg = load_profile(adaptation="baseline")
         _mcfg = load_method_cfg("experiment")
         _sizes = _mcfg.get("request_size_bytes", {})
         _avg = _compute_avg_req_size(_sizes)
         assert _avg > 0, "fixture method config must declare at least one positive size"
 
-        async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
+        async with TasArchitecture(cfg=_cfg, method_cfg=_mcfg,
                                       adaptation="baseline") as _lnc:
             _headroom = SvcSpec.MEM_HEADROOM_FACTOR
             for _name, _spec in _lnc.specs.items():
@@ -98,11 +98,11 @@ class TestLauncherPopulatesBudget:
                     f"expected={_expected}")
 
     @pytest.mark.asyncio
-    async def test_budget_surfaces_in_config_snapshot(self):
-        """*test_budget_surfaces_in_config_snapshot()* `config.json::artifacts.<name>.mem_per_buffer` matches the resolved spec."""
+    async def test_budget_in_snapshot(self) -> None:
+        """*test_budget_in_snapshot()* `config.json::artifacts.<name>.mem_per_buffer` matches the resolved spec."""
         _cfg = load_profile(adaptation="baseline")
         _mcfg = load_method_cfg("experiment")
-        async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
+        async with TasArchitecture(cfg=_cfg, method_cfg=_mcfg,
                                       adaptation="baseline") as _lnc:
             with tempfile.TemporaryDirectory() as _td:
                 _path = _lnc.snapshot_config(Path(_td))
