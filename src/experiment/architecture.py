@@ -17,7 +17,7 @@ Composite flavours wired per the `role` field in `experiment.json`:
 
 Shared `httpx.AsyncClient` over a per-port `httpx.MockTransport` handler closure; per-port apps register on `__aenter__` before any traffic flows.
 
-Deployment modes: `local` (ASGI), `loopback_aliased` (`127.0.0.X` aliases), `remote` (LAN). Only `local` is implemented; non-local raises `NotImplementedError` until `src.scripts.launch_services` ships.
+Deployment modes: `localhost` (ASGI), `multiprocess` (`127.0.0.X` aliases), `remote` (LAN). Only `localhost` is implemented; non-localhost raises `NotImplementedError` until `src.scripts.launch_services` ships.
 """
 # native python modules
 from __future__ import annotations
@@ -114,7 +114,7 @@ class TasArchitecture:
     # override for the base port; 0 reads the config value
     base_port_ovrd: int = 0
 
-    # override for the deployment mode; None reads the config value; values: "local" / "loopback_aliased" / "remote"
+    # override for the deployment mode; None reads the config value; values: "localhost" / "multiprocess" / "remote"
     deployment: Optional[str] = None
 
     # override for the launcher role; None reads the config value; values: "all" / "client" / "composite" / "atomic" / "composite-atomic"
@@ -147,11 +147,11 @@ class TasArchitecture:
         """*resolved_deployment* deployment mode in effect.
 
         Returns:
-            str: constructor arg if set, else `method_cfg["deployment"]`, else `"local"`.
+            str: constructor arg if set, else `method_cfg["deployment"]`, else `"localhost"`.
         """
         if self.deployment is not None:
             return str(self.deployment)
-        return str(self.method_cfg.get("deployment", "local"))
+        return str(self.method_cfg.get("deployment", "localhost"))
 
     @property
     def resolved_launcher_role(self) -> str:
@@ -169,9 +169,9 @@ class TasArchitecture:
         """*bind_addr* uvicorn bind address selected from the deployment mode.
 
         Returns:
-            str: `127.0.0.1` for `local`, `0.0.0.0` for `loopback_aliased` or `remote` (other aliases / LAN hosts must be reachable).
+            str: `127.0.0.1` for `localhost`, `0.0.0.0` for `multiprocess` or `remote` (other aliases / LAN hosts must be reachable).
         """
-        if self.resolved_deployment == "local":
+        if self.resolved_deployment == "localhost":
             return "127.0.0.1"
         return "0.0.0.0"
 
@@ -215,7 +215,7 @@ class TasArchitecture:
         """*__aenter__()* stand the mesh up.
 
         Raises:
-            NotImplementedError: on non-local deployment until the real-uvicorn launcher ships.
+            NotImplementedError: on non-localhost deployment until the real-uvicorn launcher ships.
 
         Returns:
             TasArchitecture: this instance, ready for traffic.
@@ -231,15 +231,15 @@ class TasArchitecture:
         """*_gate_deployment()* refuse modes the in-process ASGI launcher cannot serve.
 
         Raises:
-            NotImplementedError: when the resolved deployment is not `"local"`.
+            NotImplementedError: when the resolved deployment is not `"localhost"`.
         """
-        if self.resolved_deployment == "local":
+        if self.resolved_deployment == "localhost":
             return
         _msg = (
             f"deployment={self.resolved_deployment!r} requires the "
             "real-uvicorn launcher (see `notes/distribute.md` G5); "
             "the in-process ASGI launcher only supports "
-            "deployment='local'. Run `python -m src.scripts.launch_services` "
+            "deployment='localhost'. Run `python -m src.scripts.launch_services` "
             "on each host instead.")
         raise NotImplementedError(_msg)
 

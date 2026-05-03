@@ -3,7 +3,7 @@
 Module experiment.py
 ====================
 
-Method 4 of the CS-01 TAS pipeline; FastAPI mesh + ramped client through `TAS_{1}`, emits the standard envelope (per-node df + network aggregate + R1/R2/R3 verdict). Output split by deployment (`local` / `loopback_aliased` / `remote`).
+Method 4 of the CS-01 TAS pipeline; FastAPI mesh + ramped client through `TAS_{1}`, emits the standard envelope (per-node df + network aggregate + R1/R2/R3 verdict). Output split by deployment (`localhost` / `multiprocess` / `remote`).
 
 Public API:
     - `run(adp, prf, scn, wrt, method_cfg=None, skip_calibration=False, verbose=True, dpl=None, launcher_role=None)` standard orchestrator contract.
@@ -13,7 +13,7 @@ CLI::
 
     python -m src.methods.experiment --adaptation baseline
     python -m src.methods.experiment --adaptation s1 --profile opti
-    python -m src.methods.experiment --deployment loopback_aliased
+    python -m src.methods.experiment --deployment multiprocess
     python -m src.methods.experiment --deployment remote --launcher-role client
 """
 # native python modules
@@ -48,7 +48,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
 
 # deployment modes recognised by the experiment runner; mirrors the SvcRegistry / TasArchitecture enum
-_VALID_DEPLOYMENTS = ("local", "loopback_aliased", "remote")
+_VALID_DEPLOYMENTS = ("localhost", "multiprocess", "remote")
 
 # Hours after which a calibration is considered stale (warning only)
 _CALIB_STALE_HOURS: float = 24.0
@@ -132,7 +132,7 @@ def run(adp: Optional[str] = None,
 
     Enforces the per-host calibration gate: a noise-floor calibration for the current host must exist under `data/results/experiment/calibration/` before the run starts, or `skip_calibration=True` must be set to bypass with a warning. The resolved baseline is attached to the result envelope as the `baseline` block so downstream reporting can apply the `reported = measured - loopback_median +/- jitter_p99` convention.
 
-    Output paths: `data/results/experiment/<deployment>/<scenario>/<profile>/...` with `<deployment>` in `local` / `loopback_aliased` / `remote`.
+    Output paths: `data/results/experiment/<deployment>/<scenario>/<profile>/...` with `<deployment>` in `localhost` / `multiprocess` / `remote`.
 
     Args:
         adp (Optional[str]): adaptation value; one of `baseline`, `s1`, `s2`, `aggregate`.
@@ -142,7 +142,7 @@ def run(adp: Optional[str] = None,
         method_cfg (Optional[Dict[str, Any]]): inline config override; used by `_QUICK_CFG` tests to skip the JSON read.
         skip_calibration (bool): when True, bypass the calibration gate; a warning is printed and `baseline.applied` is False on the result.
         verbose (bool): when False, suppress the calibration stale / skip warnings; metric output is unaffected.
-        dpl (Optional[str]): deployment mode override; `None` reads `method_cfg["deployment"]` (default `"local"`). Recognised: `"local"` / `"loopback_aliased"` / `"remote"`. Non-local modes require the real-uvicorn launcher (`notes/distribute.md` G5); the in-process ASGI launcher only supports `local` until then.
+        dpl (Optional[str]): deployment mode override; `None` reads `method_cfg["deployment"]` (default `"localhost"`). Recognised: `"localhost"` / `"multiprocess"` / `"remote"`. Non-localhost modes require the real-uvicorn launcher (`notes/distribute.md` G5); the in-process ASGI launcher only supports `localhost` until then.
         launcher_role (Optional[str]): subset of services this driver is responsible for spawning; `None` reads `method_cfg["launcher_role"]` (default `"all"`). Recognised: `"all"` / `"client"` / `"composite"` / `"atomic"` / `"composite-atomic"`.
 
     Returns:
@@ -167,7 +167,7 @@ def run(adp: Optional[str] = None,
     if dpl is not None:
         _dpl = str(dpl)
     else:
-        _dpl = str(_mcfg.get("deployment", "local"))
+        _dpl = str(_mcfg.get("deployment", "localhost"))
     if _dpl not in _VALID_DEPLOYMENTS:
         raise ValueError(
             f"dpl={_dpl!r} not recognised; valid modes are "
@@ -191,7 +191,7 @@ def run(adp: Optional[str] = None,
         _rep_mcfg["seed"] = _rep_seed
 
         if wrt:
-            # deployment axis splits the artifact tree: local/, loopback_aliased/, remote/
+            # deployment axis splits the artifact tree: localhost/, multiprocess/, remote/
             _base_dir = _RESULTS_DIR / _dpl / _cfg.scenario / _cfg.profile
             if _replications == 1:
                 _log_dir = _base_dir
@@ -292,7 +292,7 @@ def _write_results(cfg: NetCfg,
                    req: dict,
                    run_out: Dict[str, Any],
                    baseline: Optional[Dict[str, Any]] = None,
-                   deployment: str = "local") -> Dict[str, str]:
+                   deployment: str = "localhost") -> Dict[str, str]:
     """*_write_results()* serialise the run envelope to `<results>/<deployment>/<scenario>/<profile>.json`.
 
     Args:
@@ -303,7 +303,7 @@ def _write_results(cfg: NetCfg,
         req (dict): R1 / R2 / R3 verdict dict.
         run_out (Dict[str, Any]): async runtime output (probes, saturation, counts).
         baseline (Optional[Dict[str, Any]]): calibration summary block from `_build_baseline_block`.
-        deployment (str): `local` / `loopback_aliased` / `remote`; segment in the output path.
+        deployment (str): `localhost` / `multiprocess` / `remote`; segment in the output path.
 
     Returns:
         Dict[str, str]: on-disk paths keyed by `profile` and `requirements`.
@@ -385,14 +385,14 @@ def main() -> None:
                          choices=list(_VALID_DEPLOYMENTS),
                          default=None,
                          help=("deployment mode override; defaults to "
-                               "method_cfg['deployment'] (typically 'local'). "
-                               "Non-local modes require launch_services.py."))
+                               "method_cfg['deployment'] (typically 'localhost'). "
+                               "Non-localhost modes require launch_services.py."))
     _parser.add_argument("--launcher-role",
                          choices=["all", "client", "composite", "atomic",
                                   "composite-atomic"],
                          default=None,
                          help=("subset of services this driver spawns; "
-                               "only meaningful in non-local deployments"))
+                               "only meaningful in non-localhost deployments"))
 
     _args = _parser.parse_args()
 

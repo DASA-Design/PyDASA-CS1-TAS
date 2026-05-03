@@ -24,9 +24,9 @@ Usage:
     python -m src.scripts.launch_services --launcher-role=atomic
 
     # single-host honest bench (loopback aliases):
-    python -m src.scripts.launch_services --deployment=loopback_aliased
+    python -m src.scripts.launch_services --deployment=multiprocess
 
-The launcher unlocks `loopback_aliased` and `remote` modes that the in-process ASGI architecture (`src.experiment.architecture.TasArchitecture`) cannot serve because it short-circuits HTTP via `_MultiASGITransport`.
+The launcher unlocks `multiprocess` and `remote` modes that the in-process ASGI architecture (`src.experiment.architecture.TasArchitecture`) cannot serve because it short-circuits HTTP via `_MultiASGITransport`.
 """
 # native python modules
 from __future__ import annotations
@@ -52,7 +52,7 @@ from src.experiment.runtime import UvicornThread
 from src.io import load_method_cfg, load_profile
 
 
-_VALID_DEPLOYMENTS = ("local", "loopback_aliased", "remote")
+_VALID_DEPLOYMENTS = ("localhost", "multiprocess", "remote")
 _VALID_ROLES = ("all", "client", "composite", "atomic", "composite-atomic")
 
 
@@ -303,7 +303,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _args = _parser.parse_args(argv)
 
     _mcfg = load_method_cfg("experiment")
-    _dpl = _args.deployment or str(_mcfg.get("deployment", "local"))
+    _dpl = _args.deployment or str(_mcfg.get("deployment", "localhost"))
     if _dpl not in _VALID_DEPLOYMENTS:
         print(f"ERROR: unknown deployment {_dpl!r}; "
               f"valid {_VALID_DEPLOYMENTS}", file=sys.stderr)
@@ -355,7 +355,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                            _args.verbose))
         # wait for any remote services declared in registry; tolerant of
         # `composite-atomic` running solo when no driver is up yet
-        if _dpl != "local" and _args.launcher_role != "all":
+        if _dpl != "localhost" and _args.launcher_role != "all":
             _wait_remote_health(_registry, _local_names,
                                 timeout_s=60.0,
                                 verbose=_args.verbose)

@@ -47,7 +47,7 @@ def _cfg_with_hosts(deployment: str,
     """*_cfg_with_hosts()* CS-01 cfg variant with explicit `deployment` + `hosts` blocks for the per-deployment policy tests.
 
     Args:
-        deployment (str): one of `"local"` / `"loopback_aliased"` / `"remote"`.
+        deployment (str): one of `"localhost"` / `"multiprocess"` / `"remote"`.
         hosts (Dict[str, str]): the `hosts` block (bucket map plus optional per-service-name overrides).
 
     Returns:
@@ -205,20 +205,20 @@ class TestSvcRegistry:
 
     # ----- deployment-mode host resolution ----- #
 
-    def test_local_ignores_hosts_block(self) -> None:
-        """*test_local_ignores_hosts_block()* `deployment="local"` -> every `host_for(name) == "127.0.0.1"` (top-level `host`), even when the `hosts` block carries non-null values."""
+    def test_localhost_ignores_hosts_block(self) -> None:
+        """*test_localhost_ignores_hosts_block()* `deployment="localhost"` -> every `host_for(name) == "127.0.0.1"` (top-level `host`), even when the `hosts` block carries non-null values."""
         _r = SvcRegistry.from_config(_cfg_with_hosts(
-            "local",
+            "localhost",
             {"client": "1.2.3.4",
              "composite": "5.6.7.8",
              "atomic": "9.10.11.12"}))
         for _name in _r.list_names():
             assert _r.host_for(_name) == "127.0.0.1"
 
-    def test_loopback_aliased_buckets(self) -> None:
-        """*test_loopback_aliased_buckets()* `deployment="loopback_aliased"` -> client members hit `127.0.0.10`, composite members hit `127.0.0.20`, atomic members hit `127.0.0.30`."""
+    def test_multiprocess_buckets(self) -> None:
+        """*test_multiprocess_buckets()* `deployment="multiprocess"` -> client members hit `127.0.0.10`, composite members hit `127.0.0.20`, atomic members hit `127.0.0.30`."""
         _r = SvcRegistry.from_config(_cfg_with_hosts(
-            "loopback_aliased",
+            "multiprocess",
             {"client": "127.0.0.10",
              "composite": "127.0.0.20",
              "atomic": "127.0.0.30"}))
@@ -233,7 +233,7 @@ class TestSvcRegistry:
             assert _r.host_for(_name) == "127.0.0.30"
 
     def test_remote_buckets(self) -> None:
-        """*test_remote_buckets()* `deployment="remote"` shares the bucket-routing logic with `loopback_aliased` (only the IPs differ)."""
+        """*test_remote_buckets()* `deployment="remote"` shares the bucket-routing logic with `multiprocess` (only the IPs differ)."""
         _r = SvcRegistry.from_config(_cfg_with_hosts(
             "remote",
             {"client": "192.168.1.10",
@@ -251,7 +251,7 @@ class TestSvcRegistry:
             "atomic": "127.0.0.30",
             "MAS_{1}": "127.0.0.99"
         }
-        _r = SvcRegistry.from_config(_cfg_with_hosts("loopback_aliased",
+        _r = SvcRegistry.from_config(_cfg_with_hosts("multiprocess",
                                                      _hosts))
         # MAS_{1} pinned via per-service override
         assert _r.host_for("MAS_{1}") == "127.0.0.99"
@@ -271,7 +271,7 @@ class TestSvcRegistry:
     def test_resolve_base_url_uses_override(self) -> None:
         """*test_resolve_base_url_uses_override()* `resolve_base_url` reads through `host_for`, so per-service host overrides reach the URL."""
         _r = SvcRegistry.from_config(_cfg_with_hosts(
-            "loopback_aliased",
+            "multiprocess",
             {"client": "127.0.0.10",
              "composite": "127.0.0.20",
              "atomic": "127.0.0.30"}))

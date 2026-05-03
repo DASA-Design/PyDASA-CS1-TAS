@@ -57,7 +57,7 @@ def _tiny_ramp_block(rate: float,
 
 
 class TestTasArchitecture:
-    """**TestTasArchitecture** every deployed service answers `/healthz`; entry-router kind map sums to 1 and only targets deployed artifacts; TAS_{1..6} share one FastAPI app; a tiny baseline ramp through `TasUser` populates per-service log buffers and `flush_logs` writes them to disk; `bind_addr` and `local_services()` behave per the deployment / role spec; `__aenter__` raises `NotImplementedError` on `loopback_aliased` and `remote` until the real-uvicorn launcher ships."""
+    """**TestTasArchitecture** every deployed service answers `/healthz`; entry-router kind map sums to 1 and only targets deployed artifacts; TAS_{1..6} share one FastAPI app; a tiny baseline ramp through `TasUser` populates per-service log buffers and `flush_logs` writes them to disk; `bind_addr` and `local_services()` behave per the deployment / role spec; `__aenter__` raises `NotImplementedError` on `multiprocess` and `remote` until the real-uvicorn launcher ships."""
 
     @pytest.mark.asyncio
     async def test_all_services_healthy(self,
@@ -162,24 +162,24 @@ class TestTasArchitecture:
         _files = list(tmp_path.glob("TAS_*.csv"))
         assert len(_files) >= 1
 
-    def test_bind_addr_local(self,
-                             _profile_cfg: NetCfg,
-                             _method_cfg: Dict[str, Any]) -> None:
-        """*test_bind_addr_local()* `deployment="local"` gives `arch.bind_addr == "127.0.0.1"` even before `__aenter__`."""
+    def test_bind_addr_localhost(self,
+                                 _profile_cfg: NetCfg,
+                                 _method_cfg: Dict[str, Any]) -> None:
+        """*test_bind_addr_localhost()* `deployment="localhost"` gives `arch.bind_addr == "127.0.0.1"` even before `__aenter__`."""
         _arch = TasArchitecture(cfg=_profile_cfg,
                                 method_cfg=_method_cfg,
                                 adaptation="baseline",
-                                deployment="local")
+                                deployment="localhost")
         assert _arch.bind_addr == "127.0.0.1"
 
-    def test_bind_addr_loopback_aliased(self,
-                                        _profile_cfg: NetCfg,
-                                        _method_cfg: Dict[str, Any]) -> None:
-        """*test_bind_addr_loopback_aliased()* `deployment="loopback_aliased"` gives `arch.bind_addr == "0.0.0.0"`."""
+    def test_bind_addr_multiprocess(self,
+                                    _profile_cfg: NetCfg,
+                                    _method_cfg: Dict[str, Any]) -> None:
+        """*test_bind_addr_multiprocess()* `deployment="multiprocess"` gives `arch.bind_addr == "0.0.0.0"`."""
         _arch = TasArchitecture(cfg=_profile_cfg,
                                 method_cfg=_method_cfg,
                                 adaptation="baseline",
-                                deployment="loopback_aliased")
+                                deployment="multiprocess")
         assert _arch.bind_addr == "0.0.0.0"
 
     def test_bind_addr_remote(self,
@@ -266,32 +266,32 @@ class TestTasArchitecture:
         assert "__aenter__" in str(_exc.value)
 
     @pytest.mark.asyncio
-    async def test_default_resolves_local_all(
+    async def test_default_resolves_localhost_all(
             self,
             _method_cfg: Dict[str, Any],
             _profile_cfg: NetCfg) -> None:
-        """*test_default_resolves_local_all()* default deployment is `"local"`, default launcher_role is `"all"`, and `local_services()` lists every entry in `arch.registry.table`."""
+        """*test_default_resolves_localhost_all()* default deployment is `"localhost"`, default launcher_role is `"all"`, and `local_services()` lists every entry in `arch.registry.table`."""
         async with TasArchitecture(cfg=_profile_cfg,
                                    method_cfg=_method_cfg,
                                    adaptation="baseline") as _arch:
             assert _arch.registry is not None
-            assert _arch.resolved_deployment == "local"
+            assert _arch.resolved_deployment == "localhost"
             assert _arch.resolved_launcher_role == "all"
             assert len(_arch.local_services()) == len(_arch.registry.table)
 
     @pytest.mark.asyncio
-    async def test_loopback_aliased_gated(
+    async def test_multiprocess_gated(
             self,
             _method_cfg: Dict[str, Any],
             _profile_cfg: NetCfg) -> None:
-        """*test_loopback_aliased_gated()* entering an architecture with `deployment="loopback_aliased"` raises `NotImplementedError` whose message contains `"loopback_aliased"` and `"launch_services"`."""
+        """*test_multiprocess_gated()* entering an architecture with `deployment="multiprocess"` raises `NotImplementedError` whose message contains `"multiprocess"` and `"launch_services"`."""
         with pytest.raises(NotImplementedError) as _exc:
             async with TasArchitecture(cfg=_profile_cfg,
                                        method_cfg=_method_cfg,
                                        adaptation="baseline",
-                                       deployment="loopback_aliased"):
+                                       deployment="multiprocess"):
                 pass
-        assert "loopback_aliased" in str(_exc.value)
+        assert "multiprocess" in str(_exc.value)
         assert "launch_services" in str(_exc.value)
 
     @pytest.mark.asyncio

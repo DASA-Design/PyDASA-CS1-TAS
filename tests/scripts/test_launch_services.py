@@ -43,11 +43,11 @@ class TestLaunchServicesCli:
 
 
 class TestLaunchServicesLifecycle:
-    """**TestLaunchServicesLifecycle** end-to-end: bring up the mesh in `local` mode for a short duration; assert clean shutdown (return 0)."""
+    """**TestLaunchServicesLifecycle** end-to-end: bring up the mesh in `localhost` mode for a short duration; assert clean shutdown (return 0)."""
 
-    def test_local_all_short_duration(self):
-        """*test_local_all_short_duration()* `--launcher-role=all --deployment=local --duration=2` brings up the full mesh on 127.0.0.1, runs for 2 s, returns 0 on clean shutdown."""
+    def test_localhost_all_short_duration(self):
+        """*test_localhost_all_short_duration()* `--launcher-role=all --deployment=localhost --duration=2` brings up the full mesh on 127.0.0.1, runs for 2 s, returns 0 on clean shutdown."""
         _rc = launch_services.main(argv=["--launcher-role=all",
-                                         "--deployment=local",
+                                         "--deployment=localhost",
                                          "--duration=2.0"])
         assert _rc == 0

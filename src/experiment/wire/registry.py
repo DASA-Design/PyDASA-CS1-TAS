@@ -51,7 +51,7 @@ class RegistryEntry:
 class SvcRegistry:
     """*SvcRegistry* immutable address book that turns a service name into a fully-qualified URL.
 
-    Per-service host can vary by deployment mode: `local` collapses every service to one address; `loopback_aliased` and `remote` route by role bucket with optional per-service-name override. The four URL builders below all funnel through `host_for(name)` so the deployment policy applies uniformly.
+    Per-service host can vary by deployment mode: `localhost` collapses every service to one address; `multiprocess` and `remote` route by role bucket with optional per-service-name override. The four URL builders below all funnel through `host_for(name)` so the deployment policy applies uniformly.
     """
 
     # default host address used when host_overrides has no entry for a service
@@ -84,7 +84,7 @@ class SvcRegistry:
         """
         _host = method_cfg.get("host", "127.0.0.1")
         _hosts_block = method_cfg.get("hosts") or {}
-        _deployment = str(method_cfg.get("deployment", "local"))
+        _deployment = str(method_cfg.get("deployment", "localhost"))
         if base_port_ovrd > 0:
             _base = base_port_ovrd
         else:
@@ -120,13 +120,13 @@ class SvcRegistry:
 
         Resolution rule per `deployment`:
 
-            - `local` (default): every service maps to top-level `host` (`127.0.0.1`); the `hosts` block is ignored.
-            - `loopback_aliased` and `remote`: per-service-name `hosts[N]` if set, else per-bucket `hosts[R]` (`client` for composite_client, `composite` for composite_*, `atomic` for atomic), else top-level `host`.
+            - `localhost` (default): every service maps to top-level `host` (`127.0.0.1`); the `hosts` block is ignored.
+            - `multiprocess` and `remote`: per-service-name `hosts[N]` if set, else per-bucket `hosts[R]` (`client` for composite_client, `composite` for composite_*, `atomic` for atomic), else top-level `host`.
 
         Pure function so the policy is unit-testable in isolation.
 
         Args:
-            deployment (str): `"local"` / `"loopback_aliased"` / `"remote"`.
+            deployment (str): `"localhost"` / `"multiprocess"` / `"remote"`.
             name (str): service name.
             role (str): service role from the registry table.
             hosts_block (Dict[str, Any]): the `hosts` block from method_cfg.
@@ -135,7 +135,7 @@ class SvcRegistry:
         Returns:
             str: chosen host address for this service.
         """
-        if deployment == "local":
+        if deployment == "localhost":
             return default_host
         _per_svc = hosts_block.get(name)
         if _per_svc:

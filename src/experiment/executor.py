@@ -117,7 +117,7 @@ async def execute_one(cfg: NetCfg,
                       method_cfg: Dict[str, Any],
                       adp: str,
                       log_dir: Path,
-                      dpl: str = "local",
+                      dpl: str = "localhost",
                       launcher_role: str = "all") -> Dict[str, Any]:
     """*execute_one()* drive one cell end-to-end through launch, snapshot, ramp, flush.
 
@@ -126,7 +126,7 @@ async def execute_one(cfg: NetCfg,
         method_cfg (Dict[str, Any]): experiment method config.
         adp (str): adaptation label (`baseline` / `s1` / `s2` / `aggregate`).
         log_dir (Path): directory for the per-service CSVs and the config snapshot.
-        dpl (str): deployment mode (`local` / `loopback_aliased` / `remote`).
+        dpl (str): deployment mode (`localhost` / `multiprocess` / `remote`).
         launcher_role (str): which services this launcher hosts.
 
     Returns:
