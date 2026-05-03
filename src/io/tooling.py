@@ -234,10 +234,10 @@ def calibration_age_hours(envelope: Dict[str, Any]) -> float:
 def _validate_ramp_block(ramp: Dict[str, Any]) -> None:
     """*_validate_ramp_block()* gate the raw `ramp` sub-dict of `experiment.json`.
 
-    Accepts either `rates` (direct list) or `rho_grid` (utilisation list inverted upstream); never both.
+    Accepts one of three drive specs (mutually exclusive): `rates` (direct list), `rho_grid` (utilisation list inverted upstream by the executor), or `anchor: "lambda_z"` (single rate read from `cfg.artifacts[entry].lambda_z` upstream by the executor).
 
     Raises:
-        ValueError: when any field is out of the supported range or both lists are supplied.
+        ValueError: when more than one drive spec is supplied, when none is supplied, or when any field is out of the supported range.
     """
     _n = int(ramp.get("min_samples_per_kind", 32))
     if _n < 32:
@@ -246,11 +246,18 @@ def _validate_ramp_block(ramp: Dict[str, Any]) -> None:
 
     _rates = ramp.get("rates", [])
     _rho_grid = ramp.get("rho_grid", [])
-    if _rates and _rho_grid:
-        _msg = "ramp accepts either 'rates' or 'rho_grid', not both"
+    _anchor = ramp.get("anchor")
+    _spec_count = sum(bool(_x) for _x in (_rates, _rho_grid, _anchor))
+    if _spec_count > 1:
+        _msg = "ramp accepts exactly one of 'rates' / 'rho_grid' / 'anchor'"
         raise ValueError(_msg)
-    if not _rates and not _rho_grid:
-        _msg = "ramp must specify 'rates' (legacy) or 'rho_grid' (FR-3.5)"
+    if _spec_count == 0:
+        _msg = ("ramp must specify 'rates' (explicit), "
+                "'rho_grid' (utilisation-anchored), "
+                "or 'anchor' (lambda_z-anchored)")
+        raise ValueError(_msg)
+    if _anchor is not None and _anchor != "lambda_z":
+        _msg = f"ramp.anchor must be 'lambda_z' when set; got {_anchor!r}"
         raise ValueError(_msg)
 
     if _rates:

@@ -37,8 +37,8 @@
     "sweep_grid": {
         "mu_factor": [0.5, 1.0, 1.5, 2.0],
         "c": [8, 16, 32, 64],
-        "K": [16, 64, 256],
-        "lambda_steps": 12,
+        "K": [16, 32, 64, 128],
+        "lambda_steps": 10,
         "lambda_factor_min": 0.05,
         "util_threshold": 0.95,
         "mu_anchor_req_per_s": 125.0,

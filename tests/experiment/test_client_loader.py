@@ -45,7 +45,7 @@ class TestLoadRampCfg:
         "_mutation,_msg_substr",
         [
             ({"min_samples_per_kind": 8}, "CLT validity"),
-            ({"rho_grid": [0.1, 0.5, 0.9]}, "either 'rates' or 'rho_grid'"),
+            ({"rho_grid": [0.1, 0.5, 0.9]}, "exactly one of 'rates' / 'rho_grid' / 'anchor'"),
             ({"rates": []}, "must specify 'rates'"),
             ({"rates": [5.0, 1.0, 2.0]}, "monotonically increasing"),
             ({"rates": [-1.0, 2.0]}, "positive floats"),
@@ -67,6 +67,15 @@ class TestLoadRampCfg:
         _ramp = _good_ramp()
         _ramp.pop("rates")
         _ramp["rho_grid"] = [0.2, 0.5, 0.8]
+        _r = load_ramp_cfg(_ramp)
+        assert _r.rates == []
+
+    def test_anchor_accepted(self) -> None:
+        """*test_anchor_accepted()* `anchor: "lambda_z"` (instead of `rates`) passes validation; `rates` stays empty (the executor materialises it via `_resolve_rates`)."""
+        _ramp = _good_ramp()
+        _ramp.pop("rates")
+        _ramp["anchor"] = "lambda_z"
+        _ramp["entry_artifact"] = "TAS_{1}"
         _r = load_ramp_cfg(_ramp)
         assert _r.rates == []
 
