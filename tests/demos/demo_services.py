@@ -32,7 +32,25 @@ from src.experiment.services import (  # noqa: E402
     mount_atomic_svc,
     mount_composite_svc,
 )
+from src.experiment.services.instruments import LogProbe, stamp_admit  # noqa: E402
 
+
+class _DemoHandler:
+    """*_DemoHandler* minimal callable class showing service-layer protocol: `self.ctx` for `@logger` to find, explicit `LogProbe` arg threaded by the wrapper, body writes timestamps onto the probe."""
+
+    def __init__(self, ctx: SvcCtx) -> None:
+        self.ctx = ctx
+
+    @logger
+    async def __call__(self, req: SvcReq, probe: LogProbe) -> SvcResp:
+        # small sleep so recv_ts < end_ts is visible in the row. In the real atomic handler this is `asyncio.sleep(expovariate(mu))`; here we await a fixed 5 ms so the demo prints non-zero work.
+        probe.admit_ts = stamp_admit()
+        probe.c_used_at_start = self.ctx.c_in_use
+        await asyncio.sleep(0.005)
+        return SvcResp(req_id=req.req_id,
+                        srv_name=self.ctx.spec.name,
+                        success=True,
+                        message="ok")
 
 def _banner(_s: str) -> None:
     """*_banner()* print a centred header band to stdout."""
@@ -51,6 +69,14 @@ async def _recorded_forward_factory(_calls: List[Tuple[str, str]]):
                        success=True,
                        message="recorded")
     return _fwd
+
+
+async def _noop_forward(target: str, req: SvcReq) -> SvcResp:
+    """*_noop_forward()* satisfy the `ExtFwdFn` protocol for terminal-atomic mounts; never called in practice but the type system needs an awaitable returning `SvcResp`."""
+    return SvcResp(req_id=req.req_id,
+                   srv_name=target,
+                   success=True,
+                   message="noop (should not be called for terminal handlers)")
 
 
 async def _demo() -> None:
@@ -113,15 +139,7 @@ async def _demo() -> None:
                                 port=8001, mu=1e9, epsilon=0.0,
                                 c=1, K=10, seed=1))
 
-    @logger(_ctx2)
-    async def _handler(req: SvcReq) -> SvcResp:
-        # small sleep so recv_ts < end_ts is visible in the row. In the real atomic handler this is `asyncio.sleep(expovariate(mu))`; here we just await a fixed 5 ms so the demo prints non-zero work.
-        await asyncio.sleep(0.005)
-        return SvcResp(req_id=req.req_id,
-                       srv_name=_ctx2.spec.name,
-                       success=True,
-                       message="ok")
-
+    _handler = _DemoHandler(_ctx2)
     _req = SvcReq(kind="analyse", size_bytes=128)
     _resp = await _handler(_req)
     print(f"  handler returned     = success={_resp.success}, msg={_resp.message!r}")
@@ -144,7 +162,7 @@ async def _demo() -> None:
                 K=10,
                 seed=3),
         targets=[],
-        ext_fwd=lambda t, r: None,  # never called for terminal
+        ext_fwd=_noop_forward,
     )
     _transport = httpx.ASGITransport(app=_app)
     async with httpx.AsyncClient(transport=_transport,

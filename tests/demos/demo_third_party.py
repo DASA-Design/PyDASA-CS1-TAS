@@ -32,6 +32,7 @@ import httpx  # noqa: E402
 
 from src.experiment.instances import build_third_party  # noqa: E402
 from src.experiment.services import (  # noqa: E402
+    ExtFwdFn,
     LOG_COLUMNS,
     SvcReq,
     SvcResp,
@@ -66,8 +67,8 @@ async def _no_forward(_target: str,
     raise AssertionError(f"unexpected forward to {_target!r}")
 
 
-def _recorded_forward(_calls: List[Tuple[str, str]]) -> httpx.AsyncClient:
-    """*_recorded_forward()* build a forward closure that appends `(target, request_id)` to `_calls`."""
+def _recorded_forward(_calls: List[Tuple[str, str]]) -> ExtFwdFn:
+    """*_recorded_forward()* build a forward closure that appends `(target, request_id)` to `_calls` and returns `success=True`."""
 
     async def _fwd(target: str, req: SvcReq) -> SvcResp:
         _calls.append((target, req.req_id))
