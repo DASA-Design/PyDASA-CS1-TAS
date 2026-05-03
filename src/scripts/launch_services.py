@@ -26,7 +26,7 @@ Usage:
     # single-host honest bench (loopback aliases):
     python -m src.scripts.launch_services --deployment=loopback_aliased
 
-The launcher unlocks `loopback_aliased` and `remote` modes that the in-process ASGI launcher (`src.experiment.launcher.ExperimentLauncher`) cannot serve because it short-circuits HTTP via `_MultiASGITransport`.
+The launcher unlocks `loopback_aliased` and `remote` modes that the in-process ASGI architecture (`src.experiment.architecture.TasArchitecture`) cannot serve because it short-circuits HTTP via `_MultiASGITransport`.
 """
 # native python modules
 from __future__ import annotations
@@ -43,13 +43,12 @@ from fastapi import FastAPI
 
 # local modules
 from src.experiment.instances import build_tas, build_third_party
-from src.experiment.launcher import (local_services_for_role,
-                                     pick_bind_addr)
-from src.experiment.registry import SvcRegistry
+from src.experiment.architecture import TasArchitecture
+from src.experiment.wire import SvcRegistry
 from src.experiment.services import (HttpForward,
                                      SvcSpec,
                                      derive_seed)
-from src.experiment.uvicorn_thread import UvicornThread
+from src.experiment.runtime import UvicornThread
 from src.io import load_method_cfg, load_profile
 
 
@@ -60,14 +59,14 @@ _VALID_ROLES = ("all", "client", "composite", "atomic", "composite-atomic")
 def _build_specs(cfg: Any,
                  registry: SvcRegistry,
                  root_seed: int,
-                 avg_request_size_bytes: int) -> Dict[str, SvcSpec]:
-    """*_build_specs()* mirror `ExperimentLauncher._build_specs_from_cfg` at module scope so this script does not depend on the launcher's private helper.
+                 avg_req_size_b: int) -> Dict[str, SvcSpec]:
+    """*_build_specs()* mirror `TasArchitecture._build_specs_from_cfg` at module scope so this script does not depend on the architecture's private helper.
 
     Args:
         cfg: resolved profile + scenario.
         registry (SvcRegistry): populated registry.
         root_seed (int): root seed from `experiment.json::seed`.
-        avg_request_size_bytes (int): drives `mem_per_buffer = K * avg * MEM_HEADROOM_FACTOR`.
+        avg_req_size_b (int): drives `mem_per_buffer = K * avg * MEM_HEADROOM_FACTOR`.
 
     Returns:
         Dict[str, SvcSpec]: one SvcSpec per artifact present in both profile and registry.
@@ -88,7 +87,7 @@ def _build_specs(cfg: Any,
             c=int(_a.c),
             K=_K,
             seed=derive_seed(root_seed, _a.key),
-            mem_per_buffer=int(_K * int(avg_request_size_bytes) * _headroom),
+            mem_per_buffer=int(_K * int(avg_req_size_b) * _headroom),
             enforce_limits=bool(cfg.enforce_limits),
         )
     return _specs
@@ -145,7 +144,7 @@ def _spawn_one_app(name: str,
         name (str): service name (used in log lines only).
         app (FastAPI): app to serve.
         port (int): TCP port.
-        bind_host (str): bind address resolved from `pick_bind_addr`.
+        bind_host (str): bind address resolved from `TasArchitecture.bind_addr` (or the `--bind` CLI override).
         verbose (bool): when True, print one line on start.
 
     Returns:
@@ -313,20 +312,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     _resolved_mcfg = dict(_mcfg)
     _resolved_mcfg["deployment"] = _dpl
     _registry = SvcRegistry.from_config(_resolved_mcfg)
-    _local_names = set(local_services_for_role(_args.launcher_role,
-                                               _registry))
-    _bind = pick_bind_addr(_dpl, override=_args.bind)
+    _local_names = set(TasArchitecture.services_for_role(_args.launcher_role,
+                                                         _registry))
+
+    _cfg = load_profile(adaptation=_args.adaptation,
+                        profile=_args.profile,
+                        scenario=_args.scenario,
+                        source="specs")
+
+    # bind: --bind override > resolved deployment auto-flip via a throwaway architecture instance (dataclass instantiation only; no __aenter__, no ASGI mesh)
+    if _args.bind is not None:
+        _bind = str(_args.bind)
+    else:
+        _arch_helpers = TasArchitecture(cfg=_cfg,
+                                        method_cfg=_resolved_mcfg,
+                                        adaptation=_args.adaptation,
+                                        deployment=_dpl)
+        _bind = _arch_helpers.bind_addr
 
     if _args.verbose:
         print(f"launch_services: deployment={_dpl} "
               f"launcher_role={_args.launcher_role} bind={_bind}")
         print(f"local services ({len(_local_names)}): "
               f"{sorted(_local_names)}")
-
-    _cfg = load_profile(adaptation=_args.adaptation,
-                        profile=_args.profile,
-                        scenario=_args.scenario,
-                        source="specs")
     _root_seed = int(_mcfg.get("seed", 0))
     _sizes = dict(_mcfg.get("request_size_bytes", {}))
     _avg_size = 0

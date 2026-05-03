@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 # local modules
-from src.analytic.metrics import aggregate_net, check_reqs
+from src.analytic import aggregate_net, check_reqs
 from src.io import NetCfg, load_method_cfg, load_profile
 from src.stochastic import solve_net
 

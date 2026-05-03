@@ -76,10 +76,8 @@ from fastapi import FastAPI
 
 # local modules
 from src.experiment.wire import generate_payload
-from src.experiment.services import (SvcReq,
-                                     SvcSpec,
-                                     make_base_app,
-                                     mount_vernier_svc)
+from src.experiment.instances import build_gauge
+from src.experiment.services import SvcReq, SvcSpec
 from src.experiment.runtime import UvicornThread
 
 _HERE = Path(__file__).resolve()
@@ -385,9 +383,9 @@ def _build_ping_app() -> FastAPI:
                     K=_K,
                     seed=0,
                     mem_per_buffer=int(_payload_bytes * _K * SvcSpec.MEM_HEADROOM_FACTOR))
-    _app = make_base_app("calibration-vernier")
-    mount_vernier_svc(_app, _spec, payload_size_bytes=_payload_bytes)
-    return _app
+    return build_gauge(_spec,
+                       payload_size_bytes=_payload_bytes,
+                       title="calibration-vernier")
 
 
 # `UvicornThread` was extracted to `src.experiment.uvicorn_thread` so the calibration probe, the experiment launcher, and the launch_services script share one lifecycle. The legacy `_UvicornThread` alias keeps existing code paths unchanged.
@@ -2166,9 +2164,7 @@ def _build_vernier_app_for_combo(c_srv: int,
                     K=int(K),
                     seed=0,
                     mem_per_buffer=int(payload_size_bytes * K * SvcSpec.MEM_HEADROOM_FACTOR))
-    _app = make_base_app(f"calibration-vernier::{tag}")
-    mount_vernier_svc(_app, _spec, payload_size_bytes=payload_size_bytes)
-    return _app
+    return build_gauge(_spec, payload_size_bytes=payload_size_bytes)
 
 
 def _resolve_mu_anchor(envelope: Dict[str, Any],

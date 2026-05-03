@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 # local modules
-from src.analytic.metrics import aggregate_net, check_reqs
+from src.analytic import aggregate_net, check_reqs
 from src.experiment.executor import build_svc_df_from_logs, execute_one
 from src.experiment.runtime import run_async_safe
 from src.experiment.services import derive_seed
