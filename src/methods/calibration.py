@@ -80,7 +80,7 @@ from src.experiment.services import (SvcReq,
                                      SvcSpec,
                                      make_base_app,
                                      mount_vernier_svc)
-from src.experiment.uvicorn_thread import UvicornThread
+from src.experiment.runtime import UvicornThread
 
 _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parents[2]

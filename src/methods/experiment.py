@@ -20,30 +20,20 @@ CLI::
 from __future__ import annotations
 
 import argparse
-import asyncio
-import contextlib
-import ctypes
-import gc
 import json
-import sys
 import tempfile
-import threading
 from pathlib import Path
 
 # data types
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # scientific stack
-import numpy as np
 import pandas as pd
 
 # local modules
-from src.analytic.jackson import build_rho_grid
 from src.analytic.metrics import aggregate_net, check_reqs
-from src.experiment.client import ClientCfg
-from src.experiment.client import ClientSimulator
-from src.experiment.client import build_ramp_cfg
-from src.experiment.launcher import ExperimentLauncher
+from src.experiment.executor import build_svc_df_from_logs, execute_one
+from src.experiment.runtime import run_async_safe
 from src.experiment.services import derive_seed
 from src.io import (NetCfg,
                     calibration_age_hours,
@@ -57,7 +47,7 @@ from src.io import (NetCfg,
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "experiment"
 
-# deployment modes recognised by the experiment runner; mirrors the SvcRegistry / ExperimentLauncher enum
+# deployment modes recognised by the experiment runner; mirrors the SvcRegistry / TasArchitecture enum
 _VALID_DEPLOYMENTS = ("local", "loopback_aliased", "remote")
 
 # Hours after which a calibration is considered stale (warning only)
@@ -127,333 +117,6 @@ def _build_baseline_block(envelope: Optional[Dict[str, Any]]
         "age_hours": _age,
         "applied": True,
     }
-
-
-@contextlib.contextmanager
-def _windows_timer_resolution(period_ms: int = 1):
-    """*_windows_timer_resolution()* boost Windows system-timer resolution for the duration of the block.
-
-    On Windows, `asyncio.sleep` is bounded by the global system timer
-    (default ~15 ms), so very short interarrivals oversleep and the client
-    can never reach high target rates. `winmm.timeBeginPeriod(1)` lowers
-    the global timer floor to 1 ms for the lifetime of the call (paired
-    with `timeEndPeriod` on exit), giving asyncio.sleep ~1 ms granularity.
-
-    Recipe from https://stackoverflow.com/q/77895160 (asyncio.sleep
-    precision on Windows). No-op on non-Windows platforms.
-
-    Args:
-        period_ms (int): requested timer floor in milliseconds. The OS clamps this to the supported range (typically 1-15 ms).
-
-    Yields:
-        None: contextmanager body produces no value; entering the block raises the timer resolution, exiting restores it.
-    """
-    if sys.platform != "win32":
-        yield
-        return
-
-    try:
-        _winmm = ctypes.WinDLL("winmm")
-    except (OSError, AttributeError):
-        # winmm unavailable -> fall back to default resolution
-        yield
-        return
-
-    _winmm.timeBeginPeriod(int(period_ms))
-    try:
-        yield
-    finally:
-        _winmm.timeEndPeriod(int(period_ms))
-
-
-def _build_svc_df_from_logs(cfg: NetCfg,
-                            log_dir: Path,
-                            duration_s: float) -> pd.DataFrame:
-    """*_build_svc_df_from_logs()* build a per-service metrics DataFrame from the flushed CSV logs via operational analysis (Denning & Buzen 1978).
-
-    Every quantity is a direct measurement over the observation window `T`; no Markovian assumption (Poisson arrivals, exponential service, steady state, ergodicity) is required. The operational identities used (cf. `notes/operational_analysis.md` Table I):
-
-        - **lambda** = `A / T` (arrival rate from logged invocations)
-        - **X** (throughput) = `C / T` (completion rate)
-        - **U_local** (alias `rho`) = `B_local / (T * c)` where `B_local = sum(local_end_ts - start_ts)` is local busy time excluding any downstream dispatch await; the M/M/c/K-comparable utilisation.
-        - **R_local** (alias `W`) = mean(`local_end_ts - recv_ts`); local response time used for analytic / stochastic / dimensional cross-checks.
-        - **Wq** (queue wait) = mean(`start_ts - recv_ts`); positive only when admission gating (`SvcCtx.sem`) makes requests wait.
-        - **L** = `X * W`            (Little's law on local response time)
-        - **Lq** = `X * Wq`          (Little's law on queue wait)
-        - **U_total** (alias `rho_total`) = `B_total / (T * c)` where `B_total = sum(end_ts - start_ts)` includes the full downstream subtree; matches the client-perceived end-to-end utilisation.
-        - **W_total** = mean(`end_ts - recv_ts`); client-perceived end-to-end response time used for Camara R2 (response time <= 26 ms) validation.
-        - **L_total** = `X * W_total`            (system-wide in-flight by Little's law)
-
-    Terminal atomics never publish `mark_local_end()` so `local_end_ts == end_ts` for them; local and total views coincide. Composites and dispatching atomics publish `mark_local_end()` right before the dispatch await, so `local_end_ts < end_ts` and the two views differ by the downstream wait.
-
-    Two failure modes stay separated:
-
-        - `epsilon`: Bernoulli business failure `count(200 AND success=False) / count(200)`. Directly comparable to the profile's `_setpoint` for epsilon (what R1 validates).
-        - `buffer_reject_rate`: `count(503) / count(all)`. Capacity overflow, not a reliability signal.
-
-    Args:
-        cfg (NetCfg): resolved profile + scenario.
-        log_dir (Path): directory carrying `<service>.csv` files.
-        duration_s (float): observation window length `T`. Used as the denominator for X / U / lambda; should be the wall-clock duration the measurement covers.
-
-    Returns:
-        pd.DataFrame: one row per artifact with the analytic-schema columns plus `buffer_reject_rate`.
-
-    Raises:
-        pandas.errors.EmptyDataError: when a per-service CSV exists but is empty (zero rows including header). Missing CSVs are tolerated and produce zero-filled rows.
-    """
-    _rows: List[Dict[str, Any]] = []
-
-    for _idx, _a in enumerate(cfg.artifacts):
-        _fname = _a.key.replace("{", "_").replace("}", "_").replace(",", "_")
-        _csv = log_dir / f"{_fname}.csv"
-
-        _lam = 0.0
-        _rho = 0.0
-        _L = 0.0
-        _Lq = 0.0
-        _W = 0.0
-        _Wq = 0.0
-        _rho_total = 0.0
-        _L_total = 0.0
-        _W_total = 0.0
-        _eps = 0.0
-        _bfr = 0.0
-
-        if _csv.exists():
-            _df = pd.read_csv(_csv)
-            _n = len(_df)
-
-            # pandas reads success="True"/"False" as object-dtype; astype(bool) is wrong, coerce via str.lower().eq("true")
-            _succ_col = _df["success"]
-            if _succ_col.dtype != bool:
-                _succ_bool = _succ_col.astype(str).str.lower().eq("true")
-            else:
-                _succ_bool = _succ_col
-            _df = _df.assign(success=_succ_bool)
-
-            # split by failure mode
-            _completed = _df[_df["status_code"] == 200]
-            _business_fails = _completed[~_completed["success"]]
-            _infra_fails = _df[_df["status_code"] != 200]
-
-            # operational arrival rate: A / T (every logged row is an arrival)
-            if duration_s > 0:
-                _lam = _n / duration_s
-            else:
-                _lam = 0.0
-
-            # epsilon is business-level only; compares to profile's setpoint
-            if len(_completed) > 0:
-                _eps = len(_business_fails) / len(_completed)
-            else:
-                _eps = 0.0
-
-            # buffer_reject_rate tracks infrastructure overflow separately
-            if _n > 0:
-                _bfr = len(_infra_fails) / _n
-            else:
-                _bfr = 0.0
-
-            # timing from successful completions only (failed ones have no meaningful response time). The local view (`rho / L / W`) brackets only the local work via `local_end_ts` and is the M/M/c/K-comparable observable; the total view (`rho_total / L_total / W_total`) brackets the whole subtree via `end_ts` and matches the client-perceived end-to-end response time used for Camara R2 validation. For terminal atomics that never dispatch, `local_end_ts == end_ts` so the two views coincide.
-            _succ = _completed[_completed["success"]]
-            if len(_succ) > 0 and duration_s > 0:
-                _start = pd.to_numeric(_succ["start_ts"], errors="coerce")
-                _local_end = pd.to_numeric(_succ["local_end_ts"], errors="coerce")
-                _end = pd.to_numeric(_succ["end_ts"], errors="coerce")
-                _recv = pd.to_numeric(_succ["recv_ts"], errors="coerce")
-
-                # local response time R_local = mean(local_end - recv); queue wait Wq = mean(start - recv); total response time R_total = mean(end - recv)
-                _W = float(np.nanmean(_local_end - _recv))
-                _Wq = float(np.nanmean(_start - _recv))
-                _W_total = float(np.nanmean(_end - _recv))
-
-                # operational U = B / (T*c). Local B excludes downstream dispatch wait; total B includes it. Identity U = X*S holds for both with the matching service-time interpretation; no PASTA needed.
-                _B_local = float(np.nansum(_local_end - _start))
-                _B_total = float(np.nansum(_end - _start))
-                _c = max(int(_a.c), 1)
-                _rho = _B_local / (duration_s * _c)
-                _rho_total = _B_total / (duration_s * _c)
-
-                # X = C / T; use in Little's law so failed completions don't inflate L
-                _X = len(_succ) / duration_s
-                _L = _X * _W
-                _Lq = _X * _Wq
-                _L_total = _X * _W_total
-
-        _rows.append({
-            "node": _idx,
-            "key": _a.key,
-            "name": _a.name,
-            "type": _a.type_,
-            "lambda": _lam,
-            "mu": float(_a.mu),
-            "c": int(_a.c),
-            "K": int(_a.K),
-            "rho": _rho,
-            "L": _L,
-            "Lq": _Lq,
-            "W": _W,
-            "Wq": _Wq,
-            "rho_total": _rho_total,
-            "L_total": _L_total,
-            "W_total": _W_total,
-            "epsilon": _eps,
-            "buffer_reject_rate": _bfr,
-        })
-
-    return pd.DataFrame(_rows)
-
-
-async def _run_async(cfg: NetCfg,
-                     method_cfg: Dict[str, Any],
-                     adp: str,
-                     log_dir: Path,
-                     dpl: str = "local",
-                     launcher_role: str = "all") -> Dict[str, Any]:
-    """*_run_async()* drive one adaptation end-to-end through the launch -> snapshot -> ramp -> flush sequence.
-
-    Args:
-        cfg (NetCfg): resolved profile + scenario.
-        method_cfg (Dict[str, Any]): experiment method config.
-        adp (str): adaptation label (`baseline` / `s1` / `s2` / `aggregate`).
-        log_dir (Path): directory that receives the per-service CSVs and the config snapshot.
-
-    Returns:
-        Dict[str, Any]: ramp output plus `duration_s` and `service_log_counts`.
-
-    Raises:
-        Exception: any error raised by `ExperimentLauncher` startup, `ClientSimulator.run_ramp()`, `_lnc.snapshot_config`, or `_lnc.flush_logs` propagates unmodified so the caller's replicate loop can decide whether to retry or abort.
-    """
-    # 1 ms timer resolution for the lifetime of this run; no-op off-Windows
-    with _windows_timer_resolution(1):
-        async with ExperimentLauncher(cfg=cfg,
-                                      method_cfg=method_cfg,
-                                      adaptation=adp,
-                                      deployment=dpl,
-                                      launcher_role=launcher_role) as _lnc:
-            # client config derived from method_cfg + launcher's kind-weights
-            _seed = int(method_cfg["seed"])
-            _sizes_by_kind = dict(method_cfg.get("request_size_bytes", {}))
-            # scalar fallback for tests with no sizes-by-kind map; default = analyse_request size
-            _req_size = int(_sizes_by_kind.get("analyse_request", 256))
-
-            # rho_grid -> rates via Jackson solver; rates and rho_grid are mutually exclusive (validate_ramp enforces)
-            _ramp_block = dict(method_cfg["ramp"])
-            _rho_grid_meta: List[Dict[str, Any]] = []
-            if _ramp_block.get("rho_grid"):
-                _grid = build_rho_grid(cfg, list(_ramp_block["rho_grid"]))
-                _ramp_block["rates"] = [float(_lz) for (_, _lz, _) in _grid]
-                _ramp_block.pop("rho_grid", None)
-                _rho_grid_meta = [
-                    {"rho_target": float(_r),
-                     "lambda_z_inverted": float(_lz),
-                     "bottleneck_artifact_idx": int(_b)}
-                    for (_r, _lz, _b) in _grid
-                ]
-
-            _client_cfg = ClientCfg(
-                entry_service="TAS_{1}",
-                seed=_seed,
-                request_size_bytes=_req_size,
-                request_sizes_by_kind=_sizes_by_kind,
-                kind_weights=dict(_lnc.kind_weights),
-                ramp=build_ramp_cfg(_ramp_block),
-            )
-            _sim = ClientSimulator(_lnc.client, _lnc.registry, _client_cfg)
-
-            # emit config.json BEFORE the ramp starts so a crash leaves the snapshot describing what was about to run
-            _td = dict(method_cfg.get("request_size_bytes", {}))
-            _lnc.snapshot_config(log_dir,
-                                 extras={
-                                     "seed": _seed,
-                                     "request_size_bytes": _req_size,
-                                     "request_size_bytes_by_kind": _td,
-                                     "ramp": method_cfg.get("ramp", {}),
-                                     "entry_service": "TAS_{1}",
-                                 })
-
-            _ramp_out = await _sim.run_ramp()
-            _counts = _lnc.flush_logs(log_dir)
-            # surface log-buffer overflow so the top-level envelope can fail loudly on non-zero
-            _drops = _lnc.collect_drop_counts()
-
-    # thread rho_grid per-point metadata back into each probe so downstream knows which rho-target it was anchored to
-    if _rho_grid_meta:
-        for _probe, _meta in zip(_ramp_out["probes"], _rho_grid_meta):
-            _probe.update(_meta)
-
-    # total wall-clock duration across all probes
-    _duration = float(sum(_p.get("duration_s", 0.0)
-                          for _p in _ramp_out["probes"]))
-    _ans = {
-        "probes": _ramp_out["probes"],
-        "saturation_rate": _ramp_out["saturation_rate"],
-        "stopped_reason": _ramp_out["stopped_reason"],
-        "client_effective_rate": _ramp_out.get("client_effective_rate", 0.0),
-        "duration_s": _duration,
-        "service_log_counts": _counts,
-        "log_drop_counts": _drops,
-    }
-
-    return _ans
-
-
-def _run_async_safe(
-    coro_factory: Callable[[], Awaitable[Dict[str, Any]]],
-) -> Dict[str, Any]:
-    """*_run_async_safe()* drive an awaitable from a sync caller, even when an event loop is already running (Jupyter, IPython, calibration's rate sweep).
-
-    `asyncio.run()` raises `RuntimeError: asyncio.run() cannot be called from a running event loop` whenever an ambient loop is alive. This helper detects that case and dispatches `coro_factory()` to a fresh `ProactorEventLoop` (Windows) / `SelectorEventLoop` (POSIX) on a daemon worker thread, then joins. With no ambient loop it falls back to the simpler `asyncio.run` path so CLI invocations stay unchanged.
-
-    Mirrors the trick `src.methods.calibration._run_probes_in_dedicated_loop` already uses for the high-fd-count probe path, but kept local to this module so the experiment runner has no calibration import dependency.
-
-    Args:
-        coro_factory: zero-arg callable returning the coroutine to run. Re-invoked from inside the worker thread so the coroutine binds to the worker-thread loop.
-
-    Raises:
-        Exception: re-raises any exception that fired inside the worker thread.
-
-    Returns:
-        Dict[str, Any]: the awaitable's resolved result.
-    """
-    try:
-        asyncio.get_running_loop()
-        _ambient_loop = True
-    except RuntimeError:
-        _ambient_loop = False
-
-    if not _ambient_loop:
-        return asyncio.run(coro_factory())
-
-    _result_box: List[Any] = [None]
-    _error_box: List[Optional[BaseException]] = [None]
-
-    def _worker() -> None:
-        try:
-            if sys.platform == "win32":
-                _loop = asyncio.ProactorEventLoop()
-            else:
-                _loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(_loop)
-                _result_box[0] = _loop.run_until_complete(coro_factory())
-            finally:
-                _loop.close()
-        except BaseException as _exc:
-            _error_box[0] = _exc
-
-    _t = threading.Thread(target=_worker, daemon=False)
-    _t.start()
-    _t.join()
-    _err = _error_box[0]
-    if _err is not None:
-        raise _err
-    _out = _result_box[0]
-    _result_box.clear()
-    _error_box.clear()
-    gc.collect()
-    return _out
 
 
 def run(adp: Optional[str] = None,
@@ -535,28 +198,28 @@ def run(adp: Optional[str] = None,
             else:
                 _log_dir = _base_dir / f"rep_{_k}"
             _log_dir.mkdir(parents=True, exist_ok=True)
-            _run_out = _run_async_safe(lambda: _run_async(_cfg,
+            _run_out = run_async_safe(lambda: execute_one(_cfg,
                                                           _rep_mcfg,
                                                           _adp,
                                                           _log_dir,
                                                           _dpl,
                                                           _role))
-            _nds = _build_svc_df_from_logs(_cfg,
+            _nds = build_svc_df_from_logs(_cfg,
                                            _log_dir,
                                            _run_out["duration_s"])
         else:
             with tempfile.TemporaryDirectory() as _tmp_str:
                 _log_dir = Path(_tmp_str)
-                _run_out = _run_async_safe(
-                    lambda: _run_async(_cfg,
-                                       _rep_mcfg,
-                                       _adp,
-                                       _log_dir,
-                                       _dpl,
-                                       _role))
-                _nds = _build_svc_df_from_logs(_cfg,
-                                               _log_dir,
-                                               _run_out["duration_s"])
+                _run_out = run_async_safe(
+                    lambda: execute_one(_cfg,
+                                        _rep_mcfg,
+                                        _adp,
+                                        _log_dir,
+                                        _dpl,
+                                        _role))
+                _nds = build_svc_df_from_logs(_cfg,
+                                              _log_dir,
+                                              _run_out["duration_s"])
 
         _net = aggregate_net(_nds)
         _req = check_reqs(_nds)
