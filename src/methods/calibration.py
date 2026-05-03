@@ -418,7 +418,7 @@ atexit.register(_shutdown_active_verniers)
 def _stats_from_us_array(us_arr: np.ndarray) -> Dict[str, float]:
     """*_stats_from_us_array()* return the canonical 6-key latency-stats dict from a microsecond array.
 
-    Single source of truth for the `handler_scaling[<level>]` shape (`min_us`, `median_us`, `p95_us`, `p99_us`, `std_us`, `samples`). Reused by `measure_loopback`, `measure_handler_scaling`, and `_drive_lambda_step` so the schema is declared once.
+    Single source of truth for the `handler_scaling[<level>]` shape (`min_us`, `median_us`, `p95_us`, `p99_us`, `std_us`, `samples`). Reused by `measure_loopback` and `_drive_lambda_step` for single-status paths; `measure_handler_scaling` uses `_stats_from_us_status_pairs` instead because it needs success-only filtering + per-status metadata.
 
     Args:
         us_arr (np.ndarray): per-request latencies in microseconds; empty array yields a zero-valued stats dict so callers can short-circuit on `samples == 0`.
@@ -443,6 +443,41 @@ def _stats_from_us_array(us_arr: np.ndarray) -> Dict[str, float]:
         "std_us": float(us_arr.std()),
         "samples": int(us_arr.size),
     }
+
+
+def _stats_from_us_status_pairs(pairs: List[Tuple[int, int]]) -> Dict[str, float]:
+    """*_stats_from_us_status_pairs()* return the success-only latency stats + per-status counts from `(rtt_ns, status_code)` pairs.
+
+    The dimensional model assumes successful request/reply, so the latency stats (`median_us`, `p95_us`, etc.) are computed over status=200 responses only — fast 503 rejections no longer pull the median down. Raw rejection counts persist as `reject_count` / `reject_rate` / `infra_fail_count` for future error-handler-aware DASA models.
+
+    Args:
+        pairs (List[Tuple[int, int]]): `(rtt_ns, status_code)` per request; status=0 marks an infra failure (ConnectionError / OSError swallowed at the worker), status=503 marks K-overflow rejection, status=200 marks successful completion.
+
+    Returns:
+        Dict[str, float]: stats keyed `min_us` / `median_us` / `p95_us` / `p99_us` / `std_us` / `samples` (success-only) plus `total_count` / `succ_count` / `reject_count` / `infra_fail_count` / `reject_rate`.
+    """
+    if not pairs:
+        return {
+            "min_us": 0.0, "median_us": 0.0, "p95_us": 0.0, "p99_us": 0.0,
+            "std_us": 0.0, "samples": 0,
+            "total_count": 0, "succ_count": 0,
+            "reject_count": 0, "infra_fail_count": 0, "reject_rate": 0.0,
+        }
+    _total = len(pairs)
+    _succ_us = [_rtt / 1000.0 for (_rtt, _st) in pairs if _st == 200]
+    _reject = sum(1 for (_, _st) in pairs if _st == 503)
+    _infra = sum(1 for (_, _st) in pairs if _st == 0)
+    _succ_arr = np.asarray(_succ_us, dtype=np.float64)
+    _stats = _stats_from_us_array(_succ_arr)
+    _stats["total_count"] = int(_total)
+    _stats["succ_count"] = int(_succ_arr.size)
+    _stats["reject_count"] = int(_reject)
+    _stats["infra_fail_count"] = int(_infra)
+    if _total > 0:
+        _stats["reject_rate"] = float(_reject) / float(_total)
+    else:
+        _stats["reject_rate"] = 0.0
+    return _stats
 
 
 def _build_probe_body(payload_size_bytes: int) -> Dict[str, Any]:
@@ -502,20 +537,22 @@ async def measure_loopback(port: int,
 async def _run_concurrent_worker(client: httpx.AsyncClient,
                                  url: str,
                                  n: int,
-                                 body: Dict[str, Any]) -> List[int]:
-    """*_run_concurrent_worker()* one task; issues `n` sequential POSTs of `body` and returns the per-request RTT in nanoseconds.
+                                 body: Dict[str, Any]) -> List[Tuple[int, int]]:
+    """*_run_concurrent_worker()* one task; issues `n` sequential POSTs of `body` and returns `(rtt_ns, status_code)` tuples per request.
 
-    Transient connection errors (ReadError, ConnectionError, OSError, etc.) are swallowed so a single dropped connection at high `n_con_usr` does not abort the whole `asyncio.gather` cascade. The caller's stats reflect successful samples only; the dropped count surfaces via the per-level `samples` figure being below the requested total.
+    Transient connection errors (ReadError, ConnectionError, OSError, etc.) are swallowed so a single dropped connection at high `n_con_usr` does not abort the whole `asyncio.gather` cascade; they surface as `(rtt, 0)` so downstream stats can distinguish infra failure (status=0) from K-overflow (status=503) from successful completion (status=200).
     """
-    _out: List[int] = []
+    _out: List[Tuple[int, int]] = []
     for _ in range(int(n)):
         _t1 = time.perf_counter_ns()
+        _status = 0
         try:
-            await client.post(url, json=body)
+            _resp = await client.post(url, json=body)
+            _status = int(_resp.status_code)
         except (httpx.HTTPError, ConnectionError, OSError):
-            continue
+            _status = 0
         _t2 = time.perf_counter_ns()
-        _out.append(_t2 - _t1)
+        _out.append((_t2 - _t1, _status))
     return _out
 
 
@@ -580,24 +617,22 @@ async def measure_handler_scaling(port: int,
             for _ in range(_count):
                 _tasks.append(_run_concurrent_worker(_client, _url, _reqs, _body))
             _lists = await asyncio.gather(*_tasks)
-            _all: List[int] = []
+            _all_pairs: List[Tuple[int, int]] = []
             for _lst in _lists:
-                _all.extend(_lst)
-            _arr = np.asarray(_all, dtype=np.int64)
+                _all_pairs.extend(_lst)
             # trim to samples_per_level so every level is comparable.
             if per_worker is None:
                 _cap = int(samples_per_level)
-                if _arr.size > _cap:
-                    _arr = _arr[:_cap]
-            _us = _arr / 1000.0
+                if len(_all_pairs) > _cap:
+                    _all_pairs = _all_pairs[:_cap]
             _key = str(_count)
-            _stats = _stats_from_us_array(_us)
+            _stats = _stats_from_us_status_pairs(_all_pairs)
             _result[_key] = _stats
             if on_level_done is not None:
                 _elapsed = time.perf_counter() - _t0
                 on_level_done(_count, _stats, _elapsed)
             # release per-level buffers before the next level allocates
-            del _all, _arr, _us, _tasks, _lists
+            del _all_pairs, _tasks, _lists
             gc.collect()
             # quiet window between levels: lets uvicorn drain TCP backlog + tail responses
             if inter_level_delay_s > 0.0:
@@ -1786,14 +1821,17 @@ def _build_calib_observables(handler_scaling: Dict[str, Dict[str, float]],
 
     _n_arr: List[int] = []
     _r_arr: List[float] = []
+    _reject_rate_arr: List[float] = []
     for _n in _levels:
         _stats = handler_scaling.get(str(_n), {})
         _median_us = float(_stats.get("median_us", 0.0))
         _n_arr.append(int(_n))
         _r_arr.append(_median_us * 1e-6)
+        _reject_rate_arr.append(float(_stats.get("reject_rate", 0.0)))
 
     _n_np = np.asarray(_n_arr, dtype=float)
     _r_np = np.asarray(_r_arr, dtype=float)
+    _reject_np = np.asarray(_reject_rate_arr, dtype=float)
 
     # zero-latency rows -> NaN so downstream divisions stay finite
     _r_safe = np.where(_r_np > 0.0, _r_np, np.nan)
@@ -1801,7 +1839,7 @@ def _build_calib_observables(handler_scaling: Dict[str, Dict[str, float]],
     _x = _n_np / _r_safe
     # steady-state arrival = throughput
     _lam = _x
-    # Little's law: L = X*R = n at the level
+    # Closed-loop Little's law gives L = n_con_usr (workload-side demand). The dimensional model is M/M/c/K, which requires L <= K (admitted in-system count). Capping happens downstream in `derive_calib_coefs` once K is finalised; raw `n_con_usr` is preserved in the envelope's `n_con_usr_{<tag>}` context array for future error-handler models.
     _l_load = _n_np
     _r_service = _r_median_us * 1e-6
     _wq = np.maximum(_r_np - _r_service, 0.0)
@@ -1829,6 +1867,7 @@ def _build_calib_observables(handler_scaling: Dict[str, Dict[str, float]],
         "Wq": _wq,
         "M_act": _m_act,
         "M_buf": _m_buf,
+        "reject_rate": _reject_np,
     }
     return _out
 
@@ -2085,6 +2124,13 @@ def derive_calib_coefs(envelope: Dict[str, Any],
         _obs_tiled["M_buf"] = _K_full * _d_kB
         _obs = _obs_tiled
 
+    # cap L at K so the dimensional invariant theta = L/K <= 1 holds; raw `n_con_usr` is preserved in the envelope's `n_con_usr_{<tag>}` context array for future use. M_act follows because phi = M_act/M_buf must also stay <= 1 by the same invariant.
+    _L_arr = np.asarray(_obs["L"], dtype=float)
+    _K_arr = np.asarray(_obs["K"], dtype=float)
+    _obs["L"] = np.minimum(_L_arr, _K_arr)
+    _d_kB = float(payload_size_bytes) / 1000.0
+    _obs["M_act"] = _obs["L"] * _d_kB
+
     _n_levels = int(_obs["n"].size)
 
     _vars_block = _build_calib_vars(_obs, tag=tag)
@@ -2095,13 +2141,15 @@ def derive_calib_coefs(envelope: Dict[str, Any],
     if int(payload_size_bytes) <= 0 and _phi_key in _coef_arrays:
         _coef_arrays[_phi_key] = np.full(_n_levels, np.nan, dtype=float)
 
-    # carry the input-side context arrays alongside the coefficients so plot_yoly_chart panel labels stay honest
+    # carry the input-side context arrays alongside the coefficients so plot_yoly_chart panel labels stay honest. `n_con_usr_demand_{<tag>}` and `reject_rate_{<tag>}` preserve the workload-side signal (raw n vs admitted L, fraction of arrivals that hit the K-overflow rejection path) for future error-handler-aware DASA models.
     _context = {
         f"c_{{{tag}}}": _obs["c"],
         f"\\mu_{{{tag}}}": _obs["mu"],
         f"K_{{{tag}}}": _obs["K"],
         f"\\lambda_{{{tag}}}": _obs["lam"],
         f"n_con_usr_{{{tag}}}": _obs["n"],
+        f"n_con_usr_demand_{{{tag}}}": _obs["n"],
+        f"reject_rate_{{{tag}}}": _obs.get("reject_rate", np.zeros_like(_obs["n"])),
     }
 
     _coefs: Dict[str, Any] = {}
