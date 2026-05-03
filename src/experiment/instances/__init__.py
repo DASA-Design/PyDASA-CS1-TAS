@@ -8,9 +8,10 @@ All three are parameterised FUNCTIONS, not classes; they assemble generic `servi
     - `build_tas(specs, routing_rows, kind_to_tgt, ext_fwd, *, entry_name)` -> FastAPI
     - `build_third_party(spec, targets, ext_fwd)` -> FastAPI
     - `build_gauge(spec, payload_size_bytes, *, title)` -> FastAPI
+    - `make_gauge_factory(spec, payload_size_bytes, *, title)` -> Callable[[], FastAPI] (picklable zero-arg factory for `UvicornProcess`)
 """
 
-from src.experiment.instances.gauge import build_gauge
+from src.experiment.instances.gauge import build_gauge, make_gauge_factory
 from src.experiment.instances.tas import build_tas
 from src.experiment.instances.third_party import build_third_party
 from src.experiment.services import (SvcReq,
@@ -24,4 +25,5 @@ __all__ = [
     "build_gauge",
     "build_tas",
     "build_third_party",
+    "make_gauge_factory",
 ]
