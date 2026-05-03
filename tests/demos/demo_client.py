@@ -10,7 +10,7 @@ through the in-process mesh. Prints:
     - the request that goes out (id, kind, size_bytes, payload blob preview)
     - the headers attached to the HTTP call
     - the response body received
-    - the client-side `InvocationRecord` (status, success flags)
+    - the client-side `RequestRecord` (status, success flags)
 
 No ramp is driven; just one send, so this runs in a couple of seconds
 instead of minutes.
@@ -34,11 +34,11 @@ import httpx   # noqa: E402
 from src.experiment.client import (CascadeCfg,  # noqa: E402
                                    ClientCfg,
                                    ClientSimulator,
-                                   InvocationRecord,
-                                   RampCfg)
-from src.experiment.launcher import ExperimentLauncher  # noqa: E402
-from src.experiment.payload import generate_payload as _generate_payload  # noqa: E402
-from src.experiment.payload import resolve_size_for_kind  # noqa: E402
+                                   RampCfg,
+                                   RequestRecord)
+from src.experiment.architecture import TasArchitecture  # noqa: E402
+from src.experiment.wire import generate_payload as _generate_payload  # noqa: E402
+from src.experiment.wire import resolve_size_for_kind  # noqa: E402
 from src.experiment.services import SvcReq  # noqa: E402
 from src.io import load_method_cfg, load_profile  # noqa: E402
 
@@ -52,7 +52,7 @@ def _banner(s: str) -> None:
 
 
 async def _demo() -> None:
-    """*_demo()* spin up the launcher, send one request, show the InvocationRecord."""
+    """*_demo()* spin up the architecture, send one request, show the RequestRecord."""
     _cfg = load_profile(adaptation="baseline")
     _mcfg = load_method_cfg("experiment")
     # keep the ramp tiny; we send ONE request manually below so ramp config values do not really matter but must be present to satisfy validation
@@ -62,39 +62,39 @@ async def _demo() -> None:
                      "cascade": {"mode": "rolling",
                                  "threshold": 0.5, "window": 50}}
 
-    async with ExperimentLauncher(cfg=_cfg, method_cfg=_mcfg,
-                                  adaptation="baseline") as _lnc:
-        # ---- 1. show the client config the launcher would build ------
+    async with TasArchitecture(cfg=_cfg, method_cfg=_mcfg,
+                               adaptation="baseline") as _lnc:
+        # ---- 1. show the client config the architecture would build ------
         _banner("1. ClientCfg (seed, entry, kind weights, size-by-kind, ramp)")
         _seed = int(_mcfg["seed"])
         _sizes_by_kind = dict(_mcfg.get("request_size_bytes", {}))
         _client_cfg = ClientCfg(
             entry_service="TAS_{1}",
             seed=_seed,
-            request_size_bytes=int(_sizes_by_kind.get("analyse_request", 256)),
-            request_sizes_by_kind=_sizes_by_kind,
-            kind_weights=dict(_lnc.kind_weights),
-            ramp=RampCfg(min_samples_per_kind=32,
-                         max_probe_window_s=5.0,
+            req_size_b=int(_sizes_by_kind.get("analyse_request", 256)),
+            req_sizes_by_kind=_sizes_by_kind,
+            kind_prob=dict(_lnc.kind_prob),
+            ramp=RampCfg(min_n_per_kind=32,
+                         max_probe_s=5.0,
                          rates=[2.0],
                          cascade=CascadeCfg()),
         )
         print(f"  seed            = {_client_cfg.seed}")
         print(f"  entry_service   = {_client_cfg.entry_service!r}")
-        print(f"  kind_weights    = {_client_cfg.kind_weights}")
-        print(f"  sizes_by_kind   = {_client_cfg.request_sizes_by_kind}")
-        print(f"  fallback size   = {_client_cfg.request_size_bytes} bytes")
+        print(f"  kind_prob          = {_client_cfg.kind_prob}")
+        print(f"  sizes_by_kind   = {_client_cfg.req_sizes_by_kind}")
+        print(f"  fallback size   = {_client_cfg.req_size_b} bytes")
         print(f"  ramp rates      = {_client_cfg.ramp.rates}")
 
         _sim = ClientSimulator(_lnc.client, _lnc.registry, _client_cfg)
-        print(f"  picked kind (deterministic) = {_sim._pick_kind()!r}")
+        print(f"  picked kind (deterministic) = {_sim.driver._pick_kind()!r}")
 
-        # ---- 2. show how _send_one would build + send a request ------
+        # ---- 2. show how RequestSender would build + send a request ------
         _banner("2. build one SvcReq (kind + real ASCII payload)")
         # route a medical request into the TAS mesh
         _kind = "TAS_{2}"
-        _size = resolve_size_for_kind(_client_cfg.request_sizes_by_kind, _kind,
-                                      default=_client_cfg.request_size_bytes)
+        _size = resolve_size_for_kind(_client_cfg.req_sizes_by_kind, _kind,
+                                      default=_client_cfg.req_size_b)
         _payload = _generate_payload(_kind, _size,
                                      rng=random.Random(_seed))
         _req = SvcReq(req_id=str(uuid.uuid4()),
@@ -126,12 +126,12 @@ async def _demo() -> None:
         except httpx.HTTPStatusError as _exc:
             print(f"  HTTP error: {_exc}")
 
-        # ---- 4. the client-side InvocationRecord shape ----
-        # No second HTTP send; we construct the record directly from step 3's response. Calling `_sim._send_one()` here would fire another request through the mesh and this demo is meant to terminate quickly; the record shape is the interesting thing.
-        _banner("4. what an InvocationRecord would look like post-send")
+        # ---- 4. the client-side RequestRecord shape ----
+        # No second HTTP send; we construct the record directly from step 3's response. Calling `_sim.sender.send_one()` here would fire another request through the mesh and this demo is meant to terminate quickly; the record shape is the interesting thing.
+        _banner("4. what a RequestRecord would look like post-send")
         _body = _r.json()
-        _rec = InvocationRecord(
-            request_id=_req.req_id,
+        _rec = RequestRecord(
+            req_id=_req.req_id,
             kind=_req.kind,
             size_bytes=_req.size_bytes,
             # placeholder: 10 ms before now
@@ -140,7 +140,7 @@ async def _demo() -> None:
             status_code=_r.status_code,
             success=bool(_body.get("success", False)),
         )
-        print(f"  request_id       = {_rec.request_id}")
+        print(f"  req_id           = {_rec.req_id}")
         print(f"  kind             = {_rec.kind!r}")
         print(f"  size_bytes       = {_rec.size_bytes}")
         print(f"  response_time_s  = {_rec.response_time_s:.6f}")
@@ -151,9 +151,9 @@ async def _demo() -> None:
 
         # ---- 5. graceful shutdown trace ----
         _banner("5. shutting down")
-        print("  stopping ExperimentLauncher context manager...")
+        print("  stopping TasArchitecture context manager...")
 
-    # once the launcher's __aexit__ returns (client aclose + transport aclose), we're back at the async-fn top level with nothing left to do except print the farewell banner
+    # once the architecture's __aexit__ returns (client aclose + transport aclose), we're back at the async-fn top level with nothing left to do except print the farewell banner
     _banner("demo complete; exiting")
     print("  ok")
 

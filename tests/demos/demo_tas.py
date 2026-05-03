@@ -12,7 +12,7 @@ through `httpx.ASGITransport`; no launcher, no uvicorn, no ports.
 
 Three sections, one per behaviour:
 
-    1. Kind-dispatch entry: the client's `kind` selects the target at TAS_{1} via `kind_to_target`.
+    1. Kind-dispatch entry: the client's `kind` selects the target at TAS_{1} via `kind_to_tgt`.
     2. In-process hops: TAS_{1} -> TAS_{2} -> TAS_{3}; every visited member logs exactly one row.
     3. External-forward boundary: the closure fires iff the target is NOT a TAS member.
 
