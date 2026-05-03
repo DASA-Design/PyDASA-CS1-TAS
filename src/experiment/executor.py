@@ -39,14 +39,14 @@ from src.io import ArtifactSpec, NetCfg, load_client_cfg
 def _resolve_rates(cfg: NetCfg,
                    ramp_block: Dict[str, Any]
                    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """*_resolve_rates()* expand `rho_grid` into explicit `rates` via the Jackson solver; pure passthrough when the key is absent.
+    """*_resolve_rates()* expand `rho_grid` (Jackson inversion) or `anchor: "lambda_z"` (read entry artifact) into explicit `rates`; pure passthrough when neither key is set.
 
     Args:
         cfg (NetCfg): resolved profile + scenario.
         ramp_block (Dict[str, Any]): the `method_cfg["ramp"]` block.
 
     Returns:
-        Tuple[Dict[str, Any], List[Dict[str, Any]]]: ramp block with `rates` filled in and `rho_grid` stripped; per-point `(rho_target, lambda_z_inverted, bottleneck_artifact_idx)` metadata, empty when no expansion happened.
+        Tuple[Dict[str, Any], List[Dict[str, Any]]]: ramp block with `rates` filled in (`rho_grid` / `anchor` / `entry_artifact` stripped); per-point metadata, empty when no expansion happened.
     """
     _block = dict(ramp_block)
     _meta: List[Dict[str, Any]] = []
@@ -60,7 +60,36 @@ def _resolve_rates(cfg: NetCfg,
              "bottleneck_artifact_idx": int(_b)}
             for (_r, _lz, _b) in _grid
         ]
+    elif _block.get("anchor") == "lambda_z":
+        _entry = str(_block.get("entry_artifact", "TAS_{1}"))
+        _lam_z = _read_artifact_lambda_z(cfg, _entry)
+        _block["rates"] = [_lam_z]
+        _block.pop("anchor", None)
+        _block.pop("entry_artifact", None)
+        _meta = [{"anchor": "lambda_z",
+                  "entry_artifact": _entry,
+                  "lambda_z_used": _lam_z}]
     return _block, _meta
+
+
+def _read_artifact_lambda_z(cfg: NetCfg, entry: str) -> float:
+    """*_read_artifact_lambda_z()* seeded external arrival rate of one entry artifact.
+
+    Args:
+        cfg (NetCfg): resolved profile + scenario.
+        entry (str): artifact key (e.g. ``"TAS_{1}"``).
+
+    Returns:
+        float: `lambda_z` in req/s.
+
+    Raises:
+        KeyError: when `entry` is not present in `cfg.artifacts`.
+    """
+    for _a in cfg.artifacts:
+        if _a.key == entry:
+            return float(_a.lambda_z)
+    _msg = f"entry artifact {entry!r} not in cfg.artifacts"
+    raise KeyError(_msg)
 
 
 def _build_client_cfg(method_cfg: Dict[str, Any],
