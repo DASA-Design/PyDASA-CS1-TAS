@@ -4,6 +4,38 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-05-06 — Cleaning sweep: experiment / calibration build retired into `__OLD__/`
+
+Cross-cutting archive sweep that clears the slate before the next major refactor (the new software-architecture experiment). Plan-of-record at [`log/cleaning.md`](cleaning.md); memory entry at [`memory/project_cleaning_sweep_2026_05_06.md`](../../C:/Users/Felipe/.claude/projects/c--Users-Felipe-OneDrive-Documents-GitHub-DASA-Design-PyDASA-CS1-TAS/memory/project_cleaning_sweep_2026_05_06.md).
+
+**Phase 1 — archive sweep (filesystem-only; `__OLD__/` is gitignored):**
+
+- **Notebooks**: `00-calibration.ipynb`, `05-experimental.ipynb` → `__OLD__/`. Surviving root notebooks: `01-04`.
+- **Source**: `src/{calibration,experiment,scripts}/`, `src/methods/{calibration,experiment}.py`, `src/dimensional/{dasa_sweep,dasaprof}.py`, `src/io/tooling.py`, `src/view/characterization.py` → `__OLD__/`. Fresh `__init__.py` written for `src/{methods,dimensional,io}/` (drop archived re-exports). `src/view/__init__.py` edited in place to drop the three `plot_calib_*` re-exports.
+- **Tests**: `tests/{calibration,experiment,scripts,demos}/`, `tests/methods/test_{calibration,experiment}.py`, `tests/dimensional/test_{dasa_sweep,dasaprof}.py`, `tests/io/test_tooling.py`, `tests/utils/helpers.py` → `__OLD__/`.
+- **Notes**: 7 files (`calibration.md`, `commands.md`, `prototype.md`, `prototype-constraints.md`, `prototype-v2.md`, `soa-refactor.md`, `workflow.md`) → `__OLD__/notes/`. `notes/devlog.md` → `log/devlog.md` (true move; this file).
+- **Data**: `data/config/method/{experiment,calibration}.json`, `data/results/{experiment,calibration}/`, `data/img/experiment/` → `__OLD__/`.
+- **`pyproject.toml`**: dropped the orphan `live_mesh` pytest marker (every consumer archived).
+- **Stop-gate**: `pytest tests/ -q` = **180 passed in 209 s** on the surviving subset.
+
+**Phase 2 — reorganise surviving surface:**
+
+- **`README.md`** rewritten short (~58 lines, was 262) by folding `notes/SUMMARY.md` + `notes/quickstart.md` (both deleted, content carried forward).
+- **`notes/case-study.md`** new (~129 lines) by folding `notes/objective.md` + `notes/context.md` (both deleted, content carried forward; cross-source inconsistency table left at `__OLD__/notes/context.md`).
+- **`notes/procedure.md`** + **`notes/prototype.md`** scaffolded as design-doc skeletons for the new build.
+- **`CLAUDE.md`** rewritten leaner (213 lines, was huge): kept style / coding / notebook / view / testing / commit conventions + PyDASA notes + Migration-from-`__OLD__/` section; dropped calibration / experiment / `dpl` / scripts / async-ctxmgr blocks.
+- **`memory/MEMORY.md`** index updated with the cleaning entry on top + a one-line warning that older entries reference paths now under `__OLD__/`.
+- **`src/experimental/`** (`__init__.py` + empty `procedure/` + `prototype/`) is the new build's scaffold; left in place untouched.
+
+**Decisions resolved during the sweep** (full table in `log/cleaning.md`):
+
+- `data/config/method/calibration.json` archived alongside `experiment.json` (symmetric with `src/methods/calibration.py`).
+- `assets/docs/architecture_experimentation.md` + `assets/docs/operational_analysis.md` left in place (still useful reference; recover from history if archive is later preferred).
+- Empty scaffolds `log/prototype.md` + `log/procedure.md` deleted (the new `notes/prototype.md` + `notes/procedure.md` are blank-slate writes).
+- Commit shape: user committed manually after Phase 1; Phase 2 staged for the next commit.
+
+**Why a clean slate**: the prior FastAPI-mesh experiment build had landed two large refactors in the past month (prototype-v2 reshuffle + calibration C0-C11). Methodological audit identified the `dpl="localhost"` MockTransport as monolithic-pretending-to-be-SOA; the SOA refactor (Phase A2-A9 + Phase B) was queued to fix that. Rather than continue stacking refactors on top, retire the build into `__OLD__/` and rebuild the experiment from scratch under `src/experimental/` with the methodology constraints learnt from the previous build. The case study (`notes/case-study.md`), the surviving methods (analytic, stochastic, dimensional), and the conventions stay; the apparatus is the part being reset.
+
 ## 2026-05-06 — Calibration refactor CLOSED; C9b + C10 + C11 landed
 
 Closed the 11-stage calibration refactor opened 2026-05-03 evening. `src/methods/calibration.py` shrunk **2640 → 844 lines** (68%); the architectural-conformance findings (PyDASA pipeline duplication, dim-card-in-orchestrator-layer, multi-combo sweep in `methods/`) all resolved by relocation alone. The calibration package now follows the methodology layering: precondition-gate building blocks under `src/calibration/`, model artefact under `src/dimensional/`, thin orchestrator under `src/methods/`. Closure record at [notes/calibration.md](calibration.md); per-stage outcome at [memory/project_calibration_refactor_closed_2026_05_06.md](../C:/Users/Felipe/.claude/projects/c--Users-Felipe-OneDrive-Documents-GitHub-DASA-Design-PyDASA-CS1-TAS/memory/project_calibration_refactor_closed_2026_05_06.md).
