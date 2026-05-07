@@ -48,9 +48,12 @@ def _make_envelope(*, loopback_median_us: float = 2048.1,
 @pytest.fixture
 def _isolated_calib_dir(monkeypatch: pytest.MonkeyPatch,  # pyright: ignore[reportUnusedFunction]
                         tmp_path: Path) -> Path:
-    """*_isolated_calib_dir()* redirect `tooling._CALIB_DIR` to a tmp path so every test starts with a clean slate."""
-    _dir = tmp_path / "calibration"
+    """*_isolated_calib_dir()* redirect `tooling._CALIB_ROOT` (and the legacy `_CALIB_DIR` alias) to a tmp path so every test starts with a clean slate. Returns the per-`dpl` subdirectory matching the default deployment so existing tests that drop files at the returned path keep working."""
+    _root = tmp_path / "calibration"
+    _root.mkdir()
+    _dir = _root / cal._DEFAULT_CALIB_DPL
     _dir.mkdir()
+    monkeypatch.setattr(cal, "_CALIB_ROOT", _root)
     monkeypatch.setattr(cal, "_CALIB_DIR", _dir)
     return _dir
 

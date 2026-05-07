@@ -124,7 +124,8 @@ class TestRunRateSweepOrchestration:
             assert "payload_size_bytes" in kwargs
             return _trials_returned
 
-        monkeypatch.setattr(cal, "_run_rate_sweep_async", _fake_async_runner)
+        monkeypatch.setattr("src.calibration.rate._run_rate_sweep_async",
+                            _fake_async_runner)
 
         _out = cal.run_rate_sweep(
             rates=(100.0, 200.0),
@@ -313,7 +314,8 @@ class TestCalibSweepDriver:
         """*_stub_drive()* monkeypatch `_drive_one_combo` so tests skip the real uvicorn lifecycle."""
         async def _fake(**_kwargs: Any) -> Dict[str, Dict[str, float]]:
             return _fake_handler_scaling(n_levels=n_levels)
-        monkeypatch.setattr(cal, "_drive_one_combo", _fake)
+        monkeypatch.setattr("src.dimensional.dasa_sweep._drive_one_combo",
+                            _fake)
 
     def test_resolve_mu_anchor_explicit_value(self) -> None:
         """*test_resolve_mu_anchor_explicit_value()* `mu_anchor_req_per_s` short-circuits the loopback derivation; source tagged `"explicit"`."""
@@ -420,8 +422,10 @@ class TestCalibSweepDriver:
             def shutdown(self) -> None:
                 pass
 
-        monkeypatch.setattr(cal, "_drive_lambda_step", _fake_step)
-        monkeypatch.setattr(cal, "_UvicornThread", _FakeServer)
+        monkeypatch.setattr("src.dimensional.dasa_sweep._drive_lambda_step",
+                            _fake_step)
+        monkeypatch.setattr("src.dimensional.dasa_sweep.UvicornThread",
+                            _FakeServer)
 
         _grid = self._grid(
             mu_factor=[2.0], c=[4], K=[200],
@@ -456,19 +460,20 @@ class TestCalibSweepEnvelope:
             self,
             monkeypatch: pytest.MonkeyPatch,
             tmp_path: Any) -> None:
-        """*test_writes_envelope_when_write_true()* the per-host sweep envelope lands at `<host>_<ts>_sweep.json` under `data/results/experiment/calibration/`."""
+        """*test_writes_envelope_when_write_true()* the per-host sweep envelope lands at `<host>_<ts>_sweep.json` under `data/results/calibration/localhost/`."""
 
         async def _fake(**_kwargs: Any) -> Dict[str, Dict[str, float]]:
             return _fake_handler_scaling()
 
-        monkeypatch.setattr(cal, "_drive_one_combo", _fake)
-        # redirect output to tmp_path so the test does not pollute real results dir
-        monkeypatch.setattr(cal, "_CALIB_DIR", tmp_path)
+        monkeypatch.setattr("src.dimensional.dasa_sweep._drive_one_combo",
+                            _fake)
+        # redirect output to tmp_path so the test does not pollute the real results dir; per-`dpl` subdir is `localhost` for the legacy path
+        monkeypatch.setattr("src.dimensional.dasa_sweep._CALIB_ROOT", tmp_path)
         cal.run_calib_sweep(
             self._envelope(),
             sweep_grid=self._grid(),
             write=True, verbose=False)
-        _matches = list(tmp_path.glob("test-host_*_sweep.json"))
+        _matches = list((tmp_path / "localhost").glob("test-host_*_sweep.json"))
         assert len(_matches) == 1, f"expected one sweep.json, got {_matches}"
 
     def test_envelope_carries_grid_and_combos(
@@ -480,13 +485,14 @@ class TestCalibSweepEnvelope:
         async def _fake(**_kwargs: Any) -> Dict[str, Dict[str, float]]:
             return _fake_handler_scaling()
 
-        monkeypatch.setattr(cal, "_drive_one_combo", _fake)
-        monkeypatch.setattr(cal, "_CALIB_DIR", tmp_path)
+        monkeypatch.setattr("src.dimensional.dasa_sweep._drive_one_combo",
+                            _fake)
+        monkeypatch.setattr("src.dimensional.dasa_sweep._CALIB_ROOT", tmp_path)
         cal.run_calib_sweep(
             self._envelope(),
             sweep_grid=self._grid(),
             write=True, verbose=False)
-        _path = next(tmp_path.glob("test-host_*_sweep.json"))
+        _path = next((tmp_path / "localhost").glob("test-host_*_sweep.json"))
         _payload = json.loads(_path.read_text(encoding="utf-8"))
         for _key in ("host_profile", "mu_anchor_req_per_s",
                      "mu_anchor_source", "sweep_grid",

@@ -32,31 +32,37 @@ from typing import Any, Dict, List, Optional
 from src.experiment.client.config import CascadeCfg, ClientCfg, RampCfg
 
 
-_CALIB_DIR = (Path(__file__).resolve().parents[2] / "data" / "results" / "experiment" / "calibration")
+_CALIB_ROOT = (Path(__file__).resolve().parents[2] / "data" / "results" / "calibration")
+# default `dpl` when the gate caller doesn't pass one; matches the legacy single-mode behaviour where every envelope was an in-process `UvicornThread` loopback run
+_DEFAULT_CALIB_DPL = "localhost"
+# legacy single-dir constant retained for back-compat; now resolves to the per-`dpl` subdir of the default deployment
+_CALIB_DIR = _CALIB_ROOT / _DEFAULT_CALIB_DPL
 
 
-def find_latest_calibration(host: Optional[str] = None) -> Optional[Path]:
-    """*find_latest_calibration()* return the newest calibration JSON path for `host`.
+def find_latest_calibration(host: Optional[str] = None,
+                            dpl: str = _DEFAULT_CALIB_DPL) -> Optional[Path]:
+    """*find_latest_calibration()* return the newest calibration JSON path for `(host, dpl)`.
 
-    Calibration envelopes are written to `data/results/experiment/calibration/<hostname>_<YYYYMMDD_HHMMSS>.json`. When `host` is `None`, the current host's name (`socket.gethostname()`) is used; calibrations written on other machines are skipped so a local run never picks up a file from a different hardware profile.
+    Calibration envelopes live at `data/results/calibration/<dpl>/<hostname>_<YYYYMMDD_HHMMSS>.json` (path locked by Q-B of the calibration refactor; previously sat under `data/results/experiment/calibration/` until 2026-05-04 migration). When `host` is `None`, the current host's name (`socket.gethostname()`) is used; calibrations written on other machines are skipped so a local run never picks up a file from a different hardware profile. When `dpl` is omitted, defaults to `"localhost"` for backward-compat.
 
     Args:
         host (Optional[str]): hostname prefix to match; defaults to `socket.gethostname()`.
+        dpl (str): deployment-axis subdir; one of `"localhost"`, `"multiprocess"`. Defaults to `"localhost"`.
 
     Returns:
         Optional[Path]: newest matching path, or `None` when the directory is absent or empty.
     """
-    if not _CALIB_DIR.exists():
+    _dir = _CALIB_ROOT / dpl
+    if not _dir.exists():
         return None
     if host is None:
         _host = socket.gethostname()
     else:
         _host = str(host)
-    # match the `<hostname>_<YYYYMMDD_HHMMSS>.json` shape `src.methods.calibration.run` writes
     _host_norm = _host.replace(" ", "-")
     _prefix = f"{_host_norm}_"
     _candidates: List[Path] = []
-    for _p in _CALIB_DIR.glob("*.json"):
+    for _p in _dir.glob("*.json"):
         if _p.name.startswith(_prefix):
             _candidates.append(_p)
     if not _candidates:
@@ -65,11 +71,14 @@ def find_latest_calibration(host: Optional[str] = None) -> Optional[Path]:
     return _candidates[-1]
 
 
-def load_latest_calibration(host: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """*load_latest_calibration()* parse and return the newest calibration envelope for `host`.
+def load_latest_calibration(host: Optional[str] = None,
+                            dpl: str = _DEFAULT_CALIB_DPL
+                            ) -> Optional[Dict[str, Any]]:
+    """*load_latest_calibration()* parse and return the newest calibration envelope for `(host, dpl)`.
 
     Args:
         host (Optional[str]): hostname prefix to match; defaults to `socket.gethostname()`.
+        dpl (str): deployment-axis subdir; defaults to `"localhost"`.
 
     Returns:
         Optional[Dict[str, Any]]: parsed envelope with an extra `output_path` key, or `None` when no matching file exists.
@@ -78,7 +87,7 @@ def load_latest_calibration(host: Optional[str] = None) -> Optional[Dict[str, An
         json.JSONDecodeError: when the on-disk calibration JSON is malformed (the file resolved fine but the contents do not parse).
         OSError: on filesystem failure while opening the resolved path.
     """
-    _path = find_latest_calibration(host=host)
+    _path = find_latest_calibration(host=host, dpl=dpl)
     if _path is None:
         return None
     with _path.open(encoding="utf-8") as _fh:

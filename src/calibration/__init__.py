@@ -13,11 +13,15 @@ Public API (populated as Stages C3-C7 land):
     - `stats_from_us_array(arr)`, `stats_from_us_status_pairs(pairs)`: canonical stats helpers reused by the probes.
     - `run_rate_sweep(rates, ...)`, `find_highest_sustainable_rate(aggregates, threshold)`, `batch_size_for(rate)`: rate-saturation discovery against the standalone vernier.
     - `run_handler_stability_sweep(n_con_usr, c_grid, ...)`, `aggregate_stability_cell(trials, metric)`, `select_c_per_n_con_usr(cells, ...)`: 2D `(n_con_usr × c)` apparatus self-consistency probe.
+    - `HostSweepGrid`, `DasaSweepGrid`, `SweepController`: composition layer that runs the full host-floor envelope per `dpl` and (post-C8) attaches the Route-B dimensional card.
 """
 from src.calibration.conditionals import (StopConditions,
                                           loopback_two_trial_ok,
                                           should_stop,
                                           should_stop_detailed)
+from src.calibration.controller import (DasaSweepGrid,
+                                        HostSweepGrid,
+                                        SweepController)
 from src.calibration.envelope import (find_latest,
                                       load_latest,
                                       output_path,
@@ -37,7 +41,10 @@ from src.calibration.stability import (aggregate_stability_cell,
                                        select_c_per_n_con_usr)
 
 __all__ = [
+    "DasaSweepGrid",
+    "HostSweepGrid",
     "StopConditions",
+    "SweepController",
     "aggregate_stability_cell",
     "batch_size_for",
     "find_highest_sustainable_rate",

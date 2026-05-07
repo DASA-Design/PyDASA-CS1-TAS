@@ -5,6 +5,8 @@ This subpackage is intentionally thin: PyDASA does the math, these modules provi
 """
 
 from src.dimensional.coefficients import derive_coefs
+from src.dimensional.dasa_sweep import run_calib_sweep
+from src.dimensional.dasaprof import derive_calib_coefs
 from src.dimensional.engine import build_engine
 from src.dimensional.networks import (sweep_arch,
                                       sweep_artifact,
@@ -27,8 +29,10 @@ __all__ = [
     "compute_coefs_delta",
     "coefs_to_net",
     "coefs_to_nodes",
+    "derive_calib_coefs",
     "derive_coefs",
     "compute_net_delta",
+    "run_calib_sweep",
     "sweep_arch",
     "sweep_artifact",
     "sweep_artifacts",
