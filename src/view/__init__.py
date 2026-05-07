@@ -4,7 +4,6 @@
 Four-module split (live since 2026-04-27):
 
     - `common.py`            shared design-contract primitives + family-private helpers
-    - `characterization.py`  calibration plotters (per-host noise-floor envelope)
     - `charter.py`           yoly coefficient charts (theta, sigma, eta, phi)
     - `diagrams.py`          queueing topology + per-node heatmaps + architecture bars
 
@@ -25,12 +24,6 @@ from src.view.common import (
     render_footer_legend,
     render_footer_summary,
     render_footer_table,
-)
-# calibration family
-from src.view.characterization import (
-    plot_calib_dashboard,
-    plot_calib_handler_scaling,
-    plot_calib_rate_sweep,
 )
 # yoly family
 from src.view.charter import (
@@ -67,9 +60,6 @@ __all__ = [
     # public plotters (family-prefixed)
     "plot_arch_bars",
     "plot_arch_delta",
-    "plot_calib_dashboard",
-    "plot_calib_handler_scaling",
-    "plot_calib_rate_sweep",
     "plot_dim_topology",
     "plot_node_ci",
     "plot_node_diffmap",
