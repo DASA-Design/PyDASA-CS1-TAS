@@ -4,6 +4,490 @@ Running log of design decisions, pivots, and open questions for the Tele Assista
 
 ---
 
+## 2026-05-06 — Calibration refactor CLOSED; C9b + C10 + C11 landed
+
+Closed the 11-stage calibration refactor opened 2026-05-03 evening. `src/methods/calibration.py` shrunk **2640 → 844 lines** (68%); the architectural-conformance findings (PyDASA pipeline duplication, dim-card-in-orchestrator-layer, multi-combo sweep in `methods/`) all resolved by relocation alone. The calibration package now follows the methodology layering: precondition-gate building blocks under `src/calibration/`, model artefact under `src/dimensional/`, thin orchestrator under `src/methods/`. Closure record at [notes/calibration.md](calibration.md); per-stage outcome at [memory/project_calibration_refactor_closed_2026_05_06.md](../C:/Users/Felipe/.claude/projects/c--Users-Felipe-OneDrive-Documents-GitHub-DASA-Design-PyDASA-CS1-TAS/memory/project_calibration_refactor_closed_2026_05_06.md).
+
+**C9b-Phase 1** [src/dimensional/dasa_sweep.py](../src/dimensional/dasa_sweep.py) — new home for `run_calib_sweep` + helpers (`_drive_one_combo`, `_resolve_mu_anchor`, `_resolve_sweep_grid`, `_build_sweep_output_path`). The sweep is the multi-combo `(c, K, mu_factor)` dimensional sensitivity probe over a calibrated mu anchor — it's a dimensional-card sweep, not an orchestrator concern, so it lives next to `dasaprof.py`. Cross-imports `_drive_lambda_step` + `_post_one` from `src/calibration/rate.py` (the lambda-stepping engine stays in the rate module; `dasa_sweep` is the multi-combo composition that feeds rate stepping per `(c, K, mu_factor)` cell). 11 tests covering the mu-anchor table (4 paths: explicit / loopback / unknown / zero-degenerate), sweep-grid resolution (explicit / fallback to JSON), output-path shape (host normalisation, `_sweep` filename suffix, per-`dpl` subdir), and `run_calib_sweep` empty-input early-returns.
+
+**C9b-Phase 2** [src/methods/calibration.py](../src/methods/calibration.py) rewritten from scratch — kept `run()` + CLI `main()` + `_run_async_probes` + zombie cleanup + path helpers; everything else removed. Re-export aliases at module top preserve the public + test-private surface (`run`, `derive_calib_coefs`, `run_rate_sweep`, `run_calib_sweep`, `run_handler_stability_sweep` + 6 underscore symbols `_aggregate_rate_trials / _batch_size_for / _find_highest_sustainable_rate / _parse_rates / _resolve_mu_anchor / _CALIB_DIM_TAG`) so existing notebook + CLI + experiment-method gate continue to work without code changes. **8 monkeypatch sites in `tests/methods/test_calibration.py` retargeted** to string-path form (`monkeypatch.setattr("src.dimensional.dasa_sweep._drive_one_combo", ...)`) since attribute-form patches now hit the orchestrator's namespace, not the new module's binding. 11/11 retargeted tests pass in 1:49.
+
+**C10 notebook** [00-calibration.ipynb](../00-calibration.ipynb) — cell-1 imports updated to use new package locations directly: `from src.dimensional import derive_calib_coefs, run_calib_sweep`; `run` stays imported from `src.methods.calibration` (orchestrator). 25 cells; JSON valid; all 5 callables resolve to expected modules (verified: `derive_calib_coefs source: src.dimensional.dasaprof`, `run_calib_sweep source: src.dimensional.dasa_sweep`, `run source: src.methods.calibration`).
+
+**C11 final docs pass** — [notes/calibration.md](calibration.md) marked "REFACTOR CLOSED" with all 11 stage rows showing ✅ DONE; CLAUDE.md "Calibration" callout rewritten from "refactor in progress" to a closed-state callout with the 13-row module-map table; MEMORY.md top entry replaced with the closure record `project_calibration_refactor_closed_2026_05_06.md`.
+
+**Decision-log items**:
+- Picked option (a) for C9b — built `src/dimensional/dasa_sweep.py` as new home rather than accepting a ~1400-line orchestrator. The 844-line final shape on `src/methods/calibration.py` undershoots the ~250-line target stated in the original plan; the gap is path helpers + `_run_async_probes` + zombie cleanup that legitimately belong in the orchestrator (they wire CLI args + stop conditions to the `SweepController`, which is the orchestrator's job).
+- Re-export aliases vs full test rewrite: chose re-export aliases at module top so the existing 6 underscore-private test-symbol references survive without touching test bodies; the price is one extra layer of indirection from caller to implementation. Pinned in `notes/calibration.md` as "test-private-symbol re-export pattern".
+- Monkeypatch retargeting via string-path: tests using `monkeypatch.setattr(cal, "_X", ...)` no longer affect the new package's bindings (they patch the orchestrator's namespace, not the new module's binding). Fix: use the string-path form `monkeypatch.setattr("src.dimensional.dasa_sweep._X", ...)` to patch where the function is actually looked up. Future cleanup deferred: replace these with public injectable hooks on `SweepController`.
+
+**Validation**: 102 tests passing in fast scope (29s — `tests/calibration/` + `tests/dimensional/` + `tests/io/test_tooling.py`); 11 monkeypatch-retargeted tests passing in 1:49 (`tests/methods/test_calibration.py`); legacy 386-pass `tests/{experiment,methods,io,scripts}/` baseline unaffected. Smoke check: `from src.dimensional import derive_calib_coefs, run_calib_sweep` resolves; `from src.methods.calibration import run` resolves through re-export.
+
+**Followups deferred**:
+- `tests/methods/test_calibration.py` reaches into private symbols of the new package via string-path monkeypatch. Future cleanup: replace with public injectable hooks on `SweepController`.
+- `run_async_safe` is annotated `-> Dict[str, Any]`; three call sites use `cast(...)` to recover concrete types. Long-term fix: make `run_async_safe` generic via TypeVar in `src/experiment/runtime/async_loop.py` so the casts collapse.
+- IMG path `data/img/experiment/calibration/` not migrated (only RESULTS path moved per Q-B). Move to `data/img/calibration/` for symmetry as a separate decision.
+- `controller.yoly_dataframe()` API not yet implemented; notebook's yoly chart cell still calls `derive_calib_coefs` directly.
+
+**Successor task**: SOA Phase A Stages A2-A9 per `notes/soa-refactor.md`. The three building blocks calibration delivered (`UvicornProcess`, `make_gauge_factory`, per-`dpl` envelope writer) are exactly what Phase A's experiment mesh needs. Confirm with user before starting A2 — it's a substantial new piece of work that warrants explicit signoff.
+
+---
+
+## 2026-05-06 — pyproject.toml landed; root conftest.py deleted
+
+Closed the long-standing TODO from the 2026-04-18 conftest.py decision. Created `pyproject.toml` at repo root carrying `[tool.pytest.ini_options]` only (`pythonpath = ["."]` for `from src.* import ...` resolution + `markers = ["live_mesh: ..."]` for the custom marker registration). Deleted root `conftest.py`. `tests/conftest.py` is untouched and still owns the shared PyDASA fixtures (`method_cfg`, `dflt_profile`, `opti_profile`, `schema`, `tas1_vars`, `engine_bare`, `engine_ready`, `sensitivity_results`).
+
+**Decision-log items**:
+- Kept the file minimal: no `[build-system]` or `[project]` block. This repo is a case-study deliverable (notebooks + figures + metrics), not a distributable wheel; adding a build system would invite scope creep with no consumer.
+- The `live_mesh` marker registration moved verbatim from the deleted `conftest.py::pytest_configure` hook. The marker description was reaffirmed during the swap: it covers any test that spins up a real FastAPI mesh (`UvicornThread` in-process, `UvicornProcess` out-of-process, or multi-trial sweeps over either). It names the mesh-spin-up cost axis, not the process-distribution axis — multiprocess is a strict subset, not a synonym.
+
+**Verification**: `pytest --collect-only -q` collected **640 tests** post-swap; `pytest tests/utils/` (3 passed in 0.10s) confirms the path resolution; `pytest tests/dimensional/` (92 passed in 91s) confirms the session/module-scoped fixtures from `tests/conftest.py` still resolve. No unknown-marker warnings.
+
+**Pickup**: when ruff / mypy / hatchling config lands later, extend the existing `pyproject.toml` rather than spawning a sibling `ruff.toml` / `setup.cfg`. If a new pytest marker is introduced (e.g. a multiprocess-only `live_mesh_mp` subset), register it in the `markers` list.
+
+---
+
+## 2026-05-04 — Calibration refactor C8 + C9a closed; C9b paused for scoping decision
+
+**C8 (`src/dimensional/dasaprof.py`)**: relocated `derive_calib_coefs` + its helper stack (`_build_calib_observables`, `_calib_var_sym`, `_build_calib_vars`, `_run_calib_pipeline`) from `src/methods/calibration.py` to a new `src/dimensional/dasaprof.py`, re-exported from `src/dimensional/__init__.py`. The pipeline already called `src.dimensional.build_engine` + `build_schema`; the C8 deliverable was the layering fix (move DOWN from `methods/` orchestrator to `dimensional/` model-artefact). Honest call: the canonical `src/dimensional/coefficients.py::derive_coefs` is shaped for TAS-architecture Pi-indexed specs and CANNOT directly serve calibration's standalone-artifact variable set, so the two paths legitimately stay siblings: `derive_coefs` (TAS, Pi-indexed) + `derive_calib_coefs` (calibration, base-variable expressions). Both correctly live under `src/dimensional/`. Byte-identical regression: 3 tests in `tests/dimensional/test_dasaprof.py` (single-K zero-payload, multi-K with 128 kB payload, custom subscript tag) all green; the new path produces identical output to the legacy `src/methods/calibration.py::derive_calib_coefs` for the same envelope inputs.
+
+**C9a (path migration)**: 51 on-disk JSONs migrated from `data/results/experiment/calibration/` to `data/results/calibration/localhost/` via a single `mv`. Updated `src/io/tooling.py::_CALIB_DIR` to `data/results/calibration/<dpl>/` (with new `_CALIB_ROOT` constant + new `dpl` parameter on `find_latest_calibration` / `load_latest_calibration`, defaulting to `"localhost"` for back-compat). Updated `src/methods/calibration.py::_CALIB_DIR` to match. Fixture `tests/io/test_tooling.py::_isolated_calib_dir` updated to monkeypatch `_CALIB_ROOT` (and the legacy `_CALIB_DIR` alias) so the per-`dpl` subdir resolution is exercised correctly. Stop-gate `pytest tests/calibration/ tests/dimensional/ tests/io/ tests/scripts/` = **136 passed in 40s**; broader run including `tests/methods/test_calibration.py` = **231 passed in 35:46** (3 of which were the byte-identical C8 regression tests). Smoke check: `find_latest_calibration(socket.gethostname())` resolves correctly to the migrated tree.
+
+**Decision-log items**:
+- C8: scope honesty. The architectural-conformance report flagged "PyDASA pipeline duplication" between `_run_calib_pipeline` and `derive_coefs`. Closer reading: `_run_calib_pipeline` already calls `build_engine` + `build_schema`; the only duplication is `pydasa.Coefficient(...)` construction, which is INTENTIONAL because the calibration variable set + FDU count differ from the TAS topology so Pi-group ordering shifts. Forcing calibration through `derive_coefs` would require either widening that API (out of scope) or maintaining a parallel calibration spec block in `dimensional.json` (schema duplication). The two paths legitimately stay siblings; the layering bug is fixed by relocation alone. Pinned in `notes/calibration.md`.
+- C9a: backward-compat strategy. `find_latest_calibration` and `load_latest_calibration` gained a `dpl` parameter rather than splitting into `find_latest_calibration_localhost` / `_multiprocess`. Default `"localhost"` keeps every existing call site working unchanged. The `experiment.py::_resolve_baseline` gate will pick up `dpl="multiprocess"` once the experiment runs in that mode (post SOA Phase A2).
+
+**C9b paused for scoping decision** (see `notes/calibration.md` "C9b scoping" section). Three options: (a) build `src/dimensional/dasa_sweep.py` to home `run_calib_sweep`, then methods/calibration.py truly shrinks to ~300 lines (recommended; closes the original 250-line target); (b) accept a ~1400-line orchestrator (faster but undersells the refactor); (c) aliases-only (cosmetic). Pickup: pick an option, then execute. Both old `src/methods/calibration.py` and the new `src/calibration/` package work end-to-end today, so there's no urgency.
+
+**Aggregate state at close**: 9 new src modules under `src/calibration/` + `src/dimensional/dasaprof.py`; **241 new tests across the calibration + dimensional packages, all green**; old `src/methods/calibration.py` (2640 lines) functional but contains duplicates that will be deleted in C9b once the home for `run_calib_sweep` is decided.
+
+---
+
+## 2026-05-03 (evening 4) — Calibration refactor Stages C0-C7 closed; paused before C8
+
+Long autonomous session executing the calibration refactor plan written in `notes/calibration.md`. Eight new modules under `src/calibration/` plus the `UvicornProcess` runtime extension; **113 new tests** across 8 source files, all green; full per-stage audit pass against `.claude/skills/develop/coding-conventions.md` + `.claude/skills/code/code-documentation.md`.
+
+**Stages closed**:
+
+- **C1** [src/experiment/runtime/uvicorn_process.py](../src/experiment/runtime/uvicorn_process.py) — `UvicornProcess` mirrors `UvicornThread` API but spawns `multiprocessing.Process` with picklable `app_factory`. Windows `spawn` semantics validated end-to-end against the gauge: factory pickles, child process re-imports the module, FastAPI app builds in the worker, `/healthz` answers 200. Doubles as SOA Phase A Stage A1. 8 tests; type-fix `Optional[mp_process.BaseProcess]` (pyright caught `SpawnProcess != mp.Process`); composition over inheritance (sibling-symmetry with `UvicornThread`'s `threading.Thread` subclassing decided against because `multiprocessing` is API-shaped for composition + we need explicit `spawn`-pinning for per-PID seed reproducibility).
+
+- **C2** [src/experiment/instances/gauge.py](../src/experiment/instances/gauge.py) — `make_gauge_factory(spec, payload_size_bytes)` returns a `functools.partial(build_gauge, spec, payload_size_bytes)`. Both `build_gauge` (module-scope) and `SvcSpec` (frozen dataclass over primitives) are picklable across the Windows spawn boundary, so the factory survives `multiprocessing.Process(target=worker, args=(factory, ...))`. The naming asymmetry vs `build_gauge` is intentional and signals the return-type distinction (FastAPI app vs `Callable[[], FastAPI]`). 10 tests including a live spawn-via-factory smoke.
+
+- **C3** [src/calibration/conditionals.py](../src/calibration/conditionals.py) — `StopConditions` frozen dataclass with locked-decision defaults (`rejection=5.0`, `phi=1.0`, `sigma=2.0`, `loopback_delta=5.0`); pure predicates `should_stop`, `should_stop_detailed` (returns provenance dict for envelope), `loopback_two_trial_ok`. 32 boundary tests covering rejection-strict-greater + phi-greater-or-equal + sigma-strict-greater semantics + multi-trip precedence + symmetric loopback delta + non-positive medians raise.
+
+- **C4** [src/calibration/envelope.py](../src/calibration/envelope.py) — per-`dpl` JSON I/O. `output_path / write_envelope / find_latest / load_latest`. Path shape `data/results/calibration/<dpl>/<host>_<YYYYMMDD_HHMMSS>.json` (Q-B locked: drops the `/experiment/` segment). Atomic write (temp + rename); host-prefix glob with space-to-hyphen normalisation; mtime ordering. **STILL PENDING** for C9: one-shot `mv` of the 47 existing JSONs from `data/results/experiment/calibration/` to the new path + `src/io/tooling.py::_CALIB_DIR` switch. 18 tests.
+
+- **C5** [src/calibration/hoststats.py](../src/calibration/hoststats.py) — host-floor probes `snapshot_host_profile / measure_timer / measure_jitter / measure_loopback / measure_handler_scaling` plus the canonical stats helpers `stats_from_us_array / stats_from_us_status_pairs` (renamed from leading-underscore now that they cross the package boundary). Lands ADDITIVELY: the duplicate code in `src/methods/calibration.py` stays untouched until C9. 11 tests (9 inline + 2 live_mesh).
+
+- **C6** [src/calibration/rate.py](../src/calibration/rate.py) + [stability.py](../src/calibration/stability.py) — rate-saturation discovery (`run_rate_sweep / find_highest_sustainable_rate / batch_size_for`) and apparatus self-consistency (`run_handler_stability_sweep / aggregate_stability_cell / select_c_per_n_con_usr`). Both use the new `make_gauge_factory` from C2 and `run_async_safe` from `src.experiment.runtime` for the sync→async bridge (replacing the old `_run_sweep_in_dedicated_loop` shim). Type-cast at the `run_async_safe` boundary in both modules (pyright: `run_async_safe -> Dict[str, Any]` widens; cast restores the concrete `Dict[float, ...]` shape so `.get(_rate, [])` and `.items()` type-check; long-term fix is to make `run_async_safe` generic via TypeVar, deferred to C9). 21 tests covering the pure helpers; full sweeps deferred behind `@pytest.mark.live_mesh`.
+
+- **C7** [src/calibration/controller.py](../src/calibration/controller.py) — composition layer. `HostSweepGrid` + `DasaSweepGrid` frozen dataclasses with `from_config` classmethods reading `calibration.json` partials (defaults match the JSON one-for-one). `SweepController` holds `host_grid` + `dasa_grid` + `stop` + `dpl`; `_spawn_gauge` branches on `dpl` between `UvicornThread` (localhost) and `UvicornProcess` (multiprocess); `run_host_sweep` composes timer + jitter + loopback + handler_scaling + optional rate_sweep + optional stability_sweep into one envelope; `run_dasa_sweep` accepts an injected `deriver` callable so the controller stays decoupled from `src/dimensional/` (Stage C8 will pass `deriver=derive_calib_coefs`). 13 tests including a live end-to-end host-sweep on `dpl="localhost"`.
+
+**Audit pass against both skills** for each new module: zero em-dashes, non-circular docstrings preserving Args/Returns/Raises, short `topic+outcome` test names (mapping ~28 → ~17 chars average), one-test-class-per-source-module, top-level imports only, callable-class for stateful mocks (none needed in this batch), `raise SomeError(_msg)` with extracted message. Three rounds of audit per the user's `/skills` request — every C1/C2/C3/C5/C6/C7 file pair revisited; the `_free_port` helper docstring linter-stomp surfaced and was restored. Lessons: the sibling pair (`UvicornThread` / `UvicornProcess`) and (`build_gauge` / `make_gauge_factory`) keep their style and structure in lockstep; `make_*` vs `build_*` is a load-bearing distinction (return-type marker), not a naming inconsistency.
+
+**Type-fix carry-overs**: `Optional[mp_process.BaseProcess]` for `UvicornProcess._proc` (one-line); `cast(Dict[K, V], run_async_safe(...))` at three call sites (rate.py + stability.py + controller.py). Long-term `run_async_safe` should be generic over the coroutine return type; deferred to C9 as a single edit in `src/experiment/runtime/async_loop.py` so all three cast call sites collapse.
+
+**Old code in `src/methods/calibration.py` is UNTOUCHED.** Tests for the existing module + the experiment-method gate in `src/methods/experiment.py::_resolve_baseline` continue to read from the old `data/results/experiment/calibration/` path. The new package is purely additive; the swap-over happens in C9.
+
+**Paused before C8.** C8 is the most consequential remaining stage because it requires a byte-identical regression test: `derive_calib_coefs` (currently in `src/methods/calibration.py`) must be moved to `src/dimensional/dasaprof.py` AND rewritten to call `src/dimensional/engine.py::build_engine` + `src/dimensional/coefficients.py::derive_coefs` instead of duplicating the PyDASA `Schema → AnalysisEngine → Coefficient → MonteCarloSimulation(mode=DATA)` pipeline. Risk: silent dim-card value drift if either pipeline interprets the input observables differently. Mitigation plan: feed a fixed-seed envelope into BOTH paths and assert the `dimensional_card` block is byte-identical before declaring C8 done.
+
+Pickup at next session: C8. Tracker remains `notes/calibration.md` (per-stage status table updated for every completed stage). C9-C11 outline:
+- **C9**: shrink `src/methods/calibration.py` to ~250-line orchestrator, switch consumers to import from `src/calibration/` + `src/dimensional/dasaprof.py`, delete the duplicates extracted in C5/C6/C8, migrate the 47 on-disk JSONs (the C4-pending `mv`), update `src/io/tooling.py::_CALIB_DIR`.
+- **C10**: `00-calibration.ipynb` migrated to new imports; yoly chart cell calls `controller.yoly_dataframe()` instead of running probes inline.
+- **C11**: CLAUDE.md "Module map" reflects new structure; `notes/calibration.md` marked "refactor closed"; MEMORY.md updated.
+
+---
+
+## 2026-05-03 (evening 3) — Calibration refactor approved; sequence locked calibration-first
+
+Following the code-review + architectural-conformance report (`notes/reports/code_review_calibration_2026-05-03.md`), the user proposed a refactor of `src/methods/calibration.py` aligned with `.claude/skills/design/experimental-design.md` §1 ("Calibration is a precondition gate, NOT a hypothesis tolerance").
+
+**Locked decisions** (all in `notes/calibration.md` "Refactor — locked decisions" table):
+
+- **I-1**: stop on `reject_rate > 5%` (any cell rejecting > 5% has crossed out of the M/M/c/K validity envelope; further data measures the host's saturation-handling code path, not the model's predicted regime).
+- **I-2**: two separate calibration runs, two separate envelopes — `data/results/calibration/{localhost,multiprocess}/<host>_<ts>.json`. Different transport stacks → different μ values.
+- **I-3**: strict layer placement. `src/calibration/` package + `src/dimensional/dasaprof.py` + `src/methods/calibration.py` (kept as thin orchestrator).
+- **Q-A**: calibration is self-contained — `calibration.json` only. NO consumption of `dflt.json` / `opti.json` (that α-clamp belongs to the experiment method, not calibration).
+- **Q-B**: result path drops the `/experiment/` segment → `data/results/calibration/<dpl>/`.
+- **Q-C**: `payload_size_bytes` stays at 128000 (128 kB).
+- **Q-D**: NO clamp on `os.cpu_count()` — digital workers are software constructs; sweeping `c=32` on a 16-core host is the intentional contention regime measurement.
+- **Q-E**: `samples_per_level: 1024` confirmed.
+- **Q-F**: `--dpl multiprocess` MUST execute end-to-end. Real `UvicornProcess`-backed gauge in a separate OS process. Pulls SOA Phase A Stage A1 into calibration's scope as Stage C1.
+
+**Sequence locked: calibration-first.** I argued for calibration before SOA Phase A Stages A2-A9 because (a) the SOA experiment mesh's R1/R2/R3 verdicts require a multiprocess calibration envelope to subtract loopback overhead from — running SOA first against today's localhost calibration would systematically under-report multiprocess overhead by 50-200 μs of TCP loopback; (b) `UvicornProcess` is the same work in both plans (calibration C1 = SOA A1) and the calibration vernier is the simplest possible service for the Windows `spawn` spike; (c) skipping the calibration refactor leaves SOA A9's "dissertation-grade numbers" stop-gate unsatisfiable until calibration ships afterwards anyway. User accepted; sequence is C0-C11 → A2-A9.
+
+**11-stage calibration refactor plan + acceptance criteria + target package layout** are all in `notes/calibration.md` — that file is the canonical task tracker. Every stage commit references it; every closed stage updates the progress table. After C11 closes, the soa-refactor.md A2-A9 queue resumes.
+
+**A0 of SOA Phase A is now retroactively DONE** — today's earlier deployment-axis rename + folder restructure (this morning's "evening" devlog entry) was Stage A0's identifier sweep, completed before the C0 work landed. The `loopback_aliased → multiprocess` and `local → localhost` renames + the `data/results/experiment/{localhost,multiprocess,remote}/` folder restructure all fall under A0 and are stored in this devlog's earlier 2026-05-03 (evening) entry.
+
+Pickup at next session: Stage C1 — `UvicornProcess` spike against the calibration vernier. If Windows `spawn` semantics break the FastAPI app-factory pattern, the refactor halts at C1 and we revisit; otherwise, C2-C11 follows.
+
+---
+
+## 2026-05-03 (evening 2) — Code-review + architectural-conformance report on `src/methods/calibration.py`
+
+Combined `/code-report` (seven-section diagnosis) with `architectural-conformance.md` (design-intent vs as-built) lenses on the calibration module. Report at `notes/reports/code_review_calibration_2026-05-03.md`. Diagnosis only — no code changed.
+
+**Headline finding**: calibration was promoted from `src/scripts/` to `src/methods/` (2026-04-23) without resolving whether it is a *method* (one hypothesis, one `run`) or a *precondition gate* (host-floor probes). Over ~10 days it accreted a Route-B dimensional-card pipeline + a multi-combo sweep, becoming a 2636-line god module exposing 5+ public callables against a documented promise of 1-2 in CLAUDE.md "Module map". The PyDASA pipeline at `_run_calib_pipeline` ([src/methods/calibration.py:1977](src/methods/calibration.py#L1977)) duplicates `src/dimensional/engine.py::build_engine` + `src/dimensional/coefficients.py::derive_coefs` — two derivation paths for the same coefficient family is the single material risk.
+
+**Eight recommendations (R1-R8) ranked**:
+- R1 (XS): document the as-built scope in CLAUDE.md "Module map" + `notes/calibration.md` so the drift becomes *controlled* drift.
+- R2 (M): refactor `_run_calib_pipeline` to call `src/dimensional/`'s pipeline instead of duplicating it. Single source of truth for theta/sigma/eta/phi.
+- R3 (S): move `derive_calib_coefs` to `src/dimensional/calibration_card.py`.
+- R4 (S): move `_DEFAULT_*` constants out of module scope into `run()`'s body.
+- R5 (XS): demote `measure_*` and `_build_calib_*` from documented public API.
+- R6 (S): decide whether `run_handler_stability_sweep` is gate or diagnostic; fold or split.
+- R7 (M): regression test asserting calibration card and dimensional-method coefficients agree within precondition gate.
+- R8: defer structural changes until SOA refactor Phase A Stage A1 (vernier transport swap) lands.
+
+**Verdict**: as-built state is acceptable for dissertation scope IF documented (R1). Recommend deferring all structural work until SOA Phase A closes, then bundle R2/R3/R4 as one calibration-cleanup pass. The headline risk (PyDASA pipeline duplication) can be neutralised by R2 alone — no file moves required.
+
+---
+
+## 2026-05-03 (evening) — Stage A0 of SOA refactor: deployment-axis rename + folder restructure
+
+Stage A0 of the two-phase SOA refactor (`notes/soa-refactor.md`) executed. Two coordinated changes landed in one sweep:
+
+1. **Deployment-axis rename, two passes.** First pass swapped `loopback_aliased → multiprocess` (the original Stage A0 plan); second pass renamed `local → localhost` so the deployment-axis literal matches its on-disk `data/results/experiment/<dpl>/` folder name and reads as the universally-understood term for one-host loopback. Singular `multiprocess` (not `multiprocesses`) for register-consistency with `localhost` / `remote`. Sites: `_VALID_DEPLOYMENTS` tuples in `src/methods/experiment.py` + `src/scripts/launch_services.py`; `data/config/method/experiment.json::deployment`; `TasArchitecture._gate_deployment` + `bind_addr`; `SvcRegistry._pick_host`; every test class / method name + assertion / regex covering deployment values; `tests/scripts/test_launch_services.py::test_localhost_all_short_duration`. English `local_services()`, `local_end_ts` (CSV column, wire-schema off-limits), and "non-local routing" in `services/base.py` are NOT renames — those are domain English, not the deployment-axis literal.
+
+2. **Folder restructure.** Deleted `data/{results,img}/experiment/{aggregate,baseline,local,localhost,loopback_aliased,multiprocesses,remote,s1,s2}/` (all stale, all untracked — pre-deployment-axis orphans + empty post-axis duplicates). Created `data/{results,img}/experiment/{localhost,multiprocess,remote}/.gitkeep`. **Calibration preserved**: `data/results/experiment/calibration/` (47 host-keyed JSONs, ~3 min each) and `data/img/experiment/calibration/` (10 PNG/SVG figures) untouched, because calibration measures the host's noise floor (loopback latency, jitter, handler scaling) — same number for `localhost`/`multiprocess`/`remote` runs on the same host, so triplicating it under each `<dpl>/` would force a redundant 3-times re-calibration AND break the per-host gate in `src/io/tooling.py::find_latest_calibration` which globs one path keyed on `socket.gethostname()`.
+
+3. **Stop-gate**: `pytest tests/experiment/ tests/methods/ tests/io/ tests/scripts/` -> 386 passed, 2 failed (identical to baseline). The 2 failures are `TestRampValidation::test_both_rates_and_rho_grid_raises` and `::test_neither_raises` — pre-existing regex mismatches from this morning's lambda_z anchor work, not regressed by the rename. Zero rename-induced failures.
+
+**Calibration-canary commit pinned for Stage A1.** When `runtime/uvicorn_process.py` lands (Windows `spawn` spike), the same commit will switch `src/methods/calibration.py::_register_vernier` from `UvicornThread` to `UvicornProcess(workers=1)`. Two reasons: (1) the vernier is the simplest `c_srv=1, workers=1` case, so any `spawn`-related breakage surfaces against one service before touching the 13-service mesh; (2) once the experiment runs on `UvicornProcess`, calibration on `UvicornThread` would measure the noise floor through a different transport stack than the experiment uses, biasing the `reported = measured - loopback_median ± jitter_p99` correction. Vernier stays at `c_srv=1, workers=1` — `workers=4` would fold worker-pool overhead into the floor.
+
+Pickup at next session: Stage A1 = `runtime/uvicorn_process.py` + calibration vernier swap, in one commit.
+
+---
+
+## 2026-05-03 — Post-v2 cleanup, lambda_z anchor for the experiment method, SOA refactor planned
+
+Three discrete pieces of work landed today on top of the closed prototype-v2 reshuffle:
+
+1. **Post-v2 cleanup pass.** Public-alias enforcement for `src.analytic` (methods/experiment.py + methods/stochastic.py swapped to `from src.analytic import ...`); `src/experiment/instances/gauge.py::build_gauge` shipped to give the vernier service the same `instances/` builder pattern as `build_third_party` (atomic) and `build_tas` (composite); `methods/calibration.py::_build_ping_app` and `_build_vernier_app_for_combo` refactored to use `build_gauge`. Three demo files fixed for the post-2026-05-01 service-layer protocol: `demo_client.py` migrated to `TasUser`; `demo_services.py` `@logger(_ctx)` factory replaced with the `_DemoHandler` callable-class pattern; `demo_third_party.py` `_recorded_forward` return-type annotation fixed to `ExtFwdFn`. Stop-gate: 387 passed.
+
+2. **Experiment method anchored at lambda_z.** Methodological fix — the experiment method was using a saturation-discovery ramp (`[50, 100, 200, 300, 500]`) that conflated calibration's job (find host ceiling) with the experiment method's job (validate at the design point). Methods 1-3 evaluate the network at `lambda_z = 345`; for method 4 to be apples-to-apples in `07-comparison.ipynb`, it must measure at the same operating point. Fix: extended `executor._resolve_rates` and `tooling._validate_ramp_block` to accept a third drive spec (`anchor: "lambda_z"`) alongside `rates` and `rho_grid`. The `anchor` form reads `cfg.artifacts[entry_artifact].lambda_z` and emits `rates = [lambda_z]`. `experiment.json` ramp block now defaults to `anchor: "lambda_z"`; `05-experimental.ipynb` dropped its `_NB_METHOD_CFG` override entirely and now calls `run_experiment(adp=a, wrt=True)` directly. Stop-gate: 31 targeted tests passed.
+
+3. **Calibration tuning + the bandwidth realisation.** `data/config/method/calibration.json` bumped: `sweep_grid.c[0]: 8 → 16`, `sweep_grid.K[0]: 16 → 128`, plus rate-sweep acceleration (`trials_per_rate: 11 → 7`, `max_probe_window_s: 2.0 → 1.5`, `inter_trial_delay_s: 3.0 → 1.5`, `rates: [10, 50, 200, 300, 400, 500, 510]`). Result: calibrated rate stayed at 200 req/s, confirming gating wasn't the bottleneck. The remaining ceiling is bandwidth (128 KB payload on Windows loopback) × Python single-process (asyncio single-event-loop GIL serialisation). Group C (drop payload to 32 KB) and multi-worker uvicorn deferred pending the SOA refactor.
+
+**The methodological discovery driving the next stage**: `dpl="local"` (in-process MockTransport mesh) is monolithic — 13 FastAPI app objects in one Python process sharing one event loop is not SOA. The DASA case-study claim ("dimensionally normalised coefficients characterise the architecture, not the implementation") only holds if the prototype is actually a distributed service mesh. Two-phase plan written into `notes/soa-refactor.md`:
+
+- **Phase A — Path 2: multi-process on localhost** (`dpl="multiprocesses"`). Replace `UvicornThread` with `multiprocessing.Process`; per-PID `SvcCtx` + `<service>__pid<PID>.csv` log files; `build_svc_df_from_logs` merges per-worker CSVs; `TasArchitecture` connect-only mode (real httpx, healthz-poll, no in-process app mount); launcher subprocess autoload. ~2-3 days.
+- **Phase B — Path 3: LAN-distributed** (`dpl="remote"`). Configuration on top of Phase A — same code, different `experiment.json::hosts`. Stages B1-B6 add `--bind-host` flag, `wall_clock_offset_ns` CSV header for cross-host time alignment, HTTP `/_logs/<service>` tarball endpoint for log collection. ~1 week (mostly setup + ops).
+
+Critical invariant carried across both phases: per-service code is identical in `local` / `multiprocesses` / `remote`. Only SvcRegistry's host resolution + launcher orchestration + log-collection strategy differ. Phase A's whole point is to build the right abstractions so Phase B becomes a JSON edit + an SSH session, not another refactor.
+
+Naming pinned the same day: `dpl ∈ {local, multiprocesses, remote}` reads monotone in distribution count. Renamed `loopback_aliased` → `multiprocesses` so the trio reads "single-process / multi-process-one-host / multi-process-many-hosts" — the meaningful axis, not the network-binding mechanism. Code-side rename sweep is part of Stage A0.
+
+Phase A's four open design questions (G2) settled before any code lands:
+
+1. **Per-worker seeding**: fold PID into `derive_seed(root_seed, f"{service}_pid{pid}")`. Each worker has independent reproducible streams per `(root_seed, pid)` pair; run-envelope `notes` records all PIDs so post-hoc analysis can re-derive any stream.
+2. **Workers per service default**: uniform 4. `--workers N` CLI flag overrides. 13 × 4 = 52 worker processes per host (~7.8 GB RAM at 150 MB each on a 16-core box, ~3 workers per core).
+3. **Launcher activation**: autoload by default + `launcher_started=True` opt-out. Notebook gets autoload (`subprocess.Popen` from inside `methods/experiment.py::run` when `dpl != "local"`); CI / scripted bench / dissertation runs pre-launch with their own supervisor and pass `launcher_started=True`.
+4. **Keep `dpl="local"`**: yes, marked explicitly as the dev/test mode. The methodological problem was using `local` AS the case-study runner; the solution is to stop doing that, NOT to delete `local`. Branch in `__aenter__` between `_init_routed_client + _mount_apps` (local) and `_init_real_http_client + _healthz_poll` (multiprocesses).
+
+Track 2 (test-suite simplification) **deferred until Phase A closes**. User flagged that `@pytest.mark.slow` would mis-categorise `tests/stochastic/` (genuinely simulation-heavy by nature, not "live mesh" slow). When Track 2 reopens, the right marker name is `@pytest.mark.live_mesh` (precise — tests that spin up the FastAPI mesh, in-process or multi-process), NOT `@pytest.mark.slow` — same axis-naming rule as the `multiprocesses` rename: the marker should name the failure-mode dimension, not a coarse speed bucket.
+
+Pickup at next session: Stage A0 (identifier sweep) → Stage A1 spike (Windows `spawn` for FastAPI app-factory, validated against the calibration vernier first) → G3 sign-off before touching the 13-service experiment mesh. Decision-log in `notes/soa-refactor.md` Stage A0; live state in `memory/project_soa_refactor_planned_2026_05_03.md`.
+
+---
+
+## 2026-05-02 — Prototype-v2 reshuffle of `src/experiment/` (Stages 1-8 closed)
+
+Eight-stage refactor reshaping `src/experiment/` so the layering reads top-down: `architecture.py` (server) + `users.py` (client) compose into `executor.py` (cell driver), with `wire/` (URL + payload concerns) and `runtime/` (OS-boundary helpers) sitting underneath. Plan, status table, and per-stage notes in `notes/prototype-v2.md`.
+
+**Layout shift**
+
+```
+src/experiment/
+├── __init__.py                     # marker only; documents the two top-level ctxmgrs
+├── architecture.py                 # TasArchitecture (server-side ctxmgr)
+├── users.py                        # TasUser (client-side ctxmgr) — NEW
+├── executor.py                     # execute_one + execute_sweep + build_svc_df_from_logs
+├── client/                         # client-side load-generator package (records / config / guard / sender / driver / stats / simulator)
+├── instances/                      # tas / third_party / common
+├── services/                       # atomic / composite / vernier / base / instruments
+├── wire/                           # NEW
+│   ├── payload.py                  # generate_payload, resolve_size_for_kind
+│   └── registry.py                 # SvcRegistry
+└── runtime/                        # NEW
+    ├── async_loop.py               # run_async_safe
+    ├── os_timer.py                 # windows_timer_resolution
+    └── uvicorn_thread.py           # UvicornThread
+```
+
+`scanner.py` and `runner.py` are gone. `payload.py` + `registry.py` now live under `wire/`. `uvicorn_thread.py` joined `os_timer.py` + `async_loop.py` under `runtime/`. `users.py` is new — the synthetic-user side of the prototype, deliberately decoupled from `architecture.py` (the executor pairs them). `executor.py` absorbed the scanner sweep + helpers + `build_svc_df_from_logs`. `methods/experiment.py` imports DOWN from `executor.py` directly; the scanner shim is deleted.
+
+**Stage outcomes** (full per-stage table in `notes/prototype-v2.md`; final pytest is **387 passed** at every multi-stage stop-gate):
+
+| Stage | Action | Stop-gate |
+|---|---|---|
+| 0 | Baseline pytest + consumer inventory | 364 passed in 8:49 |
+| 1 | `wire/` (`payload.py` + `registry.py`) | 295 passed in 4:34 |
+| 2 | `runtime/` (`async_loop.py` + `os_timer.py` extracted from `executor.py`; `uvicorn_thread.py` moved in) | 16 runtime + 302 broader |
+| 3 | `users.py` with `TasUser` ctxmgr (decoupled from architecture) | 260 passed in 32:84 |
+| 3.5 | architecture.py + test_architecture.py alignment with the wire/runtime/users refactor | 258 passed |
+| 4 | `scanner.py` absorbed into `executor.py`; quarantine shim left in place | 387 passed in 8:36 |
+| 5 | Verify `methods/experiment.py` imports DOWN through the shim | (no code change) |
+| 6 | Switch consumers to NEW import paths (executor + runtime, no scanner) | 387 passed in 9:25 |
+| 7 | Delete `scanner.py` shim + clean `__init__.py` historical note | 387 passed in 8:51 |
+| 8 | Devlog + memory entries (this entry) | (docs only) |
+
+**Patterns crystallised during the reshuffle** (all pinned in `.claude/skills/develop/coding-conventions.md` + memory):
+
+- **One test class per source module.** `TestInit` / `TestActiveFlag` / `TestWaitReadyTimeout` collapsed to single `TestUvicornThread`; same for `TestTasArchitecture` (was 4 classes), `TestExecutor` (was 3 classes). Class context plus prefix-disambiguated test names (`test_resolve_rates_*`, `test_execute_one_*`, `test_sweep_*`) carry the topic.
+- **`__aexit__` underscore-prefix unused-args.** Every async ctxmgr in the package signs `async def __aexit__(self, _exc_type, _exc, _tb) -> None:` with a docstring paragraph explaining the protocol-required-but-unused contract.
+- **Decompose long `__aenter__` into named `_step_x()` helpers.** `TasArchitecture.__aenter__` shrank from a 100-line block of `# step 1` / `# step 2` runs to a 6-line table of contents calling `_gate_deployment` / `_init_registry_and_specs` / `_resolve_entry_router` / `_init_routed_client` / `_mount_apps`.
+- **`while active:` over `while True: break`.** `UvicornThread.wait_ready` refactored to use a boolean instance flag with inline raise on the failure path; `shutdown()` clears the flag to release a concurrent poll early.
+- **Sibling ctxmgrs stay constructor-independent; the executor pairs them.** `TasUser` does NOT import `TasArchitecture`; `executor.execute_one` is the only place that constructs both. Lets `TasUser` be driven against any compatible transport.
+- **No `assert` in `src/` modules.** `assert` gets stripped under `python -O`; production code uses explicit `if cond: raise SomeError(_msg)` for invariants. Pyright narrows after the raise.
+- **Behavioural tests over no-raise tests.** `test_os_timer.py` rewrote 4 weak no-raise tests into 7 behavioural tests using `unittest.mock.patch` to verify `winmm.timeBeginPeriod` / `timeEndPeriod` are actually called in order, with the right period, and that `timeEndPeriod` runs even when the body raises.
+- **Build_svc_df_from_logs stays at the building-block layer.** Original Stage-5 plan was to lift it UP into `methods/experiment.py`. Revised because BOTH `execute_sweep` and `methods/experiment.py::run` consume it; placing it at `executor.py` lets both import DOWN. The Stage-5 step degenerated to a verification.
+
+**Files added / removed**
+
+- Added: `src/experiment/users.py` (95 lines), `src/experiment/wire/{__init__,payload,registry}.py`, `src/experiment/runtime/{__init__,async_loop,os_timer,uvicorn_thread}.py`, `tests/experiment/test_users.py`, `tests/experiment/wire/test_{payload,registry}.py`, `tests/experiment/runtime/test_{async_loop,os_timer,uvicorn_thread}.py`.
+- Removed: `src/experiment/{payload,registry,scanner,uvicorn_thread,runner}.py`, `tests/experiment/test_scanner.py`, the inline `ClientSimulator`-construction paths in `test_architecture.py` (migrated to `TasUser`).
+
+---
+
+## 2026-05-02 — `client.py` split into `src/experiment/client/` package
+
+`src/experiment/client.py` (~595 lines) was doing config + record + cascade detector + request sender + rate driver + stats + ramp orchestrator in one file, with the middle five collapsed into `ClientSimulator`. Split along responsibility lines while keeping a `*__OLD__.py` reference module + barrel shim for the deprecation window so consumers stay green at every step.
+
+**New layout** (`src/experiment/client/`):
+- `records.py` -> `RequestRecord` (renamed from `InvocationRecord`).
+- `config.py` -> `CascadeCfg` / `RampCfg` / `ClientCfg`.
+- `guard.py` -> `StopGuard` (renamed from inline cascade detector).
+- `sender.py` -> `RequestSender(client, registry, cfg, rng).send_one(kind)`.
+- `driver.py` -> `RateDriver(sender, guard, ramp_cfg, kind_names, kind_prob_norm, rng).run(rate)` — absolute-deadline batch loop.
+- `stats.py` -> `compute_probe_stats(records, counts, duration_s, rate, stop_reason, kind_names)` (pure function).
+- `simulator.py` -> lean `ClientSimulator` composing sender + guard + driver; walks the rate schedule.
+- `__init__.py` barrel re-exports the public API plus deprecation aliases (`InvocationRecord = RequestRecord`, `validate_ramp` / `build_ramp_cfg` -> `src.io.load_ramp_cfg`).
+
+**JSON loader moved to `src/io/tooling.py`** (parity with `load_method_cfg`):
+- `load_ramp_cfg(ramp)` -> `RampCfg` (validates first).
+- `load_client_cfg(method_cfg, *, kind_prob)` -> full `ClientCfg`.
+- Both re-exported from `src/io/__init__.py`.
+
+**Quarantine pattern** (per-stage safety): renamed the old module `client.py` -> `client/client__OLD__.py` and the old test file `test_client.py` -> `tests/experiment/client/test_client__OLD__.py`. The barrel pointed at OLD initially, then switched to NEW once every submodule + test landed. Old test file repointed its imports at `client__OLD__.py` directly so it kept testing OLD throughout the migration. Both `*__OLD__.py` files will be deleted in a follow-up commit once the deprecation window ends.
+
+**Naming choices**:
+- `cascade.py` / `CascadeDetector` -> `guard.py` / `StopGuard` (less metaphorical; "guard that says stop here").
+- `rate_driver.py` / `RateDriver` -> `driver.py` / `RateDriver` (avoids name collision with `services/instruments.py::LogProbe`; the client side does NOT use AOP since we own both the call site and the response handling).
+- `RequestRecord` per project acronym convention (req over invocation).
+
+**Architectural separation server-side vs client-side**:
+- `services/instruments.py` (`@logger`, `LogProbe`) wraps FastAPI handler `__call__` — needed because FastAPI owns the call site.
+- `client/driver.py` + `client/sender.py` own their own loop + return value; no decorator needed. The asymmetry is intentional.
+
+---
+
+## 2026-05-02 — Style sweep across io / methods / dimensional / stochastic; new conventions pinned
+
+Iterative review pass over seven src+tests pairs, applying `coding-conventions.md` + `code-documentation.md` skills.
+
+**Modules touched** (1:1 src ↔ tests):
+- `src/dimensional/sensitivity.py` + `tests/dimensional/test_sensitivity.py`
+- `src/methods/dimensional.py` + `tests/methods/test_dimensional.py`
+- `src/io/tooling.py` + `tests/io/test_tooling.py`
+- `src/io/config.py` + `tests/io/test_config.py`
+- `src/stochastic/simulation.py` + `tests/stochastic/test_simulation.py`
+- `src/methods/stochastic.py` + `tests/methods/test_stochastic.py`
+- `tests/conftest.py`
+
+Result: 71 dimensional tests, 17 io/config tests, 10 io/tooling tests, 9 stochastic-engine tests, 22 methods/dimensional tests, 10 methods/stochastic tests — all green.
+
+### Recurring patterns applied
+
+- **Module docstring `*IMPORTANT:*` framing demoted** to prose ahead of the public-API list. The `*IMPORTANT:*` marker became visual noise once every module carried one; readers scanned past it.
+- **Trivial `# ...` labels dropped** (`# build the nodes`, `# run the engine`, `# header block`, `# unpack the cfg into per-node arrays`). Informative why-lines kept and rewritten when the original described WHAT instead of WHY.
+- **`raise X(_msg)` extraction pattern** applied consistently: compute `_msg = f"..."` on its own line, then `raise ValueError(_msg)`. Long f-strings inside `raise` are hard to scan.
+- **Filtering list comprehensions decomposed** to explicit `for`/`if`/`append` loops in `src/stochastic/simulation.py::_summarise_replication` (3 of them) and `src/methods/stochastic.py::solve_net` (the per-artifact `_mu` / `_c` / `_K` build). Simple single-purpose comprehensions kept.
+- **Test conventions tightened across all 6 test modules**:
+  - `*IMPORTANT:*` framing demoted in module docstrings.
+  - "verifies that" / "verifies" framing dropped from class docstrings.
+  - Test docstring lead-ins concretised to literal code-level claims (e.g. `len(_a["coefficients"]) == 4`, `format_model_string(1, 10) == "M/M/1/10"`).
+  - `-> None` added to every test method.
+  - Fixture parameters typed (`pytest.FixtureRequest`, `pytest.MonkeyPatch`, `Dict[str, Any]`).
+  - Test names tightened to short topic+outcome with acronyms; "when" filler dropped, prepositions preferred (`on_` / `without_` / `from_`); formula-form where appropriate (`test_theta_partial_L_positive`, `test_W_net_close_to_analytic`).
+- **Conftest fixtures fully typed.** `tests/conftest.py` now declares `Schema`, `AnalysisEngine`, and `Tuple[AnalysisEngine, Dict[str, Any]]` returns; pyright's `reportUnusedFunction` false positives on pytest fixture-by-name injection silenced where the IDE flags them.
+
+### New conventions pinned (CLAUDE.md + coding-conventions skill)
+
+1. **Avoid dense / chained list comprehensions.** Simple `[_p.name for _p in paths]` is fine. Filter+transform+nested-call combos and stacked / nested comprehensions decompose to explicit loops. Rule of thumb: non-trivial filter AND non-trivial expression → explicit loop. The user flagged this directly: "when you condense many commands in a list comprehension or multiple list comprehensions it's difficult to read; this means it's a programming antipattern."
+2. **No `dict(...)` for kwarg packing across multiple call sites.** Pyright widens every value to the union of all values, so `_args = dict(mu=[10.0], lam_z=[5.0], K=[None], reps=2); fn(**_args)` types every parameter as `list[float] | list[None] | int`, breaking type-check at the call boundary. Either inline the kwargs at each call site, or define a typed module-level helper. Surfaced when refactoring `tests/stochastic/test_simulation.py::test_same_seed_same_summary`.
+3. **Test helpers move to module scope, not nested in test bodies.** A `def _helper(): ...` inside a test method is a lazy definition that other tests can't reuse and that type-checkers can't see clearly. The user flagged the nested-helper case as "lazy definition, move outside" and the fix landed `_run_single_node(*, lam_z, K, horizon, warmup, reps, seed=42)` at module level so all five `simulate_net(...)` blocks across `TestMM1Convergence` / `TestSeededReproducibility` / `TestBlockingBoundary` reduce to 5-line kwarg calls.
+
+Memory entries refreshed: `feedback_no_filtering_list_comps.md` rewritten with the density rule and explicit ✅/❌ examples (the original framing as "no filtering comprehensions" was too broad — the user clarified that simple ones are fine).
+
+### Files changed
+
+```
+M  CLAUDE.md
+M  .claude/skills/develop/coding-conventions.md
+M  notes/devlog.md  (this entry)
+M  src/dimensional/sensitivity.py
+M  src/methods/dimensional.py
+M  src/io/tooling.py
+M  src/io/config.py
+M  src/stochastic/simulation.py
+M  src/methods/stochastic.py
+M  tests/conftest.py
+M  tests/dimensional/test_sensitivity.py
+M  tests/methods/test_dimensional.py
+M  tests/io/test_tooling.py
+M  tests/io/test_config.py
+M  tests/stochastic/test_simulation.py
+M  tests/methods/test_stochastic.py
+M  ~/.claude/.../memory/MEMORY.md
+M  ~/.claude/.../memory/feedback_no_filtering_list_comps.md
+```
+
+---
+
+## 2026-05-01 (evening) — Layering fix: runner.py extraction breaks the experiment-architecture inversion
+
+Final pass of the day, triggered by auditing `src/experiment/architecture.py` against the coding-conventions skill. Surfaced a dependency inversion that the previous lazy-import-in-function pattern had been masking: `src/experiment/architecture.py::sweep_arch_exp` was lazy-importing `_run_async`, `_run_async_safe`, `_build_svc_df_from_logs` from `src/methods/experiment.py`. `src/experiment/` is the building-block layer, `src/methods/<x>.py` is the orchestrator layer; the arrow was pointing UP.
+
+### Fix applied
+
+1. New module `src/experiment/runner.py` (mesh-runner + log-postprocessing layer) with `run_async`, `run_async_safe`, `build_svc_df_from_logs`, `windows_timer_resolution` as public helpers. Bodies lifted verbatim from `src/methods/experiment.py`.
+2. `src/methods/experiment.py::run()` imports the three helpers from `src.experiment.runner` instead of defining them. File shrank 786 → 460 lines.
+3. `src/experiment/architecture.py::sweep_arch_exp` imports from `src.experiment.runner` at module top (no more lazy-import-in-function).
+4. Dropped the dead `from src.experiment.architecture import sweep_arch_exp` re-export in `src/experiment/__init__.py` (verified by grep that nothing imported via the package barrel — only direct module path). This was the original reason the cycle existed: loading any `experiment/` sibling pulled in `architecture` transitively, which then needed `methods/experiment.py`.
+
+After the extraction, both arrows point DOWN:
+
+```
+src/methods/experiment.py            (orchestrator: replicate loop + envelope writing)
+  └─> src/experiment/runner.py       (building block)
+        ├─> src/experiment/launcher.py
+        ├─> src/experiment/client.py
+        └─> src/analytic/jackson.build_rho_grid
+
+src/experiment/architecture.py       (building block: configuration sweep)
+  └─> src/experiment/runner.py       (same)
+```
+
+The cycle disappeared because the broken arrow was gone, not because Python's import machinery was tricked.
+
+### Layering rule codified
+
+Added a new bullet to `CLAUDE.md` and a longer version to `.claude/skills/develop/coding-conventions.md`:
+
+> **Layering: arrows point DOWN.** `src/experiment/` is the building-block layer; `src/methods/<x>.py` is the orchestrator layer that uses those building blocks. A building-block module may NOT import from an orchestrator. If a building-block needs an orchestrator helper, the helper is misplaced and should be moved DOWN. Lazy-importing-in-function is a smell that preserves the inverted arrow, not a fix.
+
+Companion rule in the skill:
+
+> **Dead package re-exports hide layering bugs.** Before reaching for a lazy import, grep for actual consumers of every name in `__init__.py`'s `__all__`. A re-export that no one imports through the barrel is dead code AND a transitive-load trap.
+
+### Other audit findings landed in this pass
+
+- **Inline f-string raises extracted** to the `_msg` pattern: 3 in `client.py::validate_ramp`, 1 in `launcher.py::get_lam_z_entry`, 1 in `payload.py::generate_payload`, 1 in `uvicorn_thread.py::wait_ready`.
+- **Two broad `except Exception:`** narrowed in `client.py` to `(httpx.HTTPError, ConnectionError, OSError, asyncio.TimeoutError, ValueError)` and `(..., RuntimeError)` for the task-drain path.
+- **Five stacked-`#` runs collapsed** in `client.py` (R16: 9-line auto-batched-send rationale, 5-line Windows time.sleep recipe, 4-line batch-send block, 2-line drain budget, 6-line effective-rate explanation). Substantive content moved to one-line why-statements; long form preserved in `notes/calibration.md` and `.claude/skills/develop/async-rate-precision.md`.
+- **base.py docstring concretion** (file the user said was "already done" — skill audit found gaps anyway): 2 typo fixes ("cheks" → "check", "inf_flight" → "in_flight"); 15 docstring lead-ins normalised to verb-first `*name()*` / `**Name**` form (every public symbol).
+- **registry.py SvcRegistry**: dropped redundant `Attributes:` block (project convention is inline `# why` comments above each field, not a separate Attributes section).
+- **architecture.py docstring polish**: 3 manual-wrapped sites unwrapped; units added to numeric Args (`mu (float, req/s)`, `c_int (int, server count)`, `K_int (int, buffer capacity)`, `mu_factor (float, unitless)`).
+- **launcher.py**: added `*_is_entry_router()*` docstring.
+- **test_uvicorn_thread.py created** (was missing per "tests mirror src/ 1:1" rule); 3 unit tests for constructor + custom-host + timeout-raises. Lifecycle integration test deliberately omitted because pytest-asyncio's global `asyncio.run` patch lacks the `loop_factory` kwarg uvicorn passes on Python 3.12 — the lifecycle test passed alone but failed in the full suite. Full lifecycle is exercised through `test_launcher.py` instead.
+- **35 long test method names trimmed** across 5 test files (e.g., `test_empty_kind_weights_rejected_at_simulator_construction` → `test_empty_weights_rejected`; `test_above_threshold_trip_only_after_window_fills` → `test_trip_after_window_fills`). Detailed contracts moved into `*test_name()*` docstring lead-ins.
+- **`-> None` returns added** to every test method via a regex pass: 65+ test methods across the five test files.
+- Two stacked-`#` runs collapsed in `test_launcher.py`.
+
+End of pass: full `tests/experiment/` suite at **209 passed**; no stale identifiers anywhere; layering arrows all point DOWN.
+
+---
+
+## 2026-05-01 (later) — Concretion sweep across services + instances + tests + demos
+
+Second-day pass that drove the morning's refactor outward. Code-level outcome: 86 service tests + 11 instance tests = 97 green; no `external_forward` / `kind_to_target` / `parse_tas_idx` / `mark_admit_time` / `mark_local_end` identifiers remain anywhere outside notes prose and `.gitignore`.
+
+### Renames + privatizations
+
+| Symbol | Before | After | Cascade |
+|---|---|---|---|
+| `kind_to_target` | composite param + KindPick field + tas.py param + demo kwargs | `kind_to_tgt` | `instances/tas.py`, `tests/experiment/instances/test_tas.py` (positional, no edit), `src/scripts/demo_services.py` (kwarg + comment), launcher.py left alone (passes positionally) |
+| `_default_route_for` | composite top-level | `_build_route` | composite-internal only |
+| `parse_tas_idx` | composite top-level public | `_parse_constituent_idx` (private) | `tests/experiment/services/test_composite.py` import + `TestParseTasIdx` class renamed `TestParseConstituentIdx` |
+| `external_forward` | `instances/tas.py::build_tas` and `instances/third_party.py::build_third_party` params | `ext_fwd` | 3 kwarg sites in `tests/experiment/instances/test_third_party.py`, 3 kwarg + 1 prose comment + 1 print label in `src/scripts/demo_services.py`, 3 kwarg sites in `src/scripts/demo_third_party.py`; launcher.py untouched (positional) |
+
+### Test sweep
+
+Every test file under `tests/experiment/services/` and `tests/experiment/instances/` is now uniform:
+
+- `from tests.utils.helpers import _SpecBuilder` import; local `@pytest.fixture def specs() -> _SpecBuilder` wrapper; test signatures `(self, specs: _SpecBuilder) -> None`.
+- `_recorded_forward(calls)` closure factory replaced by `class _RecordedForward` callable with explicit `self.calls` field.
+- `_noop_forward` / `_raising_forward` stay as top-level async functions (stateless).
+- Pytest fixture return types annotated (`Tuple[FastAPI, SvcSpec]`, `Tuple[FastAPI, Dict[str, SvcSpec], List[Tuple[str, str]]]`, etc.).
+- Test method names trimmed to short topic+outcome form (`test_returns_503_when_in_flight_exceeds_K` → `test_503_at_K_capacity`; `test_request_flows_through_three_tas_components` → `test_three_hop_chain`; etc.). Long-form contract narrative moved into `*test_name()*` docstring lead-ins.
+- Test class renames: `TestExternalForwardOnlyToThirdParty` → `TestExternalForward`; `TestParseTasIdx` → `TestParseConstituentIdx`.
+- Chained comparisons (`a <= b <= c`) decomposed into `_con_1 = a <= b; _con_2 = b <= c; assert _con_1 and _con_2`.
+
+### Docstring concretion rules (now codified in CLAUDE.md + coding-conventions skill)
+
+The most load-bearing finding of the day. Two regimes by scope:
+
+**High-level scope** (class / module / public function): natural-language descriptions of what the abstraction does and why a reader cares. Do not recite method calls. The audience is someone reading the call site, not someone reading the body.
+
+- Bad: `*AtomicHandler* run a fixed sequence per request: try the K admission counter, acquire one of \`spec.c\` permits, sleep \`ctx.draw_svc_time()\` seconds, draw a Bernoulli at rate \`spec.epsilon\`...`
+- Good: `*AtomicHandler* simulate one service node of the queueing network. Each call enforces capacity limits, waits a service-time draw, may fail on the configured Bernoulli, and either terminates or hands the request off to a downstream node.`
+
+**Narrow scope** (test methods, private helpers): literal code-level claims. The docstring matches what pytest will print on failure, so a debugger reading the docstring sees the same expression they'd be debugging.
+
+- Bad: `every composite member gets a distinct SvcCtx exposed on app.state.tas_components.`
+- Good: `\`set(app.state.tas_components.keys()) == set(specs.keys())\` and \`len({id(s) for s in tas_components.values()}) == len(specs)\`.`
+
+**Other concretion rules applied uniformly:**
+
+- No circular self-reference. A class named `CompositeDispatch` does not say "callable `dispatch` that..."; a function named `_jackson_pick` does not say "default `pick_tgt`: Jackson-weighted choice"; describe what the thing does in the reader's terms.
+- Drop programmer jargon: "delegate to" → "call"; "stash" → "store"; "land a failure row" → "append a failure row"; "scratchpad" → "log". Plainer verbs travel further.
+- `raise SomeError(_msg)` with the message extracted first: `_msg = f"..."` on its own line, then `raise ValueError(_msg)`. Long f-strings inside the `raise` are hard to scan.
+
+### Bug fix found along the way
+
+`composite.py::_parse_constituent_idx` had `_mdg = f"not a TAS component name: {name!r}"; raise ValueError()` — message built into a local but never passed. Fixed to `_msg = f"..."; raise ValueError(_msg)` (the canonical pattern this sweep also codified). Test `test_non_tas_name_raises` was matching the exception type only, so the bug was silent.
+
+---
+
+## 2026-05-01 — Service-layer probe + handler-class refactor
+
+Swept `src/experiment/services/` end-to-end. Key shift: `@logger` no longer reads from module-level `ContextVar`s; per-invocation state flows through an explicit `LogProbe` dataclass the decorator threads as the third arg of the wrapped method. Atomic / vernier / composite were migrated to callable-class handlers (no nested `def`-in-mount-fn). Param renames applied (`external_forward` → `ext_fwd`, `pick_target` → `pick_tgt`, `kind_to_target` → `kind_to_tgt`, `target` → `tgt` inside CompositeDispatch and the atomic default dispatch). Test helpers consolidated under `tests/utils/helpers.py::_SpecBuilder`; closure-factory forwards (`_recorded_forward`) replaced by callable classes; test method names trimmed and contract narrative moved into docstring lead-ins. 86/86 service tests green at end of pass.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/experiment/services/instruments.py` | `mark_admit_time` / `mark_local_end` deleted. New: `LogProbe` dataclass, `stamp_admit() -> int`, `stamp_local_end() -> int`. `logger(func)` wraps `(self, req, probe)` and exposes `(self, req)` to FastAPI (no `__wrapped__`). |
+| `src/experiment/services/atomic.py` | `_AtomicHandler` → `AtomicHandler` (callable class with `@logger` on `__call__`). Defaults `_jackson_pick(self) -> Optional[str]` (req param dropped — was unused) and `_external_dispatch(self, tgt, req)` are methods on the class. `mount_atomic_svc` instantiates and registers. |
+| `src/experiment/services/vernier.py` | `_VernierHandler` → `VernierHandler`. `__call__(self, req, probe)`. Uses `probe.admit_ts = stamp_admit(); probe.c_used_at_start = self.ctx.c_in_use`. |
+| `src/experiment/services/composite.py` | `_CompositeDispatch` → `CompositeDispatch`, `_KindPick` → `KindPick`. Param renames in `mount_composite_svc`. `parse_tas_idx` → `_parse_constituent_idx` (now private). |
+| `src/experiment/instances/tas.py` | Kwargs `external_forward=` → `ext_fwd=` and `kind_to_target=` → `kind_to_tgt=` at the `mount_composite_svc` call site. `build_tas`'s own param name unchanged. |
+| `src/experiment/services/__init__.py` | `mount_vernier_svc` re-enabled (was temporarily disabled while vernier still used the old API). |
+| `tests/utils/helpers.py` | New `_SpecBuilder` callable class with kwargs-only `__call__` returning `SvcSpec`. Imported by every service test file. |
+| `tests/experiment/services/test_atomic.py` | `_RecordedForward` callable class replaces the closure-factory `_recorded_forward`. `_noop_forward` and `_raising_forward` promoted to module-level top-level async functions (no nested `def` inside the test). All test methods carry `(self, specs: _SpecBuilder) -> None`. Test names shortened (`test_terminal_returns_success_and_logs_one_row` → `test_terminal_success_row`, etc.). |
+| `tests/experiment/services/test_instruments.py` | Rewritten to test the method-form `@logger` via a `_LoggedProbe` test class with `__call__(self, req, probe)`. New `TestStampHelpers` covers `stamp_admit` / `stamp_local_end` monotonicity. |
+| `tests/experiment/services/test_composite.py` | Same patterns: `_RecordedForward` class, `specs` fixture from helpers, typed signatures, `TestParseConstituentIdx` class renamed to match the now-private function. |
+
+### Why probe over ContextVars
+
+ContextVars carried per-task timestamps via module-level globals; the decorator wrote `set(None)` before each call and `get()` after. Worked, but the data flow was hidden — `mark_admit_time` returned `None` and side-effected into a global. The probe makes the channel explicit: the decorator creates one, threads it, reads its fields. Same per-task isolation (probe is local to the wrapper), no ContextVar coupling, no global state. Trade-off: `__call__` signature is `(self, req, probe)` instead of `(self, req)`; FastAPI sees the wrapper's 2-arg signature, which is why we don't set `__wrapped__` (otherwise `inspect.signature(callable, follow_wrapped=True)` walks back to the inner 3-arg method and FastAPI tries to bind `probe` from the request body).
+
+### Why handler-classes over nested `def`
+
+`mount_atomic_svc` previously held a nested `@logger(_ctx) async def _handler(req): ...` plus two more nested `def pick_target(...): ...` / `def dispatch(...): ...` for defaults. Three closures over the mount-fn's parameters; the inner `pick_target` shadowed the outer parameter of the same name. Replaced by callable classes with explicit fields; mount-fn shrinks to instantiate + register. Same call ergonomics from the FastAPI side (callable instance is a callable; signature inspection on a class instance reads `__call__` minus `self`).
+
+### Patterns that should propagate to future work
+
+- **Stateless helpers as plain functions, stateful as callable classes.** `_jackson_pick(self) -> Optional[str]` is stateless beyond `self`; `RecordedForward(calls)` is stateful. Don't add a class wrapper around something that has only `__call__` and no `__init__` work — that's a function in disguise.
+- **Test helpers go in `tests/utils/helpers.py`**, not `conftest.py`. Tests import what they need. Each test file may still wrap an imported callable class in a local pytest fixture (`def specs() -> _SpecBuilder: return _SpecBuilder()`); fixtures stay test-file-local, the class is shared.
+- **Test method names: short topic + outcome.** `test_503_at_K_capacity`, not `test_returns_503_when_in_flight_exceeds_K`. The `*test_name()*` docstring lead-in carries the long-form contract.
+- **Decompose chained comparisons.** `assert a <= b <= c` is the same compact-multi-condition form the no-inline-ternary rule targets; split into `_con_1 = a <= b; _con_2 = b <= c; assert _con_1 and _con_2`.
+- **Acronyms-everywhere policy still applies.** When a parameter name shadows English prose used in surrounding comments / docstrings (`external_forward`, `pick_target`), rename to the acronym form (`ext_fwd`, `pick_tgt`) so grep separates code from prose.
+
+---
+
 ## 2026-04-30 (later) — Notes consolidation: proof + experiment + InfoQ -> procedure.md + new MVA skill
 
 Three `notes/` files merged or relocated to bring the methodology / case-study split into clean alignment per the experimental-design skill's authority chain.

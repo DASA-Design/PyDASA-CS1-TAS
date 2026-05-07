@@ -1,5 +1,2 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
-markers = [
-    "live_mesh: tests that spin up a real FastAPI mesh; opt-in via `pytest -m live_mesh` (default suite skips them)",
-]
