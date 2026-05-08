@@ -1,0 +1,10 @@
+{
+    "_note": "Orchestrator-level run knobs (cross-cutting). Empty placeholder; populated at stage 9 when src/methods/experimental.py lands. Schema per the plan: seed, framework (fastapi|flask), server.wsgi_server (waitress|gunicorn), dpl (localhost|multiprocess|remote), run_label, output paths.",
+    "seed": null,
+    "framework": null,
+    "server": {
+        "wsgi_server": null
+    },
+    "dpl": null,
+    "run_label": null
+}

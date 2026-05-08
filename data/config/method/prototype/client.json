@@ -1,0 +1,31 @@
+{
+    "_note": "Client behaviour for the experimental method. Filled at stage 2. Loaded at stage 9 by src/methods/experimental.py and threaded into User / Sender / StopGuard / Stats constructors.",
+    "users": {
+        "population_size": 1
+    },
+    "ramp": {
+        "shape": "step",
+        "duration_s": 60.0,
+        "lambda_z_anchor": null
+    },
+    "sender": {
+        "kind_probability": {
+            "alarm": 0.25,
+            "medical_analysis": 0.75
+        },
+        "payload_size_bytes": 1024,
+        "timeout_s": 5.0
+    },
+    "guard": {
+        "max_requests": 1000,
+        "infra_failure_threshold": 5,
+        "infra_window_s": 5.0,
+        "quality_window_s": 60.0,
+        "r1_failure_rate_max": null,
+        "r2_response_time_s_max": null
+    },
+    "stats": {
+        "max_records": 10000,
+        "percentiles": [50, 95, 99]
+    }
+}
