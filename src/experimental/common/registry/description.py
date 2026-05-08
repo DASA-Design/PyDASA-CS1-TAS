@@ -1,0 +1,30 @@
+"""ServiceDescription, the service-metadata record (Weyns & Calinescu 2015 Fig. 2).
+
+- **SOURCE**: Weyns & Calinescu 2015, Fig. 2; reproduces ServiceDescription.
+- **FUNCTIONAL OBJECTIVE**: carry the metadata a ServiceClient needs to invoke a service: identifier, endpoint URL, supported operations, and arbitrary QoS hints (`custom_props`). Held by `ServiceRegistry`; copied into each client's `ServiceCache` on refresh.
+- **DEVIATION FROM SOURCE**: Java getter/setter pairs become Python attributes on a frozen dataclass; field names are shortened since the enclosing class already declares the domain (`ServiceDescription.service_name` is redundant, `ServiceDescription.name` is enough). `id` becomes `_id` to avoid clashing with Python's builtin `id()`. `customProperties: Map<String,Object>` becomes `custom_props: dict[str, Any]`; `operationList` becomes `operations: tuple[str, ...]` (per the project's acronym-substitution rule). Lives in `common/` rather than `target/` so `ServiceRegistry` and `ServiceCache` (also in `common/`) can reference it without forcing a managed-to-managing dependency.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ServiceDescription:
+    """Metadata for one service entry in the registry.
+
+    Attributes:
+        _id (str): unique service identifier (e.g. `"AlarmService_1"`); leading underscore avoids the builtin `id()` shadow.
+        name (str): human-readable service name (matches the catalogue label). Used as the `ServiceRegistry` key.
+        endpoint (str): full base URL (e.g. `"http://127.0.0.1:8002"`).
+        operations (tuple[str, ...]): tuple of operation names this service supports (e.g. `("triggerAlarm", "sendAlarm")`).
+        custom_props (dict[str, Any]): free-form QoS hints (failure rate, response time, cost from the catalogue).
+    """
+
+    _id: str
+    name: str
+    endpoint: str
+    operations: tuple[str, ...] = ()
+    custom_props: dict[str, Any] = field(default_factory=dict)
