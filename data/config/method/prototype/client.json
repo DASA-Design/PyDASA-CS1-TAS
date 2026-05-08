@@ -22,7 +22,7 @@
         "infra_window_s": 5.0,
         "quality_window_s": 60.0,
         "r1_failure_rate_max": null,
-        "r2_response_time_s_max": null
+        "r2_latency_s_max": null
     },
     "stats": {
         "max_records": 10000,
