@@ -112,8 +112,7 @@ def _show_csv_rows(tmp: Path, columns: list[str], row: dict[str, Any]) -> None:
 def main() -> None:
     """Print the canonical JSONL flow record and per-service CSV row to stdout.
 
-    The temp directory is created and torn down by `tempfile.TemporaryDirectory`,
-    so nothing persists between invocations.
+    The temp directory is created and torn down by `tempfile TemporaryDirectory`, so nothing persists between invocations.
     """
     with tempfile.TemporaryDirectory() as _tmp_str:
         _tmp = Path(_tmp_str)
