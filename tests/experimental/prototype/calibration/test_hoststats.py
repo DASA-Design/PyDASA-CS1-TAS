@@ -18,22 +18,29 @@ class TestHoststats:
     """Percentile helper + four host-floor probes."""
 
     def test_stats_us_empty(self) -> None:
-        """Empty input returns zeros for every percentile so probes can ship a no-data sentinel without raising."""
+        """Empty input returns zeros for every key so probes can ship a no-data sentinel without raising."""
         _ans = _stats_us([])
-        assert _ans == {"median_us": 0.0, "p95_us": 0.0, "p99_us": 0.0}
+        for _key in ("min_us", "max_us", "mean_us", "std_us",
+                     "median_us", "p95_us", "p99_us"):
+            assert _ans[_key] == 0.0
 
     def test_stats_us_typical(self) -> None:
-        """A typical sample input produces percentile values inside the input range and in non-decreasing order."""
+        """A typical sample input produces values inside the input range, with mean / median between min and max and percentiles in non-decreasing order."""
         _samples = [float(_v) for _v in range(10, 110, 10)]  # 10..100 us
         _ans = _stats_us(_samples)
+        assert _ans["min_us"] == 10.0
+        assert _ans["max_us"] == 100.0
         assert 10.0 <= _ans["median_us"] <= 100.0
+        assert 10.0 <= _ans["mean_us"] <= 100.0
+        assert _ans["std_us"] > 0.0
         assert _ans["median_us"] <= _ans["p95_us"]
         assert _ans["p95_us"] <= _ans["p99_us"]
 
     def test_timer_shape(self) -> None:
         """Probing the timer at a tiny sample size returns the documented stats dict."""
         _ans = probe_timer(samples_n=10)
-        for _key in ("samples_n", "median_ns", "min_ns", "max_ns"):
+        for _key in ("samples_n", "median_ns", "mean_ns", "std_ns",
+                     "min_ns", "max_ns"):
             assert _key in _ans
 
     def test_timer_zero_samples(self) -> None:
@@ -41,6 +48,8 @@ class TestHoststats:
         _ans = probe_timer(samples_n=0)
         assert _ans == {"samples_n": 0,
                         "median_ns": 0,
+                        "mean_ns": 0.0,
+                        "std_ns": 0.0,
                         "min_ns": 0,
                         "max_ns": 0}
 
@@ -61,16 +70,24 @@ class TestHoststats:
             assert _key in _ans
 
     def test_scaling_shape(self) -> None:
-        """Probing handler scaling at two concurrency levels returns one stats block per level, keyed by the concurrency value."""
-        _ans = probe_handler_scaling(concurs=[1, 2], samples_per_c=2)
+        """Probing handler scaling with start/stop/step returns one stats block per c walked, keyed by the concurrency value."""
+        _ans = probe_handler_scaling(start=1,
+                                     stop=2,
+                                     step=1,
+                                     samples_per_c=2,
+                                     max_drift_pct=100.0)
         assert _ans["concurs"] == [1, 2]
-        assert "1" in _ans["stats"]
-        assert "2" in _ans["stats"]
+        assert set(_ans["stats"].keys()) == {"1", "2"}
         for _key in ("samples_n", "median_us", "p95_us", "p99_us"):
             assert _key in _ans["stats"]["1"]
 
-    def test_scaling_default_concurs(self) -> None:
-        """Omitting the concurrency list falls back to the documented default sweep."""
-        _ans = probe_handler_scaling(samples_per_c=1)
-        assert _ans["concurs"] == [1, 2, 4, 8, 16]
-        assert set(_ans["stats"].keys()) == {"1", "2", "4", "8", "16"}
+    def test_scaling_self_terminates_on_drift(self) -> None:
+        """Setting `max_drift_pct=0.0` forces the probe to stop after the second concurrency (any drift breaks the band)."""
+        _ans = probe_handler_scaling(start=1,
+                                     stop=64,
+                                     step=1,
+                                     samples_per_c=1,
+                                     max_drift_pct=0.0)
+        # First c is recorded unconditionally; the drift check fires on the next.
+        assert len(_ans["concurs"]) <= 2
+        assert _ans["concurs"][0] == 1

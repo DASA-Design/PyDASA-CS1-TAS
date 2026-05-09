@@ -10,10 +10,12 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from src.experimental.prototype.calibration.vernier import (
+    Vernier,
     build_vernier_fastapi_app,
     build_vernier_flask_app,
     echo,
 )
+from src.experimental.prototype.target.service.atomic import AtomicService
 
 
 class TestVernier:
@@ -45,7 +47,7 @@ class TestVernier:
         assert _ans["blob_size"] == 128
 
     def test_fastapi_echoes(self) -> None:
-        """POST `/` to the FastAPI vernier returns 200 + the echo body."""
+        """POST `/` to the FastAPI vernier returns 200 with the echo body plus `c_used_at_start` from the inherited admission gate."""
         _client = TestClient(build_vernier_fastapi_app())
         _resp = _client.post("/",
                              json={"req_id": "r-2",
@@ -56,6 +58,8 @@ class TestVernier:
         assert _body["req_id"] == "r-2"
         assert _body["submitted_ts"] == 2.0
         assert _body["blob_size"] == 3
+        # Inherited from AtomicService: every successful response stamps the in-flight count.
+        assert _body["c_used_at_start"] >= 1
 
     def test_fastapi_healthz(self) -> None:
         """GET `/healthz` on the FastAPI vernier returns 200 + `{"status": "ok"}`."""
@@ -65,7 +69,7 @@ class TestVernier:
         assert _resp.json() == {"status": "ok"}
 
     def test_flask_echoes(self) -> None:
-        """POST `/` to the Flask vernier returns 200 + the echo body."""
+        """POST `/` to the Flask vernier returns 200 with the echo body plus `c_used_at_start`."""
         _app = build_vernier_flask_app()
         _client = _app.test_client()
         _resp = _client.post("/",
@@ -77,6 +81,7 @@ class TestVernier:
         assert _body["req_id"] == "r-3"
         assert _body["submitted_ts"] == 3.0
         assert _body["blob_size"] == 2
+        assert _body["c_used_at_start"] >= 1
 
     def test_flask_healthz(self) -> None:
         """GET `/healthz` on the Flask vernier returns 200 + `{"status": "ok"}`."""
@@ -85,3 +90,10 @@ class TestVernier:
         _resp = _client.get("/healthz")
         assert _resp.status_code == 200
         assert _resp.get_json() == {"status": "ok"}
+
+    def test_vernier_subclasses_atomic(self) -> None:
+        """`Vernier` inherits from `AtomicService`, so K + c admission is available out of the box without overriding `invoke_operation`."""
+        _svc = Vernier(service_name="vernier", k=10, c=4)
+        assert isinstance(_svc, AtomicService)
+        assert _svc.k == 10
+        assert _svc.c == 4

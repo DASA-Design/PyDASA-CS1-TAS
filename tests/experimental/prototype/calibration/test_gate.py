@@ -1,64 +1,50 @@
 """Tests for `src.experimental.prototype.calibration.gate`.
 
-Logic-only checks against synthetic envelopes; the notebook applies the gate to a real envelope.
+Logic-only checks against synthetic envelopes; the notebook applies the report to a real envelope.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pytest
 
 from src.experimental.prototype.calibration.gate import (
     HOST_FLOOR_PROBES,
-    _check_handler_scaling,
-    _check_jitter,
-    _check_loopback,
-    _check_probe,
-    _check_timer,
-    _spread_check,
     stamp_gate,
     verdict,
 )
 
 
 def _full_envelope(*,
-                   timer_max_ns: int = 110,
+                   timer_std_ns: float = 50.0,
                    timer_median_ns: int = 100,
                    jitter_median_us: float = 1010.0,
                    jitter_target_us: int = 1000,
+                   jitter_std_us: float = 5.0,
                    loopback_median_us: float = 100.0,
-                   loopback_p99_us: float = 102.0,
+                   loopback_std_us: float = 4.0,
                    handler_low: float = 50.0,
-                   handler_high: float = 51.0) -> dict[str, Any]:
-    """Build a synthetic envelope with all four probe blocks populated.
+                   handler_high: float = 51.0,
+                   sat_rate: int | None = 350) -> dict[str, Any]:
+    """Build a synthetic envelope with all four probe blocks + rate block populated.
 
-    Defaults sit comfortably inside the 5 % noise-floor band so tests can keep them as-is for the pass case or perturb specific fields for the fail case.
-
-    Args:
-        timer_max_ns (int, optional): max delta. Defaults to 110.
-        timer_median_ns (int, optional): median delta. Defaults to 100.
-        jitter_median_us (float, optional): measured jitter median. Defaults to 1010.0.
-        jitter_target_us (int, optional): jitter target. Defaults to 1000.
-        loopback_median_us (float, optional): loopback median. Defaults to 100.0.
-        loopback_p99_us (float, optional): loopback p99. Defaults to 102.0.
-        handler_low (float, optional): handler-scaling latency at the lowest c. Defaults to 50.0.
-        handler_high (float, optional): handler-scaling latency at the highest c. Defaults to 51.0.
-
-    Returns:
-        dict[str, Any]: a populated envelope shape ready for `verdict`.
+    Defaults sit comfortably inside the 5 % envelope band so tests can keep them as-is for the pass case or perturb specific fields for the fail case.
     """
     _env: dict[str, Any] = {
         "timer": {
             "samples_n": 100,
             "median_ns": timer_median_ns,
+            "std_ns": timer_std_ns,
             "min_ns": 90,
-            "max_ns": timer_max_ns,
+            "max_ns": 110,
         },
         "jitter": {
             "samples_n": 10,
             "target_us": jitter_target_us,
             "median_us": jitter_median_us,
+            "std_us": jitter_std_us,
             "p95_us": 1100.0,
             "p99_us": 1200.0,
         },
@@ -66,8 +52,9 @@ def _full_envelope(*,
             "samples_n": 10,
             "payload_bytes": 64,
             "median_us": loopback_median_us,
+            "std_us": loopback_std_us,
             "p95_us": 101.0,
-            "p99_us": loopback_p99_us,
+            "p99_us": 102.0,
         },
         "handler_scaling": {
             "concurs": [1, 4],
@@ -82,110 +69,159 @@ def _full_envelope(*,
                       "p99_us": 70.0},
             },
         },
+        "rate": {
+            "saturation_rate": sat_rate,
+            "ramp": [50, 100, 150, 200],
+        },
     }
     return _env
 
 
 class TestGate:
-    """Spread checker + four per-probe rules + verdict + stamp."""
+    """Calibration report: floors + precision band + envelope gates + verifiable range."""
 
-    def test_spread_within(self) -> None:
-        """A spread inside the noise-floor band passes the check."""
-        _ans = _spread_check(110.0, 100.0, 15.0, "label")
-        assert _ans["passed"] is True
-        assert _ans["value_pct"] == pytest.approx(10.0)
+    def test_floors_extracted(self) -> None:
+        """Floors block carries each floor's central value + std-dev in microseconds."""
+        _v = verdict(_full_envelope())
+        _f = _v["floors"]
+        assert _f["timer"]["value_us"] == pytest.approx(0.1)
+        assert _f["timer"]["std_us"] == pytest.approx(0.05)
+        assert _f["jitter"]["value_us"] == pytest.approx(10.0)
+        assert _f["loopback"]["value_us"] == pytest.approx(100.0)
 
-    def test_spread_over(self) -> None:
-        """A spread above the noise-floor band fails the check; the reason line cites both percentages so the operator can see how far off the band the probe was."""
-        _ans = _spread_check(110.0, 100.0, 5.0, "label")
-        assert _ans["passed"] is False
-        assert "10.00%" in _ans["reason"]
-        assert "limit 5.00%" in _ans["reason"]
+    def test_precision_band_quadrature(self) -> None:
+        """Precision band is the quadrature sum of the three floor std-devs."""
+        _v = verdict(_full_envelope(timer_std_ns=1000.0,
+                                    jitter_std_us=3.0,
+                                    loopback_std_us=4.0))
+        _band = _v["precision_band_us"]
+        # timer 1000 ns = 1.0 us; sqrt(1^2 + 3^2 + 4^2) = sqrt(26) ~ 5.099
+        assert _band["timer_std_us"] == pytest.approx(1.0)
+        assert _band["jitter_std_us"] == pytest.approx(3.0)
+        assert _band["loopback_std_us"] == pytest.approx(4.0)
+        assert _band["total_us"] == pytest.approx(math.sqrt(26.0))
 
-    def test_timer_passes(self) -> None:
-        """A clock with consistent ticks (max close to median) passes the timer rule."""
-        _ans = _check_timer({"median_ns": 100, "max_ns": 104}, 5.0)
-        assert _ans["passed"] is True
+    def test_precision_band_missing_floor(self) -> None:
+        """Missing floor data sets `total_us=None` so the report flags the gap rather than computing on partial data."""
+        _env = _full_envelope()
+        _env["loopback"] = {}
+        _v = verdict(_env)
+        assert _v["precision_band_us"]["total_us"] is None
 
-    def test_timer_fails(self) -> None:
-        """A clock whose worst tick is far from the median fails the timer rule."""
-        _ans = _check_timer({"median_ns": 100, "max_ns": 200}, 5.0)
-        assert _ans["passed"] is False
+    def test_verifiable_range(self) -> None:
+        """Verifiable range reports `c_max` (highest stable concurrency) and `r_max` (saturation rate)."""
+        _v = verdict(_full_envelope(sat_rate=350))
+        _r = _v["verifiable_range"]
+        assert _r["c_max"] == 4
+        assert _r["r_max_req_s"] == 350
 
-    def test_timer_missing_data(self) -> None:
-        """A timer block with no data fails as missing rather than passing by default; the gate never trusts an unmeasured probe."""
-        _ans = _check_timer({}, 5.0)
-        assert _ans["passed"] is False
-        assert _ans["reason"] == "missing data"
+    def test_c_max_truncated_at_band_break(self) -> None:
+        """When scaling breaks above some c, `c_max` is the last concurrency inside the band."""
+        _env = _full_envelope()
+        _env["handler_scaling"]["stats"] = {
+            "1": {"median_us": 50.0},
+            "4": {"median_us": 51.0},
+            "16": {"median_us": 80.0},
+        }
+        _v = verdict(_env)
+        assert _v["verifiable_range"]["c_max"] == 4
 
-    def test_jitter_passes(self) -> None:
-        """Jitter slightly over the target sleep still passes the rule."""
-        _ans = _check_jitter({"target_us": 1000, "median_us": 1010.0}, 5.0)
-        assert _ans["passed"] is True
+    def test_gate_handler_scaling_pass(self) -> None:
+        """Handler-scaling gate passes when at least one concurrency above c=1 stays within the band; reports the knee."""
+        _v = verdict(_full_envelope())
+        _g = _v["gates"]["handler_scaling"]
+        assert _g["passed"] is True
+        assert "knee at c=4" in _g["reason"]
 
-    def test_jitter_fails(self) -> None:
-        """Jitter well over the target sleep fails the rule."""
-        _ans = _check_jitter({"target_us": 1000, "median_us": 1100.0}, 5.0)
-        assert _ans["passed"] is False
+    def test_gate_handler_scaling_reports_knee_not_failure(self) -> None:
+        """A runaway high-c median does NOT fail the gate; the knee is reported instead (mirrors saturation reporting)."""
+        _env = _full_envelope()
+        _env["handler_scaling"]["stats"] = {
+            "1": {"median_us": 50.0},
+            "2": {"median_us": 51.0},
+            "4": {"median_us": 100.0},  # break point
+            "8": {"median_us": 5_000.0},  # runaway tail; ignored
+        }
+        _v = verdict(_env)
+        _g = _v["gates"]["handler_scaling"]
+        assert _g["passed"] is True
+        assert "knee at c=2" in _g["reason"]
 
-    def test_jitter_zero_target(self) -> None:
-        """A zero-target jitter block fails as missing data; a probe that wasn't actually run shouldn't pass by accident."""
-        _ans = _check_jitter({"target_us": 0, "median_us": 100.0}, 5.0)
-        assert _ans["reason"] == "missing data"
+    def test_gate_handler_scaling_fail_no_headroom(self) -> None:
+        """Gate fails only when even the first non-trivial concurrency drifts (zero headroom)."""
+        _env = _full_envelope()
+        _env["handler_scaling"]["stats"] = {
+            "1": {"median_us": 50.0},
+            "2": {"median_us": 100.0},
+        }
+        _v = verdict(_env)
+        assert _v["gates"]["handler_scaling"]["passed"] is False
 
-    def test_loopback_passes(self) -> None:
-        """A small p99-vs-median spread on loopback passes the rule (the tail behaves like the typical case)."""
-        _ans = _check_loopback({"median_us": 100.0, "p99_us": 102.0}, 5.0)
-        assert _ans["passed"] is True
+    def test_gate_saturation_pass(self) -> None:
+        """Saturation gate passes when the rate sweep reports a knee."""
+        _v = verdict(_full_envelope(sat_rate=350))
+        assert _v["gates"]["saturation_knee"]["passed"] is True
 
-    def test_loopback_fails(self) -> None:
-        """A large p99-vs-median spread on loopback fails the rule (the tail is far from typical)."""
-        _ans = _check_loopback({"median_us": 100.0, "p99_us": 150.0}, 5.0)
-        assert _ans["passed"] is False
+    def test_gate_saturation_fail(self) -> None:
+        """Saturation gate fails when the rate sweep didn't find a knee within its range."""
+        _v = verdict(_full_envelope(sat_rate=None))
+        assert _v["gates"]["saturation_knee"]["passed"] is False
 
-    def test_scaling_passes(self) -> None:
-        """A flat latency curve across concurrencies passes the scaling rule."""
-        _stats = {"1": {"median_us": 50.0}, "16": {"median_us": 50.5}}
-        _ans = _check_handler_scaling({"stats": _stats}, 5.0)
-        assert _ans["passed"] is True
-
-    def test_scaling_fails(self) -> None:
-        """A latency curve that climbs sharply with concurrency fails the scaling rule."""
-        _stats = {"1": {"median_us": 50.0}, "16": {"median_us": 75.0}}
-        _ans = _check_handler_scaling({"stats": _stats}, 5.0)
-        assert _ans["passed"] is False
-
-    def test_scaling_single_c(self) -> None:
-        """A scaling block with only one concurrency level fails as missing data; you cannot compare a probe to itself."""
-        _ans = _check_handler_scaling({"stats": {"1": {"median_us": 50.0}}}, 5.0)
-        assert _ans["reason"] == "missing data"
-
-    def test_verdict_all_pass(self) -> None:
-        """An envelope tuned inside the 5 % band yields `passed=True` overall and per-probe."""
-        # 4 % spread, under the 5 % limit
-        _env = _full_envelope(timer_max_ns=104)
-        _v = verdict(_env, noise_floor_pct=5.0)
-        assert _v["passed"] is True
-        for _name in HOST_FLOOR_PROBES:
-            assert _v["checks"][_name]["passed"] is True
-
-    def test_verdict_one_fails(self) -> None:
-        """Pushing one probe outside the band flips the overall verdict to `passed=False` while the others stay `passed=True`."""
-        # 100 % spread, over the 5 % limit
-        _env = _full_envelope(timer_max_ns=200)
-        _v = verdict(_env, noise_floor_pct=5.0)
-        assert _v["passed"] is False
-        assert _v["checks"]["timer"]["passed"] is False
-        assert _v["checks"]["jitter"]["passed"] is True
-
-    def test_verdict_unknown_probe(self) -> None:
-        """Dispatching to an unknown probe name raises so config typos surface immediately rather than silently skipping a check."""
-        with pytest.raises(ValueError, match="unknown probe"):
-            _check_probe("not_a_probe", {}, 5.0)
+    def test_overall_passed(self) -> None:
+        """Overall `passed` is True iff every envelope gate passes (floors are informational)."""
+        _v_ok = verdict(_full_envelope())
+        assert _v_ok["passed"] is True
+        _v_bad = verdict(_full_envelope(handler_high=80.0))
+        assert _v_bad["passed"] is False
 
     def test_stamp_writes(self) -> None:
-        """`stamp_gate(env)` mutates `env["gate"]` and returns the same dict; the gate-block fields match the standalone `verdict` output."""
-        _env = _full_envelope(timer_max_ns=104)
+        """`stamp_gate(env)` mutates `env["gate"]` and returns the same dict."""
+        _env = _full_envelope()
         _ans = stamp_gate(_env, noise_floor_pct=5.0)
         assert _env["gate"] is _ans
         assert _env["gate"]["passed"] is True
+
+    def test_host_floor_probes_constant(self) -> None:
+        """The exported probe-name tuple still names the four floor probes (back-compat for the notebook)."""
+        assert HOST_FLOOR_PROBES == ("timer", "jitter", "loopback", "handler_scaling")
+
+    def test_summary_keys(self) -> None:
+        """Summary block carries one `headline` row per probe + rate; no verdict prose."""
+        _v = verdict(_full_envelope())
+        _s = _v["summary"]
+        assert set(_s.keys()) == {"timer", "jitter", "loopback", "scaling", "rate"}
+        for _row in _s.values():
+            assert "headline" in _row
+            assert "verdict" not in _row
+
+    def test_summary_timer_headline(self) -> None:
+        """Timer headline reports the std-dev as +/- microseconds."""
+        _v = verdict(_full_envelope(timer_std_ns=50.0))
+        assert _v["summary"]["timer"]["headline"] == r"$\pm$ 0.05 $\mu$s"
+
+    def test_summary_scaling_truncates_at_knee(self) -> None:
+        """Scaling headline reports the knee (highest c within band), not the runaway value past it."""
+        _env = _full_envelope()
+        _env["handler_scaling"]["stats"] = {
+            "1": {"median_us": 50.0},
+            "4": {"median_us": 51.0},
+            "16": {"median_us": 80.0},
+        }
+        _v = verdict(_env)
+        assert "c=4" in _v["summary"]["scaling"]["headline"]
+        assert "16" not in _v["summary"]["scaling"]["headline"]
+
+    def test_summary_scaling_no_headroom(self) -> None:
+        """When even the first non-trivial concurrency drifts, the headline reports 'no headroom'."""
+        _env = _full_envelope()
+        _env["handler_scaling"]["stats"] = {
+            "1": {"median_us": 50.0},
+            "2": {"median_us": 100.0},
+        }
+        _v = verdict(_env)
+        assert _v["summary"]["scaling"]["headline"] == "no headroom"
+
+    def test_summary_rate_no_knee(self) -> None:
+        """A rate sweep that didn't saturate gets a 'no knee within ramp' headline."""
+        _v = verdict(_full_envelope(sat_rate=None))
+        assert "no knee" in _v["summary"]["rate"]["headline"]

@@ -11,6 +11,10 @@ Modules (built one per stage-4 step):
 The whole package together produces one calibration envelope JSON per `dpl` mode under `data/results/calibration/<dpl>/`. The 00-calibration.ipynb notebook is the end-to-end consumer; modules are individually unit-tested for logic, not for procedural results.
 """
 
+from src.experimental.prototype.calibration.config import (
+    DFLT_CALIBRATION_CFG_PATH,
+    load_calibration_cfg,
+)
 from src.experimental.prototype.calibration.envelope import (
     DFLT_RESULTS_BASE,
     ENVELOPE_VER,
@@ -45,6 +49,7 @@ from src.experimental.prototype.calibration.vernier import (
 )
 
 __all__ = [
+    "DFLT_CALIBRATION_CFG_PATH",
     "DFLT_RESULTS_BASE",
     "ENVELOPE_VER",
     "HOST_FLOOR_PROBES",
@@ -56,6 +61,7 @@ __all__ = [
     "drive_at_rate",
     "echo",
     "envelope_path",
+    "load_calibration_cfg",
     "make_envelope",
     "make_lambda_ramp",
     "probe_handler_scaling",

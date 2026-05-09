@@ -1,3 +1,44 @@
 {
-    "_note": "Calibration apparatus thresholds + probe sample sizes. Empty placeholder; populated at stage 4 when prototype/calibration/ lands. Schema per the plan: gate.noise_floor_pct, hoststats.{timer_samples, jitter_samples, loopback_samples, handler_scaling_grid}, rate.{target_loss_pct, trials_per_rate, lambda_grid}, envelope.write_path."
+    "_note": "Calibration apparatus thresholds + probe sample sizes. Loaded once by src.methods.experimental.run_calibration and threaded into the probes + gate; the source-side `_DFLT_*` constants are runtime fallbacks for callers that skip the loader.",
+    "vernier": {
+        "K": null,
+        "c": null
+    },
+    "dpl": {
+        "host": "127.0.0.1",
+        "base_port": 9042,
+        "workers": 4,
+        "ready_timeout_s": 20.0
+    },
+    "hoststats": {
+        "timer": {
+            "samples_n": 1000
+        },
+        "jitter": {
+            "samples_n": 100,
+            "target_us": 1000
+        },
+        "loopback": {
+            "samples_n": 100,
+            "payload_bytes": 32768
+        },
+        "handler_scaling": {
+            "start": 8,
+            "stop": 1024,
+            "step": 32,
+            "samples_per_c": 50,
+            "max_drift_pct": 5.0
+        }
+    },
+    "rate": {
+        "start": 8,
+        "stop": 1024,
+        "step": 32,
+        "per_rate_s": 5.0,
+        "target_loss_pct": 5.0,
+        "max_p95_latency_us": 100000.0
+    },
+    "gate": {
+        "noise_floor_pct": 5.0
+    }
 }

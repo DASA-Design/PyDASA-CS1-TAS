@@ -1,27 +1,22 @@
-"""Host-floor probes: timer, jitter, loopback, handler scaling.
+"""Host-floor probes that characterise how quiet the host is before any experiment runs.
 
-Four pure-Python probes that quantify how quiet the host is before any experiment runs. Each fills the matching envelope block. None touches the vernier or HTTP; the goal is to characterise the platform itself.
+Four probes, each filling the matching envelope block:
 
-- `probe_timer`: median delta between consecutive `time.perf_counter_ns()` reads (clock floor).
-- `probe_jitter`: actual elapsed time of `asyncio.sleep(target)` (scheduler precision).
-- `probe_loopback`: TCP round-trip on a 127.0.0.1 socket pair (kernel + socket floor).
-- `probe_handler_scaling`: latency of a no-op async handler at increasing concurrency (event-loop saturation knee).
+- `probe_timer`: clock floor (deltas between consecutive `time.perf_counter_ns()` reads).
+- `probe_jitter`: scheduler floor (overshoot of `asyncio.sleep` against a target).
+- `probe_loopback`: kernel TCP floor (round-trip on a 127.0.0.1 socket pair).
+- `probe_handler_scaling`: event-loop saturation knee (latency of a no-op handler at increasing concurrency).
 
-**Statistics terminology** (used by every probe's output dict):
+STATISTICS. Each probe reports min, max, mean, std, median, p95, and p99 over its samples. The median is the headline summary because latency distributions skew long-tailed; p95 and p99 capture the typical and the slow-but-not-catastrophic tail. Min / max are useful on clock-tick samples where the spread itself is the signal.
 
-- `median` (also written `p50`): the middle value when samples are sorted; half are below, half above. Robust against outliers and the headline summary for skewed latency data.
-- `p95`: the 95th-percentile value; 95 % of samples are at or below it. Captures the typical tail.
-- `p99`: the 99th-percentile value; the slow-but-not-catastrophic tail.
-- `min` / `max`: extremes of the sample. Useful for clock-tick probes where the spread itself is the signal.
-- The arithmetic mean is intentionally NOT reported. Sample distributions here are skewed (long upper tail), so median + percentiles describe them better than the average.
-
-Defaults are runtime fallbacks for `data/config/method/prototype/calibration.json::hoststats.*`.
+Module-level `_DFLT_*` constants are runtime fallbacks for the matching `data/config/method/prototype/calibration.json` keys.
 """
 
 from __future__ import annotations
 
 import asyncio
 import socket
+import statistics
 import threading
 import time
 from typing import Any
@@ -34,29 +29,46 @@ _DFLT_TIMER_SAMPLES = 1000
 _DFLT_JITTER_SAMPLES = 100
 _DFLT_JITTER_TARGET_US = 1000
 _DFLT_LOOPBACK_SAMPLES = 100
-_DFLT_LOOPBACK_PAYLOAD = 64
-_DFLT_SCALING_CONCURS: tuple[int, ...] = (1, 2, 4, 8, 16)
+_DFLT_LOOPBACK_PAYLOAD = 32 * 1024
+_DFLT_SCALING_START = 1
+_DFLT_SCALING_STOP = 1024
+_DFLT_SCALING_STEP = 10
 _DFLT_SCALING_SAMPLES_PER_C = 10
+_DFLT_SCALING_MAX_DRIFT_PCT = 5.0
 
 
 def _stats_us(samples_us: list[float]) -> dict[str, float]:
-    """Compute p50 / p95 / p99 over a list of microsecond samples.
+    """Compute min / max / mean / std-dev / median / p95 / p99 over microsecond samples.
 
     Args:
         samples_us (list[float]): per-sample latencies in microseconds; may be empty.
 
     Returns:
-        dict[str, float]: keys `median_us`, `p95_us`, `p99_us`. All zero when the input is empty.
+        dict[str, float]: keys `min_us`, `max_us`, `mean_us`, `std_us`, `median_us`, `p95_us`, `p99_us`. All zero when the input is empty.
     """
-    if not samples_us:
-        return {"median_us": 0.0, "p95_us": 0.0, "p99_us": 0.0}
-    _sorted = sorted(samples_us)
-    _n = len(_sorted)
     _ans: dict[str, float] = {
-        "median_us": _sorted[_n // 2],
-        "p95_us": _sorted[min(int(_n * 0.95), _n - 1)],
-        "p99_us": _sorted[min(int(_n * 0.99), _n - 1)],
+        "min_us": 0.0,
+        "max_us": 0.0,
+        "mean_us": 0.0,
+        "std_us": 0.0,
+        "median_us": 0.0,
+        "p95_us": 0.0,
+        "p99_us": 0.0,
     }
+    if samples_us:
+        _sorted = sorted(samples_us)
+        _n = len(_sorted)
+        if _n > 1:
+            _std = statistics.pstdev(_sorted)
+        else:
+            _std = 0.0
+        _ans["min_us"] = _sorted[0]
+        _ans["max_us"] = _sorted[-1]
+        _ans["mean_us"] = statistics.mean(_sorted)
+        _ans["std_us"] = _std
+        _ans["median_us"] = _sorted[_n // 2]
+        _ans["p95_us"] = _sorted[min(int(_n * 0.95), _n - 1)]
+        _ans["p99_us"] = _sorted[min(int(_n * 0.99), _n - 1)]
     return _ans
 
 
@@ -78,17 +90,27 @@ def probe_timer(*, samples_n: int = _DFLT_TIMER_SAMPLES) -> dict[str, Any]:
         if _now != _last:
             _samples.append(_now - _last)
             _last = _now
-    if not _samples:
-        _ans: dict[str, Any] = {"samples_n": 0, "median_ns": 0, "min_ns": 0, "max_ns": 0}
-        return _ans
-    _samples.sort()
-    _n = len(_samples)
-    _ans = {
-        "samples_n": _n,
-        "median_ns": _samples[_n // 2],
-        "min_ns": _samples[0],
-        "max_ns": _samples[-1],
+    _ans: dict[str, Any] = {
+        "samples_n": 0,
+        "median_ns": 0,
+        "mean_ns": 0.0,
+        "std_ns": 0.0,
+        "min_ns": 0,
+        "max_ns": 0,
     }
+    if _samples:
+        _samples.sort()
+        _n = len(_samples)
+        if _n > 1:
+            _std_ns = statistics.pstdev(_samples)
+        else:
+            _std_ns = 0.0
+        _ans["samples_n"] = _n
+        _ans["median_ns"] = _samples[_n // 2]
+        _ans["mean_ns"] = statistics.mean(_samples)
+        _ans["std_ns"] = _std_ns
+        _ans["min_ns"] = _samples[0]
+        _ans["max_ns"] = _samples[-1]
     return _ans
 
 
@@ -141,7 +163,7 @@ def probe_loopback(*,
 
     Args:
         samples_n (int, optional): how many round-trips to time. Defaults to 100.
-        payload_bytes (int, optional): bytes per request. Defaults to 64.
+        payload_bytes (int, optional): bytes per request. Defaults to 32 KiB.
 
     Returns:
         dict[str, Any]: keys `samples_n`, `payload_bytes`, `median_us`, `p95_us`, `p99_us`.
@@ -162,8 +184,8 @@ def probe_loopback(*,
     try:
         for _ in range(samples_n):
             _t0 = time.perf_counter()
-            _client.send(_payload)
-            _ = _client.recv(payload_bytes)
+            _client.sendall(_payload)
+            _recv_exact(_client, payload_bytes)
             _samples_us.append((time.perf_counter() - _t0) * 1_000_000.0)
     finally:
         _client.close()
@@ -194,50 +216,76 @@ def _loopback_echo(server: socket.socket,
     conn_holder.append(_conn)
     try:
         while True:
-            _data = _conn.recv(payload_bytes)
-            if not _data:
+            _data = _recv_exact(_conn, payload_bytes)
+            if _data is None:
                 break
-            _conn.send(_data)
+            _conn.sendall(_data)
     except OSError:
         pass
 
 
-def probe_handler_scaling(*,
-                          concurs: list[int] | None = None,
-                          samples_per_c: int = _DFLT_SCALING_SAMPLES_PER_C) -> dict[str, Any]:
-    """Measure no-op async-handler latency at increasing concurrency levels.
+def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
+    """Read exactly `n` bytes from `sock`, looping over `recv` until the buffer is full.
 
-    For each concurrency `c`, runs `samples_per_c` waves of `c` parallel coroutines (each does one `await asyncio.sleep(0)` yield) and records every coroutine's wall-clock time. Reveals event-loop saturation: ideal scaling is flat latency vs `c`; real scaling shows a knee.
+    TCP is a byte stream; a single `recv(n)` may return fewer bytes than requested. At kB-scale payloads the response routinely spans multiple kernel reads, so the probe must accumulate.
 
     Args:
-        concurs (list[int] | None, optional): concurrency levels to sweep. Defaults to None, which uses `(1, 2, 4, 8, 16)`.
-        samples_per_c (int, optional): waves per concurrency level. Defaults to 10.
+        sock (socket.socket): connected socket.
+        n (int): exact byte count to read.
 
     Returns:
-        dict[str, Any]: keys `concurs` (list of `c` values used) and `stats` (dict mapping `str(c)` -> `{samples_n, median_us, p95_us, p99_us}`).
+        bytes | None: the `n` bytes when the read completes; `None` when the peer closes before `n` bytes arrive.
     """
-    if concurs is None:
-        _cs = list(_DFLT_SCALING_CONCURS)
-    else:
-        _cs = list(concurs)
-    with windows_timer_resolution(1):
-        _ans = run_async_safe(lambda: _probe_handler_scaling_async(_cs, samples_per_c))
+    _ans: bytes | None = None
+    _buf = bytearray()
+    _closed = False
+    while len(_buf) < n and not _closed:
+        _chunk = sock.recv(n - len(_buf))
+        if not _chunk:
+            _closed = True
+        else:
+            _buf.extend(_chunk)
+    if not _closed:
+        _ans = bytes(_buf)
     return _ans
 
 
-async def _probe_handler_scaling_async(concurs: list[int],
-                                       samples_per_c: int) -> dict[str, Any]:
-    """Async body of `probe_handler_scaling`: drive each concurrency level, collect per-coroutine latencies.
+def probe_handler_scaling(*,
+                          start: int = _DFLT_SCALING_START,
+                          stop: int = _DFLT_SCALING_STOP,
+                          step: int = _DFLT_SCALING_STEP,
+                          samples_per_c: int = _DFLT_SCALING_SAMPLES_PER_C,
+                          max_drift_pct: float = _DFLT_SCALING_MAX_DRIFT_PCT) -> dict[str, Any]:
+    """Walk concurrency from `start` to `stop`, stopping at the first level whose median drifts beyond `max_drift_pct`.
 
     Args:
-        concurs (list[int]): concurrency levels to sweep.
-        samples_per_c (int): waves per concurrency level.
+        start (int, optional): first concurrency. Defaults to 1.
+        stop (int, optional): inclusive upper bound. Defaults to 1024.
+        step (int, optional): additive increment (`c <- c + step`). Defaults to 10.
+        samples_per_c (int, optional): waves per concurrency level. Defaults to 10.
+        max_drift_pct (float, optional): stop tolerance against `start`'s median. Defaults to 5.0.
 
     Returns:
-        dict[str, Any]: same shape as `probe_handler_scaling`'s return.
+        dict[str, Any]: keys `concurs` (list of `c` values walked) and `stats` (dict mapping `str(c)` to its sample stats).
     """
+    with windows_timer_resolution(1):
+        _ans = run_async_safe(lambda: _probe_handler_scaling_async(
+            start, stop, step, samples_per_c, max_drift_pct))
+    return _ans
+
+
+async def _probe_handler_scaling_async(start: int,
+                                       stop: int,
+                                       step: int,
+                                       samples_per_c: int,
+                                       max_drift_pct: float) -> dict[str, Any]:
+    """Async body of `probe_handler_scaling`; sentinel-driven loop, single return."""
+    _cs: list[int] = []
     _stats: dict[str, dict[str, float]] = {}
-    for _c in concurs:
+    _base: float | None = None
+    _drifted = False
+    _c = start
+    while _c <= stop and not _drifted:
         _all: list[float] = []
         for _ in range(samples_per_c):
             _tasks = [asyncio.create_task(_noop_handler()) for _ in range(_c)]
@@ -246,7 +294,16 @@ async def _probe_handler_scaling_async(concurs: list[int],
         _block: dict[str, float] = {"samples_n": float(len(_all))}
         _block.update(_stats_us(_all))
         _stats[str(_c)] = _block
-    _ans: dict[str, Any] = {"concurs": list(concurs), "stats": _stats}
+        _cs.append(_c)
+        _med = _block.get("median_us", 0.0)
+        if _base is None:
+            _base = _med
+        elif _base > 0:
+            _drift = abs((_med - _base) / _base * 100.0)
+            if _drift > max_drift_pct:
+                _drifted = True
+        _c += step
+    _ans: dict[str, Any] = {"concurs": _cs, "stats": _stats}
     return _ans
 
 
