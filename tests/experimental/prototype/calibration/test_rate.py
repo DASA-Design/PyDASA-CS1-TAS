@@ -28,30 +28,30 @@ def _clean_row(rate: int) -> dict[str, Any]:
     return {"rate": rate, "loss_pct": 0.0, "p95_us": 1000.0}
 
 
-def _clean_driver(url: str,
+def _clean_driver(target_urls: list[str],
                   rate: int,
                   duration_s: float) -> dict[str, Any]:
     """Stateless fake `RateDriver`: every rate clean."""
-    del url, duration_s
+    del target_urls, duration_s
     return _clean_row(rate)
 
 
 class _CollectingDriver:
-    """Fake `RateDriver` that records every (url, rate, duration_s) it was called with.
+    """Fake `RateDriver` that records every (urls, rate, duration_s) it was called with.
 
     Attributes:
-        calls (list[tuple[str, int, float]]): one entry per `__call__`.
+        calls (list[tuple[list[str], int, float]]): one entry per `__call__`.
     """
 
     def __init__(self) -> None:
         """Initialise an empty call log."""
-        self.calls: list[tuple[str, int, float]] = []
+        self.calls: list[tuple[list[str], int, float]] = []
 
-    def __call__(self, url: str,
+    def __call__(self, target_urls: list[str],
                  rate: int,
                  duration_s: float) -> dict[str, Any]:
         """Record the call and return clean per-rate stats."""
-        self.calls.append((url, rate, duration_s))
+        self.calls.append((list(target_urls), rate, duration_s))
         return _clean_row(rate)
 
 
@@ -66,12 +66,11 @@ class _SaturatingDriver:
         """Configure the saturation cut-off."""
         self.threshold = threshold
 
-    def __call__(self,
-                 url: str,
+    def __call__(self, target_urls: list[str],
                  rate: int,
                  duration_s: float) -> dict[str, Any]:
         """Return saturated stats when `rate >= threshold`, otherwise clean stats."""
-        del url, duration_s
+        del target_urls, duration_s
         if rate >= self.threshold:
             return {"rate": rate, "loss_pct": 99.0, "p95_us": 1000.0}
         return _clean_row(rate)
@@ -91,14 +90,16 @@ class _RaisingTransport(httpx.AsyncBaseTransport):
         raise httpx.ConnectError(_msg)
 
 
-async def _drive_against_vernier(rate: int,
-                                 duration_s: float) -> dict[str, Any]:
+async def _drive_against_vernier(rate: int, duration_s: float) -> dict[str, Any]:
     """Exercise `drive_at_rate` against the FastAPI vernier via the in-memory ASGI transport."""
     _app = build_vernier_fastapi_app()
     _transport = make_test_transport(_app, "fastapi")
     async with httpx.AsyncClient(transport=_transport,
                                  base_url="http://test") as _client:
-        _ans = await drive_at_rate(_client, "/", rate=rate, duration_s=duration_s)
+        _ans = await drive_at_rate(_client,
+                                   ["/"],
+                                   rate=rate,
+                                   duration_s=duration_s)
     return _ans
 
 
@@ -106,7 +107,10 @@ async def _drive_against_raising(rate: int, duration_s: float) -> dict[str, Any]
     """Exercise `drive_at_rate` against a transport that always raises `ConnectError`."""
     async with httpx.AsyncClient(transport=_RaisingTransport(),
                                  base_url="http://test") as _client:
-        _ans = await drive_at_rate(_client, "/", rate=rate, duration_s=duration_s)
+        _ans = await drive_at_rate(_client,
+                                   ["/"],
+                                   rate=rate,
+                                   duration_s=duration_s)
     return _ans
 
 
@@ -174,7 +178,7 @@ class TestRate:
     def test_probe_walks_ramp(self) -> None:
         """The orchestrator invokes the driver once per rate in the ramp, in start-to-stop order."""
         _driver = _CollectingDriver()
-        probe_rate(target_url="http://x",
+        probe_rate(target_urls=["http://x"],
                    start=10,
                    stop=30,
                    step=10,
@@ -185,10 +189,24 @@ class TestRate:
         _rates = [_call[1] for _call in _driver.calls]
         assert _rates == [10, 20, 30]
 
+    def test_probe_passes_url_list(self) -> None:
+        """The orchestrator forwards the full url list to every driver call so multi-worker deployments are driven aggregate-style."""
+        _driver = _CollectingDriver()
+        _urls = ["http://x:1", "http://x:2", "http://x:3"]
+        probe_rate(target_urls=_urls,
+                   start=10,
+                   stop=10,
+                   step=10,
+                   per_rate_s=0.0,
+                   target_loss_pct=5.0,
+                   max_p95_latency_us=10_000.0,
+                   driver=_driver)
+        assert _driver.calls[0][0] == _urls
+
     def test_probe_halts_on_sat(self) -> None:
         """The orchestrator halts at the first saturated rate and reports it; later rates in the ramp are not driven."""
         _driver = _SaturatingDriver(threshold=20)
-        _ans = probe_rate(target_url="http://x",
+        _ans = probe_rate(target_urls=["http://x"],
                           start=10,
                           stop=100,
                           step=10,
@@ -203,7 +221,7 @@ class TestRate:
 
     def test_probe_full_ramp(self) -> None:
         """When no rate saturates, the orchestrator walks every step of the ramp and the verdict stays clean."""
-        _ans = probe_rate(target_url="http://x",
+        _ans = probe_rate(target_urls=["http://x"],
                           start=10,
                           stop=30,
                           step=10,
@@ -215,10 +233,12 @@ class TestRate:
         assert _ans["saturation_rate"] is None
         assert len(_ans["per_rate"]) == 3
         assert _ans["ramp"] == [10, 20, 30]
+        assert _ans["target_urls"] == ["http://x"]
 
     def test_drive_vernier(self) -> None:
         """Driving the vernier through the in-memory transport produces a populated stats dict; numerical accuracy is left to the notebook."""
-        _ans = asyncio.run(_drive_against_vernier(rate=100, duration_s=0.05))
+        _ans = asyncio.run(_drive_against_vernier(rate=100,
+                                                  duration_s=0.05))
         assert _ans["rate"] == 100
         assert _ans["total"] >= 1
         for _key in ("errors", "loss_pct", "median_us", "p95_us", "p99_us"):
@@ -226,7 +246,8 @@ class TestRate:
 
     def test_drive_zero_duration(self) -> None:
         """A zero-duration drive sends no requests and returns the empty-shape sentinel without raising."""
-        _ans = asyncio.run(_drive_against_vernier(rate=100, duration_s=0.0))
+        _ans = asyncio.run(_drive_against_vernier(rate=100,
+                                                  duration_s=0.0))
         assert _ans["total"] == 0
         assert _ans["errors"] == 0
         assert _ans["loss_pct"] == 0.0
@@ -234,7 +255,8 @@ class TestRate:
 
     def test_drive_transport_error(self) -> None:
         """When the transport always refuses the connection, every request is counted as a failure and the loss fraction reaches 100 percent."""
-        _ans = asyncio.run(_drive_against_raising(rate=100, duration_s=0.05))
+        _ans = asyncio.run(_drive_against_raising(rate=100,
+                                                  duration_s=0.05))
         assert _ans["total"] >= 1
         assert _ans["errors"] == _ans["total"]
         assert _ans["loss_pct"] == 100.0

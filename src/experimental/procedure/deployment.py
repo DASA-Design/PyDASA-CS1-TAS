@@ -61,7 +61,7 @@ def bring_up(dpl: Dpl,
 
     Raises:
         ValueError: if `dpl` is not a recognised mode.
-        NotImplementedError: if `dpl="remote"` (stage 5).
+        NotImplementedError: if `dpl="remote"` (not yet wired).
     """
     _ports = _resolve_ports(dpl, base_port, workers)
     _spawners: list[ServerAdapter] = []
@@ -96,7 +96,7 @@ def _resolve_ports(dpl: Dpl, base_port: int, workers: int) -> list[int]:
 
     Raises:
         ValueError: if `dpl` is not recognised.
-        NotImplementedError: if `dpl="remote"` (stage 5).
+        NotImplementedError: if `dpl="remote"` (not yet wired).
     """
     _ans: list[int]
     if dpl == "localhost":
@@ -104,7 +104,7 @@ def _resolve_ports(dpl: Dpl, base_port: int, workers: int) -> list[int]:
     elif dpl == "multiprocess":
         _ans = [base_port + _i for _i in range(workers)]
     elif dpl == "remote":
-        _msg = "remote dpl lands at stage 5; not yet supported"
+        _msg = "remote dpl is not yet wired"
         raise NotImplementedError(_msg)
     else:
         _msg = f"unknown dpl {dpl!r}; expected 'localhost', 'multiprocess', or 'remote'"

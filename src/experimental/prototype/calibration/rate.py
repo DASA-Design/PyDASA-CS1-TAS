@@ -1,12 +1,14 @@
 """Rate-saturation discovery against the vernier.
 
-Drives a target URL through a linear lambda ramp, measures per-rate latency + error rate, and stops as soon as either band is breached. Output fills the envelope's `rate` block.
+Walks a linear lambda ramp, measures per-rate latency + loss, halts as soon as either band breaks. Output fills the envelope's `rate` block.
 
-Three pieces, kept separate so the orchestration is testable without driving real HTTP:
+Three pieces, separated so the orchestration is testable without real HTTP:
 
-- `make_lambda_ramp(start, stop, step)`: pure ramp generator.
-- `detect_saturation(per_rate_stats, target_loss_pct, max_p95_latency_us)`: pure verdict (`saturated`, `saturation_rate`, `reason`).
-- `probe_rate(*, target_url, ..., driver=None)`: orchestrator that walks the ramp and early-stops on breach. Tests inject a fake `driver`; the default driver opens a real `httpx.AsyncClient` inside `windows_timer_resolution(1)`.
+- `make_lambda_ramp`: pure ramp generator.
+- `detect_saturation`: pure verdict (`saturated`, `saturation_rate`, `reason`).
+- `probe_rate`: orchestrator. Walks the ramp, calls a `driver` per rate, halts on breach. The default driver opens a real `httpx.AsyncClient`; tests inject a fake.
+
+The driver round-robins requests across `target_urls`, so a multi-worker deployment can be driven aggregate-style by a single client ramp.
 
 Defaults are runtime fallbacks for `data/config/method/prototype/calibration.json::rate.*`.
 """
@@ -33,7 +35,7 @@ _DFLT_TARGET_LOSS_PCT = 5.0
 _DFLT_MAX_P95_LATENCY_US = 100_000.0  # 100 ms
 _DFLT_REQ_TIMEOUT_S = 2.0
 
-RateDriver = Callable[[str, int, float], dict[str, Any]]
+RateDriver = Callable[[list[str], int, float], dict[str, Any]]
 
 
 def make_lambda_ramp(*,
@@ -70,7 +72,7 @@ def detect_saturation(per_rate_stats: list[dict[str, Any]],
                       max_p95_latency_us: float) -> dict[str, Any]:
     """Scan per-rate stats for the first row that breaches either band.
 
-    Loss is checked before latency at each rate, so when both breach simultaneously the loss reason wins (which is what an operator wants to see — loss is the more direct symptom).
+    Loss is checked before latency, so when both breach the loss reason wins (loss is the more direct symptom).
 
     Args:
         per_rate_stats (list[dict[str, Any]]): per-rate stats blocks; each must carry `rate`, `loss_pct`, and `p95_us`.
@@ -102,16 +104,16 @@ def detect_saturation(per_rate_stats: list[dict[str, Any]],
 
 
 async def drive_at_rate(client: httpx.AsyncClient,
-                        target_url: str,
+                        target_urls: list[str],
                         rate: int,
                         duration_s: float) -> dict[str, Any]:
-    """Drive `rate` req/s against `target_url` for `duration_s`; return aggregate stats.
+    """Drive `rate` req/s round-robined across `target_urls` for `duration_s`; return aggregate stats.
 
-    Pure async core, no `windows_timer_resolution` wrapping (caller's responsibility). Pace is enforced by `asyncio.sleep` between sends; on Windows precision below ~15 ms requires the caller to sit inside `windows_timer_resolution(1)`. The vernier echo body is `{"req_id": "calib", "submitted_ts": <time.time()>}` — minimal but accepted by the vernier handler.
+    Pure async core; the caller wraps in `windows_timer_resolution(1)` if sub-15 ms pacing is needed on Windows. Each request body is `{"req_id": "calib", "submitted_ts": <time.time()>}`.
 
     Args:
         client (httpx.AsyncClient): pre-built client. Tests pass an in-memory transport; production passes a real-TCP client.
-        target_url (str): full URL or relative path (depending on the client's base_url).
+        target_urls (list[str]): full URLs (or relative paths if the client has a base_url). Requests round-robin across them so a multi-worker deployment can be driven aggregate-style by a single client.
         rate (int): target requests per second.
         duration_s (float): wall-clock window to sustain the rate.
 
@@ -122,8 +124,12 @@ async def drive_at_rate(client: httpx.AsyncClient,
     _deadline = time.perf_counter() + duration_s
     _tasks: list[asyncio.Task[tuple[float, bool]]] = []
     _next = time.perf_counter()
+    _idx = 0
+    _n_urls = len(target_urls)
     while time.perf_counter() < _deadline:
-        _tasks.append(asyncio.create_task(_send_one(client, target_url)))
+        _url = target_urls[_idx % _n_urls]
+        _idx += 1
+        _tasks.append(asyncio.create_task(_send_one(client, _url)))
         _next += _interval_s
         _wait = _next - time.perf_counter()
         if _wait > 0:
@@ -151,9 +157,9 @@ async def drive_at_rate(client: httpx.AsyncClient,
 
 async def _send_one(client: httpx.AsyncClient,
                     target_url: str) -> tuple[float, bool]:
-    """Send one POST and report (latency_us, ok).
+    """Send one POST; return (latency_us, ok).
 
-    `ok` is True for HTTP < 500 with no transport error; any HTTPError / OSError, or any 5xx response, counts as not-ok.
+    `ok` is True iff status < 500 and no transport error fired.
 
     Args:
         client (httpx.AsyncClient): the open client to use.
@@ -175,15 +181,13 @@ async def _send_one(client: httpx.AsyncClient,
     return _latency_us, _ok
 
 
-def _drive_at_rate(target_url: str,
+def _drive_at_rate(target_urls: list[str],
                    rate: int,
                    duration_s: float) -> dict[str, Any]:
-    """Default `RateDriver`: real httpx client + real TCP loopback (or whatever the URL resolves to).
-
-    Wraps the async core in `windows_timer_resolution(1)` so Windows' clock floor doesn't blow up the inter-send pacing.
+    """Default `RateDriver`: real httpx client over real TCP, wrapped in `windows_timer_resolution(1)` so Windows' coarse clock doesn't break pacing.
 
     Args:
-        target_url (str): full URL the requests are POSTed to.
+        target_urls (list[str]): URLs the requests are POSTed to (round-robined).
         rate (int): target req/s.
         duration_s (float): seconds to sustain the rate.
 
@@ -192,14 +196,14 @@ def _drive_at_rate(target_url: str,
     """
     async def _coro() -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=_DFLT_REQ_TIMEOUT_S) as _client:
-            return await drive_at_rate(_client, target_url, rate, duration_s)
+            return await drive_at_rate(_client, target_urls, rate, duration_s)
     with windows_timer_resolution(1):
         _ans = run_async_safe(_coro)
     return _ans
 
 
 def probe_rate(*,
-               target_url: str,
+               target_urls: list[str],
                start: int = _DFLT_LAMBDA_START,
                stop: int = _DFLT_LAMBDA_STOP,
                step: int = _DFLT_LAMBDA_STEP,
@@ -207,31 +211,29 @@ def probe_rate(*,
                target_loss_pct: float = _DFLT_TARGET_LOSS_PCT,
                max_p95_latency_us: float = _DFLT_MAX_P95_LATENCY_US,
                driver: RateDriver | None = None) -> dict[str, Any]:
-    """Walk the rate ramp against `target_url`; early-stop on saturation; return the envelope `rate` block.
+    """Walk the rate ramp against `target_urls`; early-stop on saturation; return the envelope `rate` block.
 
     Args:
-        target_url (str): URL the driver POSTs to.
+        target_urls (list[str]): URLs the driver POSTs to (round-robined). One element for `localhost`, N elements for `multiprocess`.
         start (int, optional): first rate. Defaults to the runtime fallback.
         stop (int, optional): last rate (inclusive). Defaults to the runtime fallback.
         step (int, optional): rate increment. Defaults to the runtime fallback.
         per_rate_s (float, optional): seconds per rate. Defaults to the runtime fallback.
         target_loss_pct (float, optional): saturation threshold on loss. Defaults to the runtime fallback.
         max_p95_latency_us (float, optional): saturation threshold on p95 latency. Defaults to the runtime fallback.
-        driver (RateDriver | None, optional): callable `(url, rate, duration_s) -> stats_dict`. Defaults to None, which uses the real httpx-based driver. Tests inject a fake.
+        driver (RateDriver | None, optional): callable `(urls, rate, duration_s) -> stats_dict`. Defaults to None, which uses the real httpx-based driver. Tests inject a fake.
 
     Returns:
-        dict[str, Any]: envelope-ready block. Keys: `ramp`, `per_rate`, `target_loss_pct`, `max_p95_latency_us`, plus the `saturated` / `saturation_rate` / `reason` triple from `detect_saturation`.
+        dict[str, Any]: envelope-ready block. Keys: `ramp`, `per_rate`, `target_urls`, `target_loss_pct`, `max_p95_latency_us`, plus the `saturated` / `saturation_rate` / `reason` triple from `detect_saturation`.
     """
     if driver is None:
         _driver: RateDriver = _drive_at_rate
     else:
         _driver = driver
-    _ramp = make_lambda_ramp(start=start,
-                             stop=stop,
-                             step=step)
+    _ramp = make_lambda_ramp(start=start, stop=stop, step=step)
     _per_rate: list[dict[str, Any]] = []
     for _r in _ramp:
-        _stats = _driver(target_url, _r, per_rate_s)
+        _stats = _driver(target_urls, _r, per_rate_s)
         _per_rate.append(_stats)
         _verdict = detect_saturation(_per_rate,
                                      target_loss_pct=target_loss_pct,
@@ -244,6 +246,7 @@ def probe_rate(*,
     _ans: dict[str, Any] = {
         "ramp": _ramp,
         "per_rate": _per_rate,
+        "target_urls": list(target_urls),
         "target_loss_pct": target_loss_pct,
         "max_p95_latency_us": max_p95_latency_us,
     }
