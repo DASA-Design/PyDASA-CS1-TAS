@@ -2,6 +2,63 @@
 
 Running log of design decisions, pivots, and open questions for the Tele Assistance System case study. Append only; newest entry on top.
 
+## 2026-05-07 — `notes/case-study.md` rebuilt as full ACS 6-section reconstruction; SVG-crop pattern locked
+
+**Decision.** Replace the ad-hoc 129-line `notes/case-study.md` with a clean ACS 6-section reconstruction merged from `__OLD__/notes/context.md` (long-form draft) and `__OLD__/notes/objective.md` (concise version). Lock down an inline-SVG figure-embedding pattern that survives VS Code markdown preview's HTML sanitizer.
+
+**What was added (case-study.md).**
+
+- Six sections: `1. Summary`, `2. Technical Specifications`, `3. Architectural Reconstruction`, `4. Limits`, `5. Insights`, `6. Design Notes`, plus `7. References`.
+- `Table CS1.1. *TAS* case specification.` absorbs the prose front matter (Source documents, Methodology, Status, Scope) into table rows alongside the existing identity rows.
+- Numbered headings: `## 1.` … `## 7.` for H2; lowercase Roman `### i.` … `### x.` for H3.
+- Short identifiers: `RQ-CS1.k` collapsed to `RQ.k`, `ADR-CS1-XX` collapsed to `ADR.XX` (the whole note is CS-1; the infix repeated context).
+- Acronym first-use expansions: `ACS`, `QA`, `MAPE-K` (Monitor-Analyse-Plan-Execute-Knowledge), `STA` (stochastic-timed-automata), `SOA` (Service-Oriented Architecture), `PCA` (Principal Component Analysis), `RSEM` (relative standard error of the mean), `ADR` (Architectural Decision Record).
+- Stripped: MATI / `[11]` references, in-repo path pointers (`assets/docs/CS/N1/`, `.claude/skills/...`, `src/methods/<method>.py + 0N-<method>.ipynb`), and DASA / methodology-token mentions.
+- Cross-source inconsistency table preserved verbatim from `__OLD__/notes/context.md` (14 rows, then 13 after dropping the [11]-only metric-count row).
+
+**What was added (SVG figure crop).** Each of the four reconstruction figures (CS1.1-CS1.4) is wrapped in:
+
+```html
+<figure style="margin:0">
+<svg version="1.1" viewBox="0 0 W H" width="100%" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-label="...">
+<clipPath id="clip_id"><path d="M0 0hWvHH0z"/></clipPath>
+<g clip-path="url(#clip_id)"><image xlink:href="../assets/img/cs1/<file>.svg" width="ORIG_W" height="ORIG_H"/></g>
+</svg>
+</figure>
+```
+
+Per-figure crops in place after iterative tuning:
+
+| Figure | viewBox (W × H) | Inner image (W × H) | Right crop |
+| ------ | ----------------:| --------------------:| ----------:|
+| CS1.1 context     | 2087 × 1456 | 2940 × 1456 | 29 % |
+| CS1.2 workflow    | 2697 × 2036 | 3210 × 2036 | 16 % |
+| CS1.3 services    | 2771 × 1698 | 3379 × 1698 | 18 % |
+| CS1.4 adaptability | 1613 × 1380 | 2407 × 1380 | 33 % |
+
+The five scenario figures (CS1.5a-e) keep plain `![alt](path)` markdown.
+
+**Why this SVG pattern.** VS Code's markdown preview is the publishing target. Three patterns were tried and rejected before this one stuck:
+
+1. `<div style="overflow:hidden;line-height:0">` + `<img style="width:150%;margin:0 -50% 0 0">`. The CSS clip is silently sanitized; the image renders at full size with no crop.
+2. `<figure style="overflow:hidden">` + same `<img>` styles. Same outcome; the sanitizer strips the wrapper's clipping CSS regardless of element type.
+3. Bare inline `<svg viewBox=...>` with `<image href=...>` inside. The markdown parser doesn't recognise `<svg>` in its HTML-block whitelist, so the markup renders as code text.
+
+The working pattern needs three things together: a `<figure>` opener (recognised by markdown-it as block HTML), a fully-namespaced `<svg version="1.1" xmlns="..." xmlns:xlink="...">`, and a `<clipPath>` + `<g clip-path="url(#...)">` wrapping an `<image xlink:href="...">` reference. `viewBox` alone is not enough; the explicit `<clipPath>` is what survives the sanitizer.
+
+**Conventions captured elsewhere this turn.**
+
+- `.claude/skills/write/arch-case-study.md` extended with three new lessons (folded identity table, numbered headings + lowercase-Roman subsections, short identifiers when the case is unambiguous) and a new "Embedding SVG figures" subsection codifying the figure-clipPath pattern.
+- `CLAUDE.md` gained a short "Markdown Figure Embedding" pointer paragraph.
+
+**Next steps.**
+
+- Apply the same numbered-section + identity-table conventions to the CS-2 IoT-SDP case-study note in the sibling repo.
+- If `notes/procedure.md` and `notes/prototype.md` (currently 1-byte stubs) gain content, mirror the conventions here.
+- Verify on the GitHub-rendered preview (not just VS Code) that the inline-SVG-with-clipPath pattern still renders cropped; GitHub's sanitizer may have different rules.
+
+
+
 ---
 
 ## 2026-05-06 — Cleaning sweep: experiment / calibration build retired into `__OLD__/`

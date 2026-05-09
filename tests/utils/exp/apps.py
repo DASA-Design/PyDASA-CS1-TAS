@@ -1,10 +1,14 @@
 """Reusable HTTP-app factories for `src.experimental` tests.
 
-Three flavours:
+Five flavours:
 
-- `build_echo_app()`: FastAPI POST `/` that returns `{"ok": True, "kind": <kind>}`.
-- `build_5xx_app()`: FastAPI POST `/` that always returns HTTP 500.
+- `build_echo_app()`: FastAPI POST `/` returning `{"ok": True, "kind": <kind>}`.
+- `build_5xx_app()`: FastAPI POST `/` always returning HTTP 500.
+- `build_healthz_fastapi_app()`: FastAPI GET `/healthz` returning `{"status": "ok"}`. Used by `runtime/` process-spawner tests.
+- `build_healthz_flask_app()`: Flask GET `/healthz` returning `{"status": "ok"}`. Used by `runtime/` process-spawner tests for the WSGI variant.
 - `start_echo_server()`: stdlib `ThreadingHTTPServer` echo on a free localhost port. Returns `(server, thread, base_url)`; caller owns shutdown.
+
+The two `build_healthz_*_app` factories are top-level (not nested closures) so they survive pickling across `multiprocessing.spawn` boundaries on Windows.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from fastapi import FastAPI, Response
+from flask import Flask, jsonify
 
 
 def build_echo_app() -> FastAPI:
@@ -47,6 +52,40 @@ def build_5xx_app() -> FastAPI:
         return _ans
 
     _app.add_api_route("/", _handler, methods=["POST"], response_model=None)
+    return _app
+
+
+def build_healthz_fastapi_app() -> FastAPI:
+    """Build a FastAPI app exposing a single `/healthz` endpoint returning `{"status": "ok"}`.
+
+    Top-level so it is picklable by name across `multiprocessing.spawn` (Windows requires it).
+
+    Returns:
+        FastAPI: app with one GET `/healthz` handler.
+    """
+    _app = FastAPI()
+
+    def _healthz_handler() -> dict[str, str]:
+        return {"status": "ok"}
+
+    _app.add_api_route("/healthz", _healthz_handler, methods=["GET"])
+    return _app
+
+
+def build_healthz_flask_app() -> Flask:
+    """Build a Flask app exposing a single `/healthz` endpoint returning `{"status": "ok"}`.
+
+    Top-level so it is picklable by name across `multiprocessing.spawn` (Windows requires it).
+
+    Returns:
+        Flask: app with one GET `/healthz` handler.
+    """
+    _app = Flask(__name__)
+
+    def _healthz_handler() -> Any:  # noqa: ANN401
+        return jsonify({"status": "ok"})
+
+    _app.add_url_rule("/healthz", view_func=_healthz_handler, methods=["GET"])
     return _app
 
 
