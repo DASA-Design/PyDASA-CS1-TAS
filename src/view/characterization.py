@@ -3,10 +3,10 @@
 
 Six per-probe panels plus a 2x3 summary grid (with a Report panel) and an overlay variant for cross-deployment comparison:
 
-- `plot_timer`: clock-tick `Min`, `phi` (median), `chi-hat` (mean), `Max`; std-dev `s^2` rendered as +/- error caps.
-- `plot_jitter`: `chi-hat`, `phi`, `p_{95}`, `p_{99}` relative to target sleep; `s^2` as caps.
-- `plot_loopback`: `Min`, `phi`, `p_{95}`, `p_{99}`; precision band `[phi - s^2, phi + s^2]` shaded behind bars.
-- `plot_handler_scaling`: linear latency vs concurrency; three traces (`phi`, `p_{95}`, `p_{99}`) + p95-p99 fill.
+- `plot_timer`: clock-tick `Min`, `Phi` (median), `chi-bar` (mean), `Max`; std-dev `s^2` rendered as +/- error caps.
+- `plot_jitter`: `chi-bar`, `Phi`, `p_{95}`, `p_{99}` relative to target sleep; `s^2` as caps.
+- `plot_loopback`: `Min`, `Phi`, `p_{95}`, `p_{99}`; precision band `[Phi - s^2, Phi + s^2]` shaded behind bars.
+- `plot_handler_scaling`: linear latency vs concurrency; three traces (`Phi`, `p_{95}`, `p_{99}`) + p95-p99 fill.
 - `plot_workers_scaling`: worker rate (req/s) + efficiency vs `n_workers`; vertical marker at the stable-knee.
 - `plot_rate_sweep`: latency + loss-rate vs rate; verifiable region (below saturation) shaded green.
 - `plot_calibration_summary`: 2x3 grid; bottom-left slot shows `handler_scaling` on localhost and `workers_scaling` on multiprocess (the more actionable probe per mode); bottom-right is the Report.
@@ -32,7 +32,7 @@ from src.view.common import (
 )
 
 
-# Per-trace tints for handler scaling (phi / p99 traces; the p95 trace inherits the panel colour).
+# Per-trace tints for handler scaling (Phi / p99 traces; the p95 trace inherits the panel colour).
 _PHI_COLOR, _, _P99_COLOR = _PCTL_GRADIENT
 
 _TIGHT_RECT: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 0.97)
@@ -44,7 +44,7 @@ def plot_timer(envelope: dict[str, Any],
                file_path: str | None = None,
                fname: str = "timer",
                verbose: bool = False) -> Figure:
-    """Horizontal bar chart of timer min / phi / chi-hat / s^2 / max (ns).
+    """Horizontal bar chart of timer min / Phi / chi-bar / s^2 / max (ns).
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope (reads `envelope["timer"]`).
@@ -69,7 +69,7 @@ def plot_jitter(envelope: dict[str, Any],
                 file_path: str | None = None,
                 fname: str = "jitter",
                 verbose: bool = False) -> Figure:
-    """Horizontal bar chart of asyncio.sleep chi-hat / phi / p_{95} / p_{99} / s^2 against the target sleep.
+    """Horizontal bar chart of asyncio.sleep chi-bar / Phi / p_{95} / p_{99} / s^2 against the target sleep.
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope (reads `envelope["jitter"]`).
@@ -94,7 +94,7 @@ def plot_loopback(envelope: dict[str, Any],
                   file_path: str | None = None,
                   fname: str = "loopback",
                   verbose: bool = False) -> Figure:
-    """Horizontal bar chart of TCP loopback Min / phi / p_{95} / p_{99} (us).
+    """Horizontal bar chart of TCP loopback Min / Phi / p_{95} / p_{99} (us).
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope (reads `envelope["loopback"]`).
@@ -120,7 +120,7 @@ def plot_handler_scaling(envelope: dict[str, Any],
                          fname: str = "handler_scaling",
                          verbose: bool = False,
                          subtract_floor: bool = True) -> Figure:
-    """Linear latency (us) vs concurrency, three traces (phi, p_{95}, p_{99}).
+    """Linear latency-change (us) vs concurrency, three traces (Phi, p_{95}, p_{99}).
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope (reads `handler_scaling` + `loopback`).
@@ -382,8 +382,8 @@ def _draw_timer(ax: Axes,
                 label: str | None = None,
                 idx: int = 0,
                 total: int = 1) -> None:
-    """Horizontal bars: Min, phi, chi-hat, Max in ns; s^2 rendered as +/- error caps on each bar."""
-    _labels = ["Min", r"$\phi$", r"$\hat{\chi}$", "Max"]
+    """Horizontal bars: Min, Phi, chi-bar, Max in ns; s^2 rendered as +/- error caps on each bar."""
+    _labels = ["Min", r"$\Phi$", r"$\overline{\chi}$", "Max"]
     _vals = [block.get("min_ns", 0),
              block.get("median_ns", 0),
              block.get("mean_ns", 0.0),
@@ -409,9 +409,9 @@ def _draw_jitter(ax: Axes,
                  label: str | None = None,
                  idx: int = 0,
                  total: int = 1) -> None:
-    """Horizontal bars: chi-hat, phi, p_{95}, p_{99} relative to target sleep (us); s^2 rendered as +/- error caps."""
+    """Horizontal bars: chi-bar, Phi, p_{95}, p_{99} relative to target sleep (us); s^2 rendered as +/- error caps."""
     _target_us = block.get("target_us", 0)
-    _labels = [r"$\hat{\chi}$", r"$\phi$", r"$p_{95}$", r"$p_{99}$"]
+    _labels = [r"$\overline{\chi}$", r"$\Phi$", r"$p_{95}$", r"$p_{99}$"]
     # Show jitter relative to the target so values centre near zero when the host is quiet.
     _vals = [block.get("mean_us", 0.0) - _target_us,
              block.get("median_us", 0.0) - _target_us,
@@ -438,8 +438,8 @@ def _draw_loopback(ax: Axes,
                    label: str | None = None,
                    idx: int = 0,
                    total: int = 1) -> None:
-    """Horizontal bars: Min, phi, p_{95}, p_{99} (us); precision band [phi - s^2, phi + s^2] shaded behind the bars."""
-    _labels = ["Min", r"$\phi$", r"$p_{95}$", r"$p_{99}$"]
+    """Horizontal bars: Min, Phi, p_{95}, p_{99} (us); precision band [Phi - s^2, Phi + s^2] shaded behind the bars."""
+    _labels = ["Min", r"$\Phi$", r"$p_{95}$", r"$p_{99}$"]
     _phi = float(block.get("median_us", 0.0))
     _std = float(block.get("std_us", 0.0))
     _vals = [block.get("min_us", 0.0),
@@ -450,7 +450,7 @@ def _draw_loopback(ax: Axes,
     if idx == 0 and _std > 0.0:
         ax.axvspan(_phi - _std, _phi + _std,
                    color=color, alpha=0.12, zorder=0,
-                   label=r"$\phi \pm s^{2}$")
+                   label=r"$\Phi \pm s^{2}$")
     _draw_grouped_barh(ax, _labels, _vals, r"$\mu s$",
                        color=color, label=label, idx=idx, total=total,
                        xerr=_std)
@@ -472,7 +472,7 @@ def _draw_handler_scaling(ax: Axes,
                           color: Any = _NEUTRAL_BAR,
                           label: str | None = None,
                           subtract_floor: bool = True) -> None:
-    """Latency vs concurrency, three traces (phi, p_{95}, p_{99}).
+    """Latency-change vs concurrency, three traces (Phi, p_{95}, p_{99}).
 
     Linear axes for typical default sweeps (c <= ~32). Log-log makes sense only when concurrency spans multiple decades (e.g. 1..1000); at small ranges it hides the signal. Loopback floor subtracted by default so the panel shows handler work, not kernel noise.
     """
@@ -486,9 +486,9 @@ def _draw_handler_scaling(ax: Axes,
     _p95 = [max(_stats[str(_c)].get("p95_us", 0.0) - _floor, 0.0) for _c in _cs]
     _p99 = [max(_stats[str(_c)].get("p99_us", 0.0) - _floor, 0.0) for _c in _cs]
     if label is None:
-        _phi_label, _p95_label, _p99_label = r"$\phi$", r"$p_{95}$", r"$p_{99}$"
+        _phi_label, _p95_label, _p99_label = r"$\Phi$", r"$p_{95}$", r"$p_{99}$"
     else:
-        _phi_label = f"{label}: $\\phi$"
+        _phi_label = f"{label}: $\\Phi$"
         _p95_label = f"{label}: $p_{{95}}$"
         _p99_label = f"{label}: $p_{{99}}$"
     # Translucent fill between p95 and p99 highlights the tail variability as a precision band.
@@ -509,8 +509,8 @@ def _draw_handler_scaling(ax: Axes,
     # Linear axes; log-log only earns its keep when concurrency spans multiple decades.
     ax.set_xscale("linear")
     ax.set_yscale("linear")
-    ax.set_xlabel(r"concurrency $c$", color=_TEXT_BLACK)
-    ax.set_ylabel(r"Latency $[\mu s]$", color=_TEXT_BLACK)
+    ax.set_xlabel(r"$c$: concurrent user requests", color=_TEXT_BLACK)
+    ax.set_ylabel(r"Latency change $[\mu s]$", color=_TEXT_BLACK)
     if title is None:
         _t = "Handler Scaling"
     else:
@@ -597,7 +597,7 @@ def _draw_workers_scaling(ax: Axes,
         _lat_label = label or "worker rate"
         ax.plot(_ns, _per_w, marker="o", color=color,
                 linestyle="-", linewidth=2, label=_lat_label)
-    ax.set_xlabel(r"workers $n$", color=_TEXT_BLACK)
+    ax.set_xlabel(r"$w$: concurrent workers", color=_TEXT_BLACK)
     ax.set_ylabel("worker rate (req/s)", color=_TEXT_BLACK)
     if title is None:
         if _stable is None:
@@ -626,7 +626,7 @@ _REPORT_LINE_H = 0.034
 _REPORT_LABEL_X = 0.02
 _REPORT_VALUE_X = 0.36
 _REPORT_ROW_LABEL_X = 0.05
-_REPORT_LEGEND_BODY_X = 0.20
+_REPORT_LEGEND_BODY_X = 0.12
 
 _REPORT_LEGEND_ROWS = (
     ("Latency:",
@@ -676,7 +676,12 @@ def _draw_report(ax: Axes,
                           w_values=[_overlay_w_max(_wrapped)],
                           summaries=[_summary],
                           y=_y)
-    _draw_legend_rows(ax, _y)
+    # Divider matches the table column span (label-column left edge to last-column right edge).
+    _div_left = _REPORT_LABEL_X
+    _div_right = _OVERLAY_COL_START + _OVERLAY_COL_WIDTH
+    _draw_legend_rows(ax, _y,
+                      div_left=_div_left,
+                      div_right=_div_right)
     if envelope is None:
         _dt = "?"
     else:
@@ -790,18 +795,33 @@ def _draw_table_rows(ax: Axes,
     return _y
 
 
-def _draw_legend_rows(ax: Axes, y: float, *, x_offset: float = 0.0) -> None:
+def _draw_legend_rows(ax: Axes,
+                      y: float,
+                      *,
+                      x_offset: float = 0.0,
+                      div_left: float | None = None,
+                      div_right: float | None = None) -> None:
     """Static three-block legend explaining Latency / Floors / Envelope; bold labels, regular body.
 
     Args:
         ax (Axes): target axis.
         y (float): top y-coordinate (axes-fraction).
-        x_offset (float, optional): horizontal shift; used by the overlay's spanning panel to centre content.
+        x_offset (float, optional): horizontal shift applied to legend labels + body; used by the overlay's spanning panel to centre content.
+        div_left (float | None, optional): left edge of the divider line above the legend (axes-fraction). Defaults to None (uses 0.11).
+        div_right (float | None, optional): right edge of the divider line. Defaults to None (uses 0.89).
     """
     _y = y
-    ax.text(_REPORT_LABEL_X + x_offset, _y, "─" * 64,
-            transform=ax.transAxes, va="top",
-            fontsize=_REPORT_FONTSIZE, color=_TEXT_BLACK, family="monospace")
+    if div_left is None:
+        _x_left = 0.11
+    else:
+        _x_left = div_left
+    if div_right is None:
+        _x_right = 0.89
+    else:
+        _x_right = div_right
+    ax.plot([_x_left, _x_right], [_y, _y],
+            transform=ax.transAxes, color=_TEXT_BLACK,
+            linewidth=0.6, clip_on=False)
     _y -= _REPORT_LINE_H
     for _label, _body_lines in _REPORT_LEGEND_ROWS:
         ax.text(_REPORT_LABEL_X + x_offset, _y, _label,
@@ -872,7 +892,14 @@ def _draw_report_overlay(ax: Axes,
                           summaries=_summaries,
                           y=_y,
                           x_offset=_x_offset)
-    _draw_legend_rows(ax, _y, x_offset=_x_offset)
+    # Match the divider line to the table's column span: from the label-column left edge to
+    # the right edge of the last value column (after offset).
+    _div_left = _REPORT_LABEL_X + _x_offset
+    _div_right = (_OVERLAY_COL_START + len(_names) * _OVERLAY_COL_WIDTH) + _x_offset
+    _draw_legend_rows(ax, _y,
+                      x_offset=_x_offset,
+                      div_left=_div_left,
+                      div_right=_div_right)
     _segments: list[str] = []
     for _, _env in _items:
         _segments.append(f"{_env.get('host', '?')}: {_fmt_run_date(_env.get('run_id'))}")
@@ -903,8 +930,8 @@ def _overlay_columns_x(n: int) -> list[float]:
     return _ans
 
 
-_OVERLAY_COL_START = 0.20
-_OVERLAY_COL_WIDTH = 0.15
+_OVERLAY_COL_START = 0.12
+_OVERLAY_COL_WIDTH = 0.12
 
 
 def _put_overlay_columns(ax: Axes,
