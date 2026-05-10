@@ -31,6 +31,7 @@ from src.view.characterization import (
     plot_loopback,
     plot_rate_sweep,
     plot_timer,
+    plot_workers_scaling,
 )
 # yoly family
 from src.view.charter import (
@@ -79,6 +80,7 @@ __all__ = [
     "plot_qn_topology",
     "plot_rate_sweep",
     "plot_timer",
+    "plot_workers_scaling",
     "plot_yoly_arts_behaviour",
     "plot_yoly_arts_charts",
     "plot_yoly_arts_hist",

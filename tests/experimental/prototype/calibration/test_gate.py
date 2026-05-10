@@ -186,10 +186,10 @@ class TestGate:
         assert HOST_FLOOR_PROBES == ("timer", "jitter", "loopback", "handler_scaling")
 
     def test_summary_keys(self) -> None:
-        """Summary block carries one `headline` row per probe + rate; no verdict prose."""
+        """Summary block carries one `headline` row per probe + rate + workers; no verdict prose."""
         _v = verdict(_full_envelope())
         _s = _v["summary"]
-        assert set(_s.keys()) == {"timer", "jitter", "loopback", "scaling", "rate"}
+        assert set(_s.keys()) == {"timer", "jitter", "loopback", "scaling", "rate", "workers"}
         for _row in _s.values():
             assert "headline" in _row
             assert "verdict" not in _row
@@ -225,3 +225,44 @@ class TestGate:
         """A rate sweep that didn't saturate gets a 'no knee within ramp' headline."""
         _v = verdict(_full_envelope(sat_rate=None))
         assert "no knee" in _v["summary"]["rate"]["headline"]
+
+    def test_workers_block_localhost(self) -> None:
+        """When `workers_scaling` is empty (localhost), the gate passes 'not applicable' and `w_max` is None."""
+        _env = _full_envelope()
+        _v = verdict(_env)
+        assert _v["gates"]["workers_scaling"]["passed"] is True
+        assert "not applicable" in _v["gates"]["workers_scaling"]["reason"]
+        assert _v["verifiable_range"]["w_max"] is None
+        assert _v["summary"]["workers"]["headline"] == "n/a"
+
+    def test_workers_block_populated(self) -> None:
+        """A populated `workers_scaling` block produces a stable_workers gate, w_max, and a summary headline."""
+        _env = _full_envelope()
+        _env["workers_scaling"] = {
+            "ramp": [1, 2],
+            "per_step": [
+                {"n_workers": 1, "efficiency_pct": 100.0},
+                {"n_workers": 2, "efficiency_pct": 95.0},
+            ],
+            "stable_workers": 2,
+            "min_eff_pct": 80.0,
+            "reason": "all steps within efficiency band (max n=2)",
+        }
+        _v = verdict(_env)
+        assert _v["gates"]["workers_scaling"]["passed"] is True
+        assert _v["verifiable_range"]["w_max"] == 2
+        assert "w=2" in _v["summary"]["workers"]["headline"]
+
+    def test_workers_no_headroom(self) -> None:
+        """When `stable_workers` is None, the workers gate fails and the headline says 'no parallel headroom'."""
+        _env = _full_envelope()
+        _env["workers_scaling"] = {
+            "ramp": [1],
+            "per_step": [{"n_workers": 1, "efficiency_pct": 50.0}],
+            "stable_workers": None,
+            "min_eff_pct": 80.0,
+            "reason": "no parallel headroom",
+        }
+        _v = verdict(_env)
+        assert _v["gates"]["workers_scaling"]["passed"] is False
+        assert _v["summary"]["workers"]["headline"] == "no parallel headroom"

@@ -202,6 +202,63 @@ def _drive_at_rate(target_urls: list[str],
     return _ans
 
 
+def _drive_at_rate_raw(target_urls: list[str],
+                       rate: int,
+                       duration_s: float) -> dict[str, Any]:
+    """Driver variant returning raw latencies (`latencies_us` list) instead of pre-aggregated stats.
+
+    Used by the multi-process driver to merge sample arrays across processes before computing percentiles. Aggregate percentiles cannot be derived from sub-aggregates without bias.
+
+    Args:
+        target_urls (list[str]): URLs the requests are POSTed to (round-robined).
+        rate (int): target req/s.
+        duration_s (float): seconds to sustain the rate.
+
+    Returns:
+        dict[str, Any]: keys `rate`, `total`, `errors`, `latencies_us` (list[float]).
+    """
+    async def _coro() -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=_DFLT_REQ_TIMEOUT_S) as _client:
+            return await _drive_at_rate_raw_async(_client, target_urls, rate, duration_s)
+    with windows_timer_resolution(1):
+        _ans = run_async_safe(_coro)
+    return _ans
+
+
+async def _drive_at_rate_raw_async(client: httpx.AsyncClient,
+                                   target_urls: list[str],
+                                   rate: int,
+                                   duration_s: float) -> dict[str, Any]:
+    """Async core of `_drive_at_rate_raw`: drive the rate, return raw per-request latencies + counts."""
+    _interval_s = 1.0 / rate if rate > 0 else 0.0
+    _deadline = time.perf_counter() + duration_s
+    _tasks: list[asyncio.Task[tuple[float, bool]]] = []
+    _next = time.perf_counter()
+    _idx = 0
+    _n_urls = len(target_urls)
+    while time.perf_counter() < _deadline:
+        _url = target_urls[_idx % _n_urls]
+        _idx += 1
+        _tasks.append(asyncio.create_task(_send_one(client, _url)))
+        _next += _interval_s
+        _wait = _next - time.perf_counter()
+        if _wait > 0:
+            await asyncio.sleep(_wait)
+    if _tasks:
+        _results = await asyncio.gather(*_tasks)
+    else:
+        _results = []
+    _latencies = [_lat for _lat, _ in _results]
+    _errors = sum(1 for _, _ok in _results if not _ok)
+    _ans: dict[str, Any] = {
+        "rate": rate,
+        "total": len(_results),
+        "errors": _errors,
+        "latencies_us": _latencies,
+    }
+    return _ans
+
+
 def probe_rate(*,
                target_urls: list[str],
                start: int = _DFLT_LAMBDA_START,

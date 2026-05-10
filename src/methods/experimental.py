@@ -25,11 +25,13 @@ from src.experimental.prototype.calibration import (
     envelope_path,
     load_calibration_cfg,
     make_envelope,
+    make_multi_proc_driver,
     probe_handler_scaling,
     probe_jitter,
     probe_loopback,
     probe_rate,
     probe_timer,
+    probe_workers_scaling,
     stamp_gate,
     write_envelope,
 )
@@ -73,6 +75,7 @@ def run_calibration(*,
     _vernier_cfg = _cfg.get("vernier", {})
     _hs_cfg = _cfg.get("hoststats", {})
     _rate_cfg = _cfg.get("rate", {})
+    _ws_cfg_raw = _cfg.get("workers_scaling", {})
     _gate_cfg = _cfg.get("gate", {})
     _dpl_cfg = _cfg.get("dpl", {})
     _k = _vernier_cfg.get("K")
@@ -101,19 +104,37 @@ def run_calibration(*,
                               wsgi_server=_wsgi)
 
     # 1. Host-floor probes (apparatus-independent); kwargs threaded from JSON.
+    # `handler_scaling` only runs on localhost (per-handler concurrency is mode-independent;
+    # rerunning it on multiprocess wastes time without adding information).
     _envelope["timer"] = probe_timer(**_hs_cfg.get("timer", {}))
     _envelope["jitter"] = probe_jitter(**_hs_cfg.get("jitter", {}))
     _envelope["loopback"] = probe_loopback(**_hs_cfg.get("loopback", {}))
-    _envelope["handler_scaling"] = probe_handler_scaling(**_hs_cfg.get("handler_scaling", {}))
+    if dpl == "localhost":
+        _envelope["handler_scaling"] = probe_handler_scaling(**_hs_cfg.get("handler_scaling", {}))
 
-    # 2. Bring up the vernier; run the rate sweep across all worker URLs.
+    # 2a. Per-worker rate saturation: probe_rate always runs at workers=1 so
+    # its result is the per-worker saturation curve (independent of the parallel
+    # axis explored separately by probe_workers_scaling).
+    _dpl_cfg_rate = dict(_dpl_cfg)
+    _dpl_cfg_rate["workers"] = 1
     with bring_up(dpl,
                   app_factory=_app_factory,
                   framework=framework,
                   wsgi_server=wsgi_server,
-                  **_dpl_cfg) as _urls:
+                  **_dpl_cfg_rate) as _urls:
         _target_urls = [f"{_url}/" for _url in _urls]
         _envelope["rate"] = probe_rate(target_urls=_target_urls, **_rate_cfg)
+
+    # 2b. Parallel-limit calibration; multiprocess only.
+    if dpl == "multiprocess":
+        _envelope["workers_scaling"] = _run_workers_scaling(
+            ws_cfg=_ws_cfg_raw,
+            saturation_rate=_envelope["rate"].get("saturation_rate"),
+            dpl=dpl,
+            app_factory=_app_factory,
+            framework=framework,
+            wsgi_server=wsgi_server,
+            dpl_cfg=_dpl_cfg)
 
     # 3. Gate verdict + close-out.
     stamp_gate(_envelope, **_gate_cfg)
@@ -126,6 +147,78 @@ def run_calibration(*,
         write_envelope(_path, _envelope)
 
     return _envelope
+
+
+class _BringUpFactory:
+    """Bind `bring_up` keyword args once; expose a `make_targets`-shaped `(n_workers) -> ctxmgr` callable.
+
+    Holds the deployment-side parameters (`dpl`, `framework`, `wsgi_server`, `app_factory`, `dpl_cfg`) so the workers ramp can ask for n target URLs without seeing those details. Replaces the closure inside `_run_workers_scaling` with a module-scope class that's picklable + grep-able.
+    """
+
+    def __init__(self,
+                 *,
+                 dpl: Dpl,
+                 app_factory: Any,
+                 framework: Framework,
+                 wsgi_server: WsgiServer,
+                 dpl_cfg: dict[str, Any]) -> None:
+        self._dpl = dpl
+        self._app_factory = app_factory
+        self._framework = framework
+        self._wsgi_server = wsgi_server
+        self._dpl_cfg = dpl_cfg
+
+    def __call__(self, n_workers: int) -> Any:
+        """Return the `bring_up` context manager configured for `n_workers` worker processes."""
+        _bring_kw = dict(self._dpl_cfg)
+        _bring_kw["workers"] = n_workers
+        _ctx = bring_up(dpl=self._dpl,
+                        app_factory=self._app_factory,
+                        framework=self._framework,
+                        wsgi_server=self._wsgi_server,
+                        **_bring_kw)
+        return _ctx
+
+
+def _run_workers_scaling(*,
+                         ws_cfg: dict[str, Any],
+                         saturation_rate: int | float | None,
+                         dpl: Dpl,
+                         app_factory: Any,
+                         framework: Framework,
+                         wsgi_server: WsgiServer,
+                         dpl_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Run `probe_workers_scaling` with a `bring_up`-backed `make_targets`.
+
+    Auto-derives `rate_per_worker` from `probe_rate`'s saturation when available; otherwise falls back to the absolute `rate_per_worker` in `ws_cfg`.
+
+    Args:
+        ws_cfg (dict[str, Any]): pre-loaded `workers_scaling` config block.
+        saturation_rate (int | float | None): per-worker saturation rate from the rate sweep.
+        dpl (Dpl): deployment mode (must be `'multiprocess'`).
+        app_factory (Any): zero-arg picklable callable returning the vernier app.
+        framework (Framework): server stack.
+        wsgi_server (WsgiServer): WSGI engine when `framework='flask'`.
+        dpl_cfg (dict[str, Any]): the JSON `dpl` block (host, base_port, ready_timeout_s).
+
+    Returns:
+        dict[str, Any]: the populated `workers_scaling` envelope block.
+    """
+    _kw = dict(ws_cfg)
+    _factor = _kw.pop("rate_per_worker_factor", 0.7)
+    _n_clients = _kw.pop("n_clients", 1)
+    if saturation_rate is not None:
+        _kw["rate_per_worker"] = max(1, int(_factor * float(saturation_rate)))
+    _make_targets = _BringUpFactory(dpl=dpl,
+                                    app_factory=app_factory,
+                                    framework=framework,
+                                    wsgi_server=wsgi_server,
+                                    dpl_cfg=dpl_cfg)
+    _driver = make_multi_proc_driver(_n_clients)
+    _ans = probe_workers_scaling(make_targets=_make_targets,
+                                 driver=_driver,
+                                 **_kw)
+    return _ans
 
 
 def run(*,
@@ -220,6 +313,7 @@ def _print_calibration_report(envelope: dict[str, Any]) -> None:
     _summary = _gate.get("summary", {}) or {}
     _c_max = _range.get("c_max")
     _r_max = _range.get("r_max_req_s")
+    _w_max = _range.get("w_max")
 
     if _band is None:
         _band_str = "n/a"
@@ -233,6 +327,10 @@ def _print_calibration_report(envelope: dict[str, Any]) -> None:
         _r_str = "n/a"
     else:
         _r_str = f"r <= {int(_r_max)} req/s"
+    if _w_max is None:
+        _w_str = "n/a"
+    else:
+        _w_str = f"w <= {int(_w_max)}"
 
     print()
     print(f"host: {envelope.get('host', '?')}     dpl: {envelope.get('dpl', '?')}")
@@ -243,6 +341,7 @@ def _print_calibration_report(envelope: dict[str, Any]) -> None:
     print()
     print(f"Operating range  {_c_str}")
     print(f"                 {_r_str}")
+    print(f"                 {_w_str}")
     print()
     print("Floors")
     for _name, _label in (("timer", "Timer"), ("jitter", "Jitter"), ("loopback", "Loopback")):
@@ -250,7 +349,7 @@ def _print_calibration_report(envelope: dict[str, Any]) -> None:
         print(f"   {_label:<11} {_hl}")
     print()
     print("Envelope")
-    for _name, _label in (("scaling", "Scaling"), ("rate", "Rate sweep")):
+    for _name, _label in (("scaling", "Scaling"), ("rate", "Rate sweep"), ("workers", "Workers")):
         _hl = _summary.get(_name, {}).get("headline", "n/a")
         print(f"   {_label:<11} {_hl}")
     print()

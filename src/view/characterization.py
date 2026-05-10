@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """Plotters for the calibration envelope.
 
-Five per-probe panels plus a 2x3 summary grid (with a Report panel) and an overlay variant for cross-deployment comparison:
+Six per-probe panels plus a 2x3 summary grid (with a Report panel) and an overlay variant for cross-deployment comparison:
 
 - `plot_timer`: clock-tick `Min`, `phi` (median), `chi-hat` (mean), `Max`; std-dev `s^2` rendered as +/- error caps.
 - `plot_jitter`: `chi-hat`, `phi`, `p_{95}`, `p_{99}` relative to target sleep; `s^2` as caps.
 - `plot_loopback`: `Min`, `phi`, `p_{95}`, `p_{99}`; precision band `[phi - s^2, phi + s^2]` shaded behind bars.
 - `plot_handler_scaling`: linear latency vs concurrency; three traces (`phi`, `p_{95}`, `p_{99}`) + p95-p99 fill.
+- `plot_workers_scaling`: per-worker rps + efficiency vs `n_workers`; vertical marker at the stable-knee.
 - `plot_rate_sweep`: latency + loss-rate vs rate; verifiable region (below saturation) shaded green.
-- `plot_calibration_summary`: 2x3 grid of all five panels + a Report block (precision band, verifiable range, envelope gates, floors).
-- `plot_envelope_overlay`: same 2x3 grid with two envelopes overlaid.
+- `plot_calibration_summary`: 2x3 grid; bottom-left slot shows `handler_scaling` on localhost and `workers_scaling` on multiprocess (the more actionable probe per mode); bottom-right is the Report.
+- `plot_envelope_overlay`: same 2x3 grid; the bottom-left slot falls back to `handler_scaling` when any envelope lacks workers data, ensuring localhost-vs-multiprocess overlays still produce a coherent panel.
 
-`plot_rate_sweep` and `plot_handler_scaling` subtract the loopback median floor from displayed values by default (`subtract_floor=True`); the panels measure service work on top of the floor, not the floor itself. Toggle off for raw inspection. Footer text states the formula.
+`plot_rate_sweep` and `plot_handler_scaling` subtract the loopback median floor from displayed values by default (`subtract_floor=True`); the panels measure service work on top of the floor, not the floor itself.
 """
 
 from __future__ import annotations
@@ -43,7 +44,18 @@ def plot_timer(envelope: dict[str, Any],
                file_path: str | None = None,
                fname: str = "timer",
                verbose: bool = False) -> Figure:
-    """Horizontal bar chart of timer min / phi / chi-hat / s^2 / max (ns)."""
+    """Horizontal bar chart of timer min / phi / chi-hat / s^2 / max (ns).
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope (reads `envelope["timer"]`).
+        title (str | None, optional): override panel title; default is `f"Timer (n={samples_n})"`.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem used by `_save_figure`. Defaults to `"timer"`.
+        verbose (bool, optional): when True, `_save_figure` logs the saved paths.
+
+    Returns:
+        Figure: the matplotlib figure (caller closes it; the function never calls `plt.show`).
+    """
     _fig, _ax = plt.subplots(figsize=(6, 3.5))
     _draw_timer(_ax, envelope.get("timer", {}), title=title)
     _fig.tight_layout()
@@ -57,7 +69,18 @@ def plot_jitter(envelope: dict[str, Any],
                 file_path: str | None = None,
                 fname: str = "jitter",
                 verbose: bool = False) -> Figure:
-    """Horizontal bar chart of asyncio.sleep chi-hat / phi / p_{95} / p_{99} / s^2 against the target sleep."""
+    """Horizontal bar chart of asyncio.sleep chi-hat / phi / p_{95} / p_{99} / s^2 against the target sleep.
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope (reads `envelope["jitter"]`).
+        title (str | None, optional): override panel title.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"jitter"`.
+        verbose (bool, optional): log saved paths when True.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
     _fig, _ax = plt.subplots(figsize=(6, 3.5))
     _draw_jitter(_ax, envelope.get("jitter", {}), title=title)
     _fig.tight_layout()
@@ -71,7 +94,18 @@ def plot_loopback(envelope: dict[str, Any],
                   file_path: str | None = None,
                   fname: str = "loopback",
                   verbose: bool = False) -> Figure:
-    """Horizontal bar chart of TCP loopback Min / phi / p_{95} / p_{99} (us)."""
+    """Horizontal bar chart of TCP loopback Min / phi / p_{95} / p_{99} (us).
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope (reads `envelope["loopback"]`).
+        title (str | None, optional): override panel title.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"loopback"`.
+        verbose (bool, optional): log saved paths when True.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
     _fig, _ax = plt.subplots(figsize=(6, 3.5))
     _draw_loopback(_ax, envelope.get("loopback", {}), title=title)
     _fig.tight_layout()
@@ -86,7 +120,19 @@ def plot_handler_scaling(envelope: dict[str, Any],
                          fname: str = "handler_scaling",
                          verbose: bool = False,
                          subtract_floor: bool = True) -> Figure:
-    """Log-log latency (us) vs concurrency, three traces (phi, p_{95}, p_{99})."""
+    """Linear latency (us) vs concurrency, three traces (phi, p_{95}, p_{99}).
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope (reads `handler_scaling` + `loopback`).
+        title (str | None, optional): override panel title.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"handler_scaling"`.
+        verbose (bool, optional): log saved paths when True.
+        subtract_floor (bool, optional): subtract `loopback.median_us` from displayed latencies. Defaults to True.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
     _fig, _ax = plt.subplots(figsize=(7, 4))
     _draw_handler_scaling(_ax,
                           envelope.get("handler_scaling", {}),
@@ -105,13 +151,50 @@ def plot_rate_sweep(envelope: dict[str, Any],
                     fname: str = "rate_sweep",
                     verbose: bool = False,
                     subtract_floor: bool = True) -> Figure:
-    """Twin-axis plot of p_{95} latency (us) + loss percent vs target rate."""
+    """Twin-axis plot of p_{95} latency (us) + loss percent vs target rate.
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope (reads `rate` + `loopback`).
+        title (str | None, optional): override panel title.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"rate_sweep"`.
+        verbose (bool, optional): log saved paths when True.
+        subtract_floor (bool, optional): subtract `loopback.median_us` from displayed latencies.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
     _fig, _ax = plt.subplots(figsize=(7, 4))
     _draw_rate_sweep(_ax,
                      envelope.get("rate", {}),
                      loopback=envelope.get("loopback", {}),
                      title=title,
                      subtract_floor=subtract_floor)
+    _fig.tight_layout()
+    _save_figure(_fig, file_path, fname, verbose)
+    return _fig
+
+
+def plot_workers_scaling(envelope: dict[str, Any],
+                         *,
+                         title: str | None = None,
+                         file_path: str | None = None,
+                         fname: str = "workers_scaling",
+                         verbose: bool = False) -> Figure:
+    """Twin-axis plot of per-worker rps + efficiency percent vs `n_workers`, with the stable-knee marker.
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope (reads `envelope["workers_scaling"]`).
+        title (str | None, optional): override panel title.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"workers_scaling"`.
+        verbose (bool, optional): log saved paths when True.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
+    _fig, _ax = plt.subplots(figsize=(7, 4))
+    _draw_workers_scaling(_ax, envelope.get("workers_scaling", {}), title=title)
     _fig.tight_layout()
     _save_figure(_fig, file_path, fname, verbose)
     return _fig
@@ -124,16 +207,28 @@ def plot_calibration_summary(envelope: dict[str, Any],
                              fname: str = "summary",
                              verbose: bool = False,
                              subtract_floor: bool = True) -> Figure:
-    """2x3 grid: timer, jitter, loopback, handler scaling, rate sweep, gate verdict text."""
+    """Per-envelope summary grid (2x3) with the bottom-left slot driven by deployment mode.
+
+    Localhost runs show `handler_scaling` (the per-handler concurrency probe); multiprocess runs show `workers_scaling` (the parallel-limit probe). Both probes still record data on every run; only the panel slot is conditional. Layout never changes shape.
+
+    Args:
+        envelope (dict[str, Any]): populated calibration envelope.
+        title (str | None, optional): override the figure suptitle; default is `f"Calibration: {host}, dpl={dpl}"`.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"summary"`.
+        verbose (bool, optional): log saved paths when True.
+        subtract_floor (bool, optional): subtract `loopback.median_us` from displayed latencies on the handler-scaling and rate-sweep panels.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
     _fig, _axes = plt.subplots(2, 3, figsize=(18, 9))
     _loopback = envelope.get("loopback", {})
     _draw_timer(_axes[0, 0], envelope.get("timer", {}))
     _draw_jitter(_axes[0, 1], envelope.get("jitter", {}))
     _draw_loopback(_axes[0, 2], _loopback)
-    _draw_handler_scaling(_axes[1, 0],
-                          envelope.get("handler_scaling", {}),
-                          loopback=_loopback,
-                          subtract_floor=subtract_floor)
+    _draw_scaling_slot(_axes[1, 0], envelope,
+                       loopback=_loopback, subtract_floor=subtract_floor)
     _draw_rate_sweep(_axes[1, 1],
                      envelope.get("rate", {}),
                      loopback=_loopback,
@@ -157,9 +252,27 @@ def plot_envelope_overlay(envelopes: dict[str, dict[str, Any]],
                           fname: str = "overlay",
                           verbose: bool = False,
                           subtract_floor: bool = True) -> Figure:
-    """2x3 grid overlaying multiple envelopes for cross-deployment comparison."""
-    _fig, _axes = plt.subplots(2, 3, figsize=(18, 9))
+    """Cross-envelope overlay grid (2x3); the bottom-left scaling panel is mode-aware.
+
+    Localhost overlays (no envelope carries `workers_scaling`) render handler_scaling so multiple localhost runs can be compared by per-handler concurrency. Multiprocess overlays (every envelope carries `workers_scaling`) render workers_scaling so multiple multiprocess runs can be compared by parallel-limit. Mixed-mode overlays fall back to handler_scaling.
+
+    Args:
+        envelopes (dict[str, dict[str, Any]]): label-to-envelope mapping. Order is preserved across the legend, Report-table columns, and the per-row offset on the bar panels.
+        title (str | None, optional): override the figure suptitle.
+        file_path (str | None, optional): when given, saves `<fname>.png` and `<fname>.svg` under this directory.
+        fname (str, optional): file stem. Defaults to `"overlay"`.
+        verbose (bool, optional): log saved paths when True.
+        subtract_floor (bool, optional): subtract `loopback.median_us` from displayed latencies.
+
+    Returns:
+        Figure: the matplotlib figure (caller owns its lifecycle).
+    """
     _items = list(envelopes.items())
+    _all_have_workers = True
+    for _, _env in _items:
+        if not _has_workers_data(_env):
+            _all_have_workers = False
+    _fig, _axes = plt.subplots(2, 3, figsize=(18, 9))
     _palette = _generate_color_map(_items)
     _total = len(_items)
     for _i, (_label, _env) in enumerate(_items):
@@ -171,28 +284,24 @@ def plot_envelope_overlay(envelopes: dict[str, dict[str, Any]],
                      color=_color, label=_label, idx=_i, total=_total)
         _draw_loopback(_axes[0, 2], _loopback,
                        color=_color, label=_label, idx=_i, total=_total)
-        _draw_handler_scaling(_axes[1, 0],
-                              _env.get("handler_scaling", {}),
-                              loopback=_loopback,
-                              color=_color,
-                              label=_label,
-                              subtract_floor=subtract_floor)
+        if _all_have_workers:
+            _draw_workers_scaling(_axes[1, 0],
+                                  _env.get("workers_scaling", {}),
+                                  color=_color, label=_label)
+        else:
+            _draw_handler_scaling(_axes[1, 0],
+                                  _env.get("handler_scaling", {}),
+                                  loopback=_loopback,
+                                  color=_color, label=_label,
+                                  subtract_floor=subtract_floor)
         _draw_rate_sweep(_axes[1, 1],
                          _env.get("rate", {}),
                          loopback=_loopback,
-                         color=_color,
-                         label=_label,
+                         color=_color, label=_label,
                          subtract_floor=subtract_floor)
     _draw_report_overlay(_axes[1, 2], envelopes)
-    # Report panel has only text; skip its legend to silence "no artists" warning.
-    _sub_imgs = (
-        _axes[0, 0],
-        _axes[0, 1],
-        _axes[0, 2],
-        _axes[1, 0],
-        _axes[1, 1]
-    )
-    for _ax in _sub_imgs:
+    # Report panel is text-only; skip its legend to silence "no artists" warnings.
+    for _ax in (_axes[0, 0], _axes[0, 1], _axes[0, 2], _axes[1, 0], _axes[1, 1]):
         _ax.legend(fontsize=9)
     if title is None:
         _title = "Calibration overlay"
@@ -202,6 +311,42 @@ def plot_envelope_overlay(envelopes: dict[str, dict[str, Any]],
     _fig.tight_layout(rect=_TIGHT_RECT)
     _save_figure(_fig, file_path, fname, verbose)
     return _fig
+
+
+def _has_workers_data(envelope: dict[str, Any]) -> bool:
+    """True iff `envelope["workers_scaling"]` carries at least one per-step row.
+
+    Args:
+        envelope (dict[str, Any]): one calibration envelope.
+
+    Returns:
+        bool: True when the workers ramp has been populated (multiprocess runs); False on localhost or pre-stamp.
+    """
+    _ws = envelope.get("workers_scaling") or {}
+    _per_step = _ws.get("per_step") or []
+    return len(_per_step) > 0
+
+
+def _draw_scaling_slot(ax: Axes,
+                       envelope: dict[str, Any],
+                       *,
+                       loopback: dict[str, Any],
+                       subtract_floor: bool) -> None:
+    """Draw the bottom-left scaling panel: workers_scaling on multiprocess, handler_scaling otherwise.
+
+    Args:
+        ax (Axes): target axis.
+        envelope (dict[str, Any]): one calibration envelope.
+        loopback (dict[str, Any]): the envelope's loopback block (for floor subtraction in the handler-scaling case).
+        subtract_floor (bool): forwarded to `_draw_handler_scaling` when handler_scaling is the chosen panel.
+    """
+    if _has_workers_data(envelope):
+        _draw_workers_scaling(ax, envelope["workers_scaling"])
+    else:
+        _draw_handler_scaling(ax,
+                              envelope.get("handler_scaling", {}),
+                              loopback=loopback,
+                              subtract_floor=subtract_floor)
 
 
 # ---- Per-axis drawers (private; shared by single-panel plotters and the grid) ----
@@ -400,28 +545,79 @@ def _draw_rate_sweep(ax: Axes,
                   linestyle="--", alpha=0.85, label="loss %")
 
 
+def _draw_workers_scaling(ax: Axes,
+                          block: dict[str, Any],
+                          *,
+                          title: str | None = None,
+                          color: Any = _NEUTRAL_BAR,
+                          label: str | None = None) -> None:
+    """Twin-axis: per-worker rps on the left, efficiency percent on the right; vertical marker at the stable knee.
+
+    Args:
+        ax (Axes): target axis.
+        block (dict[str, Any]): the `workers_scaling` envelope block (`{ramp, per_step, stable_workers, ...}`).
+        title (str | None, optional): override title; defaults to "Workers scaling (stable n=N)" when a knee is known.
+        color (Any, optional): primary trace colour.
+        label (str | None, optional): legend label for the per-worker rps trace.
+    """
+    _per_step = block.get("per_step") or []
+    _ns = [_row.get("n_workers", 0) for _row in _per_step]
+    _per_w = [_row.get("per_worker_rps", 0.0) for _row in _per_step]
+    _eff = [_row.get("efficiency_pct", 0.0) for _row in _per_step]
+    _stable = block.get("stable_workers")
+
+    if _ns and _stable is not None:
+        ax.axvspan(min(_ns), _stable, color="#4CAF50", alpha=0.07, zorder=0)
+        ax.axvline(_stable, color="#C44536", linestyle="--", linewidth=1.2,
+                   alpha=0.7, label=f"stable (n={_stable})")
+    if _ns:
+        _lat_label = label or "per-worker rps"
+        ax.plot(_ns, _per_w, marker="o", color=color,
+                linestyle="-", linewidth=2, label=_lat_label)
+    ax.set_xlabel(r"workers $n$", color=_TEXT_BLACK)
+    ax.set_ylabel("per-worker rps", color=_TEXT_BLACK)
+    if title is None:
+        if _stable is None:
+            _t = "Workers scaling"
+        else:
+            _t = f"Workers scaling (stable n={_stable})"
+    else:
+        _t = title
+    ax.set_title(_t, color=_TEXT_BLACK, fontweight="bold")
+    ax.grid(linestyle=":", alpha=0.5)
+
+    # Reuse the twin axis across overlay calls so multiple envelopes share one right y-axis.
+    _ax2 = getattr(ax, "_eff_axis", None)
+    if _ax2 is None:
+        _ax2 = ax.twinx()
+        ax._eff_axis = _ax2  # type: ignore[attr-defined]
+        _ax2.set_ylabel("efficiency (%)", color=_TEXT_BLACK)
+    if _ns:
+        _ax2.plot(_ns, _eff, marker="x", color="#F0AB7E",
+                  linestyle="--", alpha=0.85, label="efficiency %")
+
+
 # Layout constants (axes-fraction units) for the Report panel.
 _REPORT_FONTSIZE = 8
 _REPORT_LINE_H = 0.034
 _REPORT_LABEL_X = 0.02
 _REPORT_VALUE_X = 0.36
 _REPORT_ROW_LABEL_X = 0.05
-_REPORT_ROW_VALUE_X = 0.20
-_REPORT_LEGEND_BODY_X = 0.14
+_REPORT_LEGEND_BODY_X = 0.20
 
 _REPORT_LEGEND_ROWS = (
     ("Latency:",
-     ("Reported figures equal the measured value",
-      "minus the loopback floor (median), with the",
-      "jitter p99 as the precision band.")),
+     ("Reported figures equal the measured value minus the",
+      "loopback floor (median), with the jitter p99 as the",
+      "precision band.")),
     ("Floors:",
-     ("Background noise sources we cannot control",
-      "(clock, scheduler, kernel TCP path); the",
-      "precision band is their RMS sum.")),
+     ("Background noise sources we cannot control (clock,",
+      "scheduler, kernel TCP path); the precision band is",
+      "their RMS sum.")),
     ("Envelope:",
-     ("Operating limits where the apparatus's",
-      "measurements remain trustworthy (concurrency",
-      "knee + rate saturation knee).")),
+     ("Operating limits where the apparatus's measurements",
+      "remain trustworthy (concurrency knee + rate",
+      "saturation knee).")),
 )
 
 
@@ -429,93 +625,130 @@ def _draw_report(ax: Axes,
                  gate_block: dict[str, Any],
                  *,
                  envelope: dict[str, Any] | None = None) -> None:
-    """Text-only Report panel: header strip + precision band + operating range + per-row headlines + static legend.
+    """Text-only single-envelope Report panel: borderless table + static legend.
 
-    Each row is rendered as two `ax.text()` calls (bold label + regular value) so headers and per-row labels stand out without breaking the monospace alignment of the values.
+    The table mirrors the overlay's layout with a single column whose header is the host name. RUN and the allowed noise floor render as the first two rows of the table; the deployment mode is omitted because the figure suptitle already carries it.
+
+    Args:
+        ax (Axes): target axis (whole panel).
+        gate_block (dict[str, Any]): the `gate` envelope block.
+        envelope (dict[str, Any] | None, optional): full envelope for the column header (host) + the metadata rows (run, noise floor).
     """
     ax.axis("off")
-
-    _band = (gate_block.get("precision_band_us") or {}).get("total_us")
-    _range = gate_block.get("verifiable_range", {}) or {}
     _summary = gate_block.get("summary", {}) or {}
-    _limit = gate_block.get("noise_floor_pct", 0.0)
+    if envelope is None:
+        _host = "?"
+        _run = "?"
+    else:
+        _host = str(envelope.get("host", "?"))
+        _run = _fmt_run_date(envelope.get("run_id"))
+    _noise = _fmt_noise_floor(gate_block.get("noise_floor_pct"))
+    _wrapped = {"gate": gate_block}
 
     _y = 0.99
-    _y = _draw_header_rows(ax, envelope, _limit, _y)
-    _y = _draw_band_rows(ax, _band, _range, _y)
-    _y = _draw_floor_rows(ax, _summary, _y)
-    _y = _draw_envelope_rows(ax, _summary, _y)
+    _y = _draw_table_rows(ax,
+                          names=[_host],
+                          run_values=[_run],
+                          noise_values=[_noise],
+                          band_values=[_overlay_band(_wrapped)],
+                          c_values=[_overlay_c_max(_wrapped)],
+                          r_values=[_overlay_r_max(_wrapped)],
+                          w_values=[_overlay_w_max(_wrapped)],
+                          summaries=[_summary],
+                          y=_y)
     _draw_legend_rows(ax, _y)
-
     ax.set_title("Calibration Report", color=_NEUTRAL_BAR, fontweight="bold")
 
 
-def _draw_header_rows(ax: Axes,
-                      envelope: dict[str, Any] | None,
-                      limit: Any,
-                      y: float) -> float:
-    """Header strip: HOST / DEPLOYMENT MODE / RUN / ALLOWED NOISE FLOOR rows."""
-    _y = y
-    if envelope is not None:
-        _y = _put_kv(ax, "HOST:", str(envelope.get("host", "?")), _y)
-        _y = _put_kv(ax, "DEPLOYMENT MODE:", str(envelope.get("dpl", "?")), _y)
-        _y = _put_kv(ax, "RUN:", str(envelope.get("run_id", "?")), _y)
-        if isinstance(limit, (int, float)):
-            _y = _put_kv(ax, "ALLOWED NOISE FLOOR:",
-                         f"± {float(limit):.1f} %", _y)
-        _y -= _REPORT_LINE_H * 0.5
-    return _y
+def _fmt_noise_floor(value: Any) -> str:
+    """Format the gate's noise-floor budget as a `± X %` string.
+
+    Args:
+        value (Any): the raw `gate.noise_floor_pct` (number or None).
+
+    Returns:
+        str: mathtext-formatted band, or `"n/a"` when the value is missing or non-numeric.
+    """
+    _ans = "n/a"
+    if isinstance(value, (int, float)):
+        _ans = rf"$\pm$ {float(value):.1f} %"
+    return _ans
 
 
-def _draw_band_rows(ax: Axes,
-                    band: float | None,
-                    range_block: dict[str, Any],
-                    y: float) -> float:
-    """Precision band + operating range rows."""
-    if band is None:
-        _band_str = "n/a"
-    else:
-        _band_str = rf"$\pm$ {band:.2f} $\mu$s"
-    _y = _put_kv(ax, "PRECISION BAND:", _band_str, y)
-    _y -= _REPORT_LINE_H * 0.5
+def _fmt_run_date(run_id: Any) -> str:
+    """Extract the ISO-style timestamp from a `calib_<YYYYMMDDTHHMMSSZ>_<hash>` run id.
 
-    _c_max = range_block.get("c_max")
-    _r_max = range_block.get("r_max_req_s")
-    if _c_max is None:
-        _c_str = "n/a"
-    else:
-        _c_str = rf"$c \leq {int(_c_max)}$"
-    if _r_max is None:
-        _r_str = "n/a"
-    else:
-        _r_str = rf"$r \leq {int(_r_max)}$ req/s"
-    _y = _put_kv(ax, "OPERATING RANGE:", _c_str, _y)
-    _y = _put_kv(ax, "", _r_str, _y)
-    _y -= _REPORT_LINE_H * 0.5
-    return _y
+    Args:
+        run_id (Any): the envelope's run id (string typically minted by `make_run_id`).
+
+    Returns:
+        str: `YYYY-MM-DD HH:MM:SS` when the timestamp can be parsed; otherwise the raw run id (or `"?"` when missing).
+    """
+    _ans = "?"
+    if isinstance(run_id, str) and run_id:
+        _ans = run_id
+        _parts = run_id.split("_")
+        if len(_parts) >= 2:
+            _ts = _parts[1]
+            if len(_ts) == 16 and _ts[8] == "T" and _ts.endswith("Z"):
+                _ans = (f"{_ts[0:4]}-{_ts[4:6]}-{_ts[6:8]}"
+                        f" {_ts[9:11]}:{_ts[11:13]}:{_ts[13:15]}")
+    return _ans
 
 
-def _draw_floor_rows(ax: Axes,
-                     summary: dict[str, Any],
+def _draw_table_rows(ax: Axes,
+                     *,
+                     names: list[str],
+                     run_values: list[str],
+                     noise_values: list[str],
+                     band_values: list[str],
+                     c_values: list[str],
+                     r_values: list[str],
+                     w_values: list[str],
+                     summaries: list[dict[str, Any]],
                      y: float) -> float:
-    """FLOORS section: bold section label + three indented data rows (Timer / Jitter / Loopback)."""
-    _y = _put_section(ax, "FLOORS:", y)
+    """Render the borderless attribute-vs-column table.
+
+    Sections, top to bottom: column header (host names) -> RUN + NOISE FLOOR rows -> PRECISION BAND -> OPERATING RANGE (c / r / workers max) -> FLOORS (timer / jitter / loopback) -> ENVELOPE (scaling / rate / workers).
+
+    Args:
+        ax (Axes): target axis.
+        names (list[str]): one column header per envelope.
+        run_values (list[str]): per-column `run_id` values.
+        noise_values (list[str]): per-column noise-floor budget strings.
+        band_values (list[str]): per-column precision-band strings.
+        c_values (list[str]): per-column `c_max` strings.
+        r_values (list[str]): per-column `r_max` strings.
+        w_values (list[str]): per-column `w_max` strings.
+        summaries (list[dict[str, Any]]): the `gate.summary` block of each envelope.
+        y (float): top y-coordinate.
+
+    Returns:
+        float: next y-coordinate after the table.
+    """
+    _y = y
+    _y = _put_overlay_columns(ax, names, _y)
+    _y -= _REPORT_LINE_H * 0.3
+    _y = _put_overlay_row(ax, "RUN:", run_values, _y, indent=False)
+    _y = _put_overlay_row(ax, "NOISE FLOOR:", noise_values, _y, indent=False)
+    _y -= _REPORT_LINE_H * 0.3
+    _y = _put_overlay_row(ax, "PRECISION BAND:", band_values, _y, indent=False)
+    _y -= _REPORT_LINE_H * 0.3
+    _y = _put_section(ax, "OPERATING RANGE:", _y)
+    _y = _put_overlay_row(ax, "Concurrency:", c_values, _y, indent=True)
+    _y = _put_overlay_row(ax, "Rate:", r_values, _y, indent=True)
+    _y = _put_overlay_row(ax, "Workers:", w_values, _y, indent=True)
+    _y -= _REPORT_LINE_H * 0.3
+    _y = _put_section(ax, "FLOORS:", _y)
     for _name, _label in (("timer", "Timer:"), ("jitter", "Jitter:"), ("loopback", "Loopback:")):
-        _hl = summary.get(_name, {}).get("headline", "n/a")
-        _y = _put_row(ax, _label, _hl, _y)
-    _y -= _REPORT_LINE_H * 0.5
-    return _y
-
-
-def _draw_envelope_rows(ax: Axes,
-                        summary: dict[str, Any],
-                        y: float) -> float:
-    """ENVELOPE section: bold section label + two indented data rows (Scaling / Rate sweep)."""
-    _y = _put_section(ax, "ENVELOPE:", y)
-    for _name, _label in (("scaling", "Scaling:"), ("rate", "Rate sweep:")):
-        _hl = summary.get(_name, {}).get("headline", "n/a")
-        _y = _put_row(ax, _label, _hl, _y)
-    _y -= _REPORT_LINE_H * 0.5
+        _vals = [_s.get(_name, {}).get("headline", "n/a") for _s in summaries]
+        _y = _put_overlay_row(ax, _label, _vals, _y, indent=True)
+    _y -= _REPORT_LINE_H * 0.3
+    _y = _put_section(ax, "ENVELOPE:", _y)
+    for _name, _label in (("scaling", "Scaling:"), ("rate", "Rate sweep:"), ("workers", "Workers:")):
+        _vals = [_s.get(_name, {}).get("headline", "n/a") for _s in summaries]
+        _y = _put_overlay_row(ax, _label, _vals, _y, indent=True)
+    _y -= _REPORT_LINE_H * 0.3
     return _y
 
 
@@ -562,19 +795,6 @@ def _put_section(ax: Axes, label: str, y: float) -> float:
     return y - _REPORT_LINE_H
 
 
-def _put_row(ax: Axes, label: str, value: str, y: float) -> float:
-    """Render an indented bold sentence-case row label + regular value; return the next y."""
-    ax.text(_REPORT_ROW_LABEL_X, y, label,
-            transform=ax.transAxes, va="top",
-            fontsize=_REPORT_FONTSIZE, fontweight="bold",
-            color=_TEXT_BLACK, family="monospace")
-    ax.text(_REPORT_ROW_VALUE_X, y, value,
-            transform=ax.transAxes, va="top",
-            fontsize=_REPORT_FONTSIZE,
-            color=_TEXT_BLACK, family="monospace")
-    return y - _REPORT_LINE_H
-
-
 def _draw_report_overlay(ax: Axes,
                          envelopes: dict[str, dict[str, Any]]) -> None:
     """Overlay Report panel: borderless table (rows = attributes, columns = envelopes) + legend.
@@ -584,37 +804,26 @@ def _draw_report_overlay(ax: Axes,
     ax.axis("off")
     _items = list(envelopes.items())
     _names = [str(_label) for _label, _ in _items]
+    _run_values = [_fmt_run_date(_env.get("run_id")) for _, _env in _items]
+    _noise_values = [_fmt_noise_floor(_env.get("gate", {}).get("noise_floor_pct"))
+                     for _, _env in _items]
+    _band_values = [_overlay_band(_env) for _, _env in _items]
+    _c_values = [_overlay_c_max(_env) for _, _env in _items]
+    _r_values = [_overlay_r_max(_env) for _, _env in _items]
+    _w_values = [_overlay_w_max(_env) for _, _env in _items]
+    _summaries = [_env.get("gate", {}).get("summary", {}) or {} for _, _env in _items]
+
     _y = 0.99
-    _y = _put_overlay_columns(ax, _names, _y)
-    _y -= _REPORT_LINE_H * 0.3
-
-    _y = _put_overlay_row(ax, "PRECISION BAND:",
-                          [_overlay_band(_env) for _, _env in _items],
-                          _y, indent=False)
-    _y -= _REPORT_LINE_H * 0.3
-
-    _y = _put_section(ax, "OPERATING RANGE:", _y)
-    _y = _put_overlay_row(ax, "c max:",
-                          [_overlay_c_max(_env) for _, _env in _items],
-                          _y, indent=True)
-    _y = _put_overlay_row(ax, "r max:",
-                          [_overlay_r_max(_env) for _, _env in _items],
-                          _y, indent=True)
-    _y -= _REPORT_LINE_H * 0.3
-
-    _y = _put_section(ax, "FLOORS:", _y)
-    for _name, _label in (("timer", "Timer:"), ("jitter", "Jitter:"), ("loopback", "Loopback:")):
-        _y = _put_overlay_row(ax, _label,
-                              [_overlay_headline(_env, _name) for _, _env in _items],
-                              _y, indent=True)
-    _y -= _REPORT_LINE_H * 0.3
-
-    _y = _put_section(ax, "ENVELOPE:", _y)
-    for _name, _label in (("scaling", "Scaling:"), ("rate", "Rate sweep:")):
-        _y = _put_overlay_row(ax, _label,
-                              [_overlay_headline(_env, _name) for _, _env in _items],
-                              _y, indent=True)
-
+    _y = _draw_table_rows(ax,
+                          names=_names,
+                          run_values=_run_values,
+                          noise_values=_noise_values,
+                          band_values=_band_values,
+                          c_values=_c_values,
+                          r_values=_r_values,
+                          w_values=_w_values,
+                          summaries=_summaries,
+                          y=_y)
     _draw_legend_rows(ax, _y)
     ax.set_title("Calibration Reports", color=_NEUTRAL_BAR, fontweight="bold")
 
@@ -742,17 +951,20 @@ def _overlay_r_max(env: dict[str, Any]) -> str:
     return _ans
 
 
-def _overlay_headline(env: dict[str, Any], name: str) -> str:
-    """Pull `gate.summary[name].headline` for an overlay table cell.
+def _overlay_w_max(env: dict[str, Any]) -> str:
+    """Format `w_max` as `$w \\leq N$` for an overlay table cell.
 
     Args:
         env (dict[str, Any]): one envelope.
-        name (str): summary key (`timer` / `jitter` / `loopback` / `scaling` / `rate`).
 
     Returns:
-        str: headline string, or `n/a` when missing.
+        str: mathtext expression, or `n/a` when w_max is missing (single-worker / localhost).
     """
-    return env.get("gate", {}).get("summary", {}).get(name, {}).get("headline", "n/a")
+    _w = env.get("gate", {}).get("verifiable_range", {}).get("w_max")
+    _ans = "n/a"
+    if _w is not None:
+        _ans = rf"$w \leq {int(_w)}$"
+    return _ans
 
 
 # ---- Internal helpers ----
@@ -826,4 +1038,5 @@ __all__ = [
     "plot_loopback",
     "plot_rate_sweep",
     "plot_timer",
+    "plot_workers_scaling",
 ]

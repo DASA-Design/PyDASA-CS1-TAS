@@ -38,6 +38,16 @@
         "target_loss_pct": 5.0,
         "max_p95_latency_us": 100000.0
     },
+    "workers_scaling": {
+        "start": 1,
+        "stop": 32,
+        "step": 1,
+        "per_step_s": 5.0,
+        "rate_per_worker_factor": 0.7,
+        "rate_per_worker": 200,
+        "min_eff_pct": 80.0,
+        "n_clients": 4
+    },
     "gate": {
         "noise_floor_pct": 5.0
     }

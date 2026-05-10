@@ -24,7 +24,8 @@ PROBE_SECTIONS = (
     "loopback",
     "handler_scaling",
     "rate",
-    "gate"
+    "workers_scaling",
+    "gate",
 )
 
 

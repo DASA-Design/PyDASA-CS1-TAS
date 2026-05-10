@@ -22,7 +22,7 @@ class TestEnvelope:
     """Skeleton builder + path resolution + round-trip."""
 
     def test_make_top_level_keys(self) -> None:
-        """The skeleton carries `version`, `run_id`, `host`, `dpl`, `framework`, `wsgi_server`, `started_ts`, `finished_ts`, plus one entry per probe section."""
+        """The skeleton carries `version`, `run_id`, `host`, `dpl`, `framework`, `wsgi_server`, `started_ts`, `finished_ts`, plus one entry per probe section (including `workers_scaling`)."""
         _env = make_envelope(run_id="r-1",
                              dpl="localhost",
                              framework="fastapi")
@@ -32,6 +32,7 @@ class TestEnvelope:
         assert _env["framework"] == "fastapi"
         assert _env["wsgi_server"] is None
         assert _env["finished_ts"] is None
+        assert "workers_scaling" in PROBE_SECTIONS
         for _section in PROBE_SECTIONS:
             assert _section in _env
 

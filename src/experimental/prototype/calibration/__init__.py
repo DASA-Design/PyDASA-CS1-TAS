@@ -47,16 +47,27 @@ from src.experimental.prototype.calibration.vernier import (
     build_vernier_flask_app,
     echo,
 )
+from src.experimental.prototype.calibration.multi_proc_driver import (
+    make_multi_proc_driver,
+)
+from src.experimental.prototype.calibration.workers import (
+    MakeTargetsFn,
+    detect_efficiency_knee,
+    make_workers_ramp,
+    probe_workers_scaling,
+)
 
 __all__ = [
     "DFLT_CALIBRATION_CFG_PATH",
     "DFLT_RESULTS_BASE",
     "ENVELOPE_VER",
     "HOST_FLOOR_PROBES",
+    "MakeTargetsFn",
     "PROBE_SECTIONS",
     "RateDriver",
     "build_vernier_fastapi_app",
     "build_vernier_flask_app",
+    "detect_efficiency_knee",
     "detect_saturation",
     "drive_at_rate",
     "echo",
@@ -64,11 +75,14 @@ __all__ = [
     "load_calibration_cfg",
     "make_envelope",
     "make_lambda_ramp",
+    "make_multi_proc_driver",
+    "make_workers_ramp",
     "probe_handler_scaling",
     "probe_jitter",
     "probe_loopback",
     "probe_rate",
     "probe_timer",
+    "probe_workers_scaling",
     "read_envelope",
     "stamp_gate",
     "verdict",

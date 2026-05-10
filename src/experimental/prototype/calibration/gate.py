@@ -31,6 +31,7 @@ def verdict(envelope: dict[str, Any],
     _gates = {
         "handler_scaling": _gate_handler_scaling(envelope.get("handler_scaling", {}), noise_floor_pct),
         "saturation_knee": _gate_saturation(envelope.get("rate", {})),
+        "workers_scaling": _gate_workers(envelope.get("workers_scaling", {})),
     }
     _range = _verifiable_range(envelope, noise_floor_pct)
     _summary = _summary_block(envelope, _gates, _range)
@@ -201,6 +202,44 @@ def _gate_handler_scaling(block: dict[str, Any],
     return _ans
 
 
+def _gate_workers(block: dict[str, Any]) -> dict[str, Any]:
+    """Envelope gate: the workers ramp must report a stable parallel limit.
+
+    Empty block (skipped on `dpl='localhost'`) is treated as `passed=True` with reason `not applicable` so the overall verdict isn't penalised by mode.
+
+    Args:
+        block (dict[str, Any]): the `workers_scaling` envelope block.
+
+    Returns:
+        dict[str, Any]: gate dict with keys `passed`, `value_pct`, `limit_pct`, `reason`.
+    """
+    _ans: dict[str, Any]
+    if not block:
+        _ans = {
+            "passed": True,
+            "value_pct": None,
+            "limit_pct": None,
+            "reason": "not applicable (single-worker mode)",
+        }
+    else:
+        _stable = block.get("stable_workers")
+        if _stable is None:
+            _ans = {
+                "passed": False,
+                "value_pct": None,
+                "limit_pct": block.get("min_eff_pct"),
+                "reason": str(block.get("reason", "no parallel headroom")),
+            }
+        else:
+            _ans = {
+                "passed": True,
+                "value_pct": None,
+                "limit_pct": block.get("min_eff_pct"),
+                "reason": f"stable up to n={_stable}",
+            }
+    return _ans
+
+
 def _gate_saturation(rate_block: dict[str, Any]) -> dict[str, Any]:
     """Envelope gate: the rate sweep must report a saturation knee.
 
@@ -234,18 +273,19 @@ def _gate_saturation(rate_block: dict[str, Any]) -> dict[str, Any]:
 
 def _verifiable_range(envelope: dict[str, Any],
                       noise_floor_pct: float) -> dict[str, Any]:
-    """Compute the operating envelope: max stable concurrency + saturation rate.
+    """Compute the operating envelope: max stable concurrency, saturation rate, and parallel-worker limit.
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope.
         noise_floor_pct (float): per-side tolerance for the concurrency drift check.
 
     Returns:
-        dict[str, Any]: keys `c_max` (int or None) and `r_max_req_s` (number or None).
+        dict[str, Any]: keys `c_max` (int | None), `r_max_req_s` (number | None), `w_max` (int | None).
     """
     _ans: dict[str, Any] = {
         "c_max": _max_stable_concurrency(envelope.get("handler_scaling", {}), noise_floor_pct),
         "r_max_req_s": envelope.get("rate", {}).get("saturation_rate"),
+        "w_max": envelope.get("workers_scaling", {}).get("stable_workers"),
     }
     return _ans
 
@@ -339,6 +379,7 @@ def _summary_block(envelope: dict[str, Any],
                                       gates["handler_scaling"]["passed"],
                                       verifiable_range.get("c_max")),
         "rate": _summarise_rate(envelope.get("rate", {})),
+        "workers": _summarise_workers(envelope.get("workers_scaling", {})),
     }
     return _ans
 
@@ -454,6 +495,47 @@ def _summarise_rate(block: dict[str, Any]) -> dict[str, str]:
         else:
             _headline = f"saturated @ {_sat} req/s"
     return {"headline": _headline}
+
+
+def _summarise_workers(block: dict[str, Any]) -> dict[str, str]:
+    """Build the workers-scaling headline: stable parallel-worker count + efficiency at the knee.
+
+    Args:
+        block (dict[str, Any]): the `workers_scaling` envelope block.
+
+    Returns:
+        dict[str, str]: `{"headline": ...}`; `"n/a"` when the block is empty (localhost mode); `"no parallel headroom"` when even n=1 fails efficiency.
+    """
+    _headline = "n/a"
+    if block:
+        _stable = block.get("stable_workers")
+        if _stable is None:
+            _headline = "no parallel headroom"
+        else:
+            _eff = _eff_at_n(block.get("per_step", []), _stable)
+            if _eff is None:
+                _headline = rf"stable up to $w={_stable}$"
+            else:
+                _headline = rf"stable up to $w={_stable}$ ({_eff:.0f}%)"
+    return {"headline": _headline}
+
+
+def _eff_at_n(per_step: list[dict[str, Any]],
+              n_workers: int) -> float | None:
+    """Find the efficiency_pct value of the row whose `n_workers` matches `n_workers`.
+
+    Args:
+        per_step (list[dict[str, Any]]): per-step rows from the workers ramp.
+        n_workers (int): the worker count to look up.
+
+    Returns:
+        float | None: matching `efficiency_pct`, or None when no row matches.
+    """
+    _ans: float | None = None
+    for _row in per_step:
+        if _ans is None and _row.get("n_workers") == n_workers:
+            _ans = _row.get("efficiency_pct")
+    return _ans
 
 
 __all__ = [

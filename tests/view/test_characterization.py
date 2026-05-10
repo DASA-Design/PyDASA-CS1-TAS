@@ -20,6 +20,7 @@ from src.view.characterization import (
     plot_loopback,
     plot_rate_sweep,
     plot_timer,
+    plot_workers_scaling,
 )
 
 
@@ -181,6 +182,70 @@ def _synth_envelope(*,
     return _env
 
 
+def _workers_step(*,
+                  n_workers: int,
+                  total: int,
+                  per_worker_rps: float,
+                  efficiency_pct: float) -> dict[str, Any]:
+    """Build one `per_step` row for a synthetic `workers_scaling` block.
+
+    Args:
+        n_workers (int): worker count at this step.
+        total (int): completed requests recorded at this step.
+        per_worker_rps (float): per-worker rps to embed in the row.
+        efficiency_pct (float): per-worker efficiency relative to n=1.
+
+    Returns:
+        dict[str, Any]: a per-step row with the standard driver + derived fields.
+    """
+    _ans: dict[str, Any] = {
+        "n_workers": n_workers,
+        "rate_target": n_workers * 200,
+        "total": total,
+        "errors": 0,
+        "loss_pct": 0.0,
+        "min_us": 100.0,
+        "max_us": 200.0,
+        "mean_us": 120.0,
+        "std_us": 10.0,
+        "median_us": 110.0,
+        "p95_us": 180.0,
+        "p99_us": 195.0,
+        "actual_rps": float(total),
+        "per_worker_rps": per_worker_rps,
+        "efficiency_pct": efficiency_pct,
+    }
+    return _ans
+
+
+def _add_workers_block(env: dict[str, Any]) -> dict[str, Any]:
+    """Stamp a populated `workers_scaling` block onto a synthetic envelope.
+
+    Args:
+        env (dict[str, Any]): the envelope to mutate (and return).
+
+    Returns:
+        dict[str, Any]: the same envelope with `workers_scaling` populated for a multiprocess run with knee at n=4.
+    """
+    env["workers_scaling"] = {
+        "ramp": [1, 2, 4],
+        "per_step": [
+            _workers_step(n_workers=1, total=1000,
+                          per_worker_rps=200.0, efficiency_pct=100.0),
+            _workers_step(n_workers=2, total=1900,
+                          per_worker_rps=190.0, efficiency_pct=95.0),
+            _workers_step(n_workers=4, total=3200,
+                          per_worker_rps=160.0, efficiency_pct=80.0),
+        ],
+        "rate_per_worker": 200,
+        "per_step_s": 5.0,
+        "min_eff_pct": 80.0,
+        "stable_workers": 4,
+        "reason": "all steps within efficiency band (max n=4)",
+    }
+    return env
+
+
 class TestCharacterization:
     """Smoke tests for every plotter in `src.view.characterization`."""
 
@@ -190,29 +255,71 @@ class TestCharacterization:
         (plot_loopback, "loopback"),
         (plot_handler_scaling, "scaling"),
         (plot_rate_sweep, "rate"),
+        (plot_workers_scaling, "workers"),
         (plot_calibration_summary, "summary"),
     ])
-    def test_single_envelope_plotter(self,
-                                     tmp_path: Path,
-                                     plotter: Any,
-                                     fname: str) -> None:
-        """Each per-envelope plotter returns a Figure and saves PNG+SVG when file_path is given."""
-        _env = _synth_envelope()
+    def test_single(self,
+                    tmp_path: Path,
+                    plotter: Any,
+                    fname: str) -> None:
+        """Each per-envelope plotter returns a Figure and saves PNG+SVG when `file_path` is given.
+
+        Args:
+            tmp_path (Path): pytest-provided scratch directory.
+            plotter (Any): the public plotter under test (parametrised).
+            fname (str): file stem the plotter saves under.
+        """
+        _env = _add_workers_block(_synth_envelope(dpl="multiprocess"))
         _fig = plotter(_env, file_path=str(tmp_path), fname=fname)
         assert isinstance(_fig, Figure)
         assert (tmp_path / f"{fname}.png").is_file()
         assert (tmp_path / f"{fname}.svg").is_file()
 
-    def test_overlay_plotter(self, tmp_path: Path) -> None:
-        """The overlay plotter renders two envelopes side-by-side and saves PNG+SVG."""
+    def test_summary_localhost(self, tmp_path: Path) -> None:
+        """A localhost envelope renders with handler_scaling in the bottom-left slot.
+
+        Args:
+            tmp_path (Path): pytest-provided scratch directory.
+        """
+        _env = _synth_envelope(dpl="localhost")
+        _fig = plot_calibration_summary(_env,
+                                        file_path=str(tmp_path),
+                                        fname="summary_lo")
+        assert isinstance(_fig, Figure)
+        assert (tmp_path / "summary_lo.png").is_file()
+
+    def test_overlay_mixed(self, tmp_path: Path) -> None:
+        """Localhost-vs-multiprocess overlay falls back to handler_scaling in the bottom-left slot.
+
+        Args:
+            tmp_path (Path): pytest-provided scratch directory.
+        """
         _envs = {
             "localhost": _synth_envelope(dpl="localhost"),
             "multiprocess": _synth_envelope(dpl="multiprocess"),
         }
-        _fig = plot_envelope_overlay(_envs, file_path=str(tmp_path), fname="overlay")
+        _fig = plot_envelope_overlay(_envs,
+                                     file_path=str(tmp_path),
+                                     fname="overlay")
         assert isinstance(_fig, Figure)
         assert (tmp_path / "overlay.png").is_file()
         assert (tmp_path / "overlay.svg").is_file()
+
+    def test_overlay_all_workers(self, tmp_path: Path) -> None:
+        """When all envelopes carry workers data, overlay renders workers_scaling in the bottom-left slot.
+
+        Args:
+            tmp_path (Path): pytest-provided scratch directory.
+        """
+        _envs = {
+            "multi-A": _add_workers_block(_synth_envelope(dpl="multiprocess")),
+            "multi-B": _add_workers_block(_synth_envelope(dpl="multiprocess")),
+        }
+        _fig = plot_envelope_overlay(_envs,
+                                     file_path=str(tmp_path),
+                                     fname="overlay_w")
+        assert isinstance(_fig, Figure)
+        assert (tmp_path / "overlay_w.png").is_file()
 
     def test_no_save_without_file_path(self) -> None:
         """When file_path is omitted the plotter still returns a Figure (no on-disk side effect)."""
@@ -227,6 +334,7 @@ class TestCharacterization:
                          plot_jitter,
                          plot_loopback,
                          plot_handler_scaling,
-                         plot_rate_sweep):
+                         plot_rate_sweep,
+                         plot_workers_scaling):
             _fig = _plotter(_empty)
             assert isinstance(_fig, Figure)
