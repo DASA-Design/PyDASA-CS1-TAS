@@ -60,6 +60,9 @@ from src.experimental.prototype.calibration.vernier import (
 )
 from src.experimental.prototype.client.users import User
 from src.experimental.prototype.target.config import load_target_cfg
+from src.experimental.prototype.target.factory.internal_stage import (
+    build_internal_stage_fastapi_app,
+)
 from src.experimental.prototype.target.factory.tas import build_tas_fastapi_app
 from src.experimental.prototype.target.factory.third_party import (
     build_atomic_fastapi_app,
@@ -190,13 +193,22 @@ class _BringUpFactory:
         self._dpl_cfg = dpl_cfg
 
     def __call__(self, n_workers: int) -> Any:
-        """Return a `bring_up` context manager configured for `n_workers` worker processes."""
+        """Return a `bring_up` context manager configured for `n_workers` worker processes.
+
+        Args:
+            n_workers (int): worker count for the multiprocess spawner.
+
+        Returns:
+            Any: live `bring_up` context manager (Iterator[list[str]]).
+        """
         _bring_kw = dict(self._dpl_cfg)
         _bring_kw["workers"] = n_workers
-        _ctx = bring_up(self._dpl,
+        # cast at the call site: `**_bring_kw` widens the typed args to Any in pyright's view, so
+        # we re-tag the Literal-typed knobs explicitly before they reach `bring_up`.
+        _ctx = bring_up(cast(Dpl, self._dpl),
                         app_factory=self._app_factory,
-                        framework=self._framework,
-                        wsgi_server=self._wsgi_server,
+                        framework=cast(Framework, self._framework),
+                        wsgi_server=cast(WsgiServer, self._wsgi_server),
                         **_bring_kw)
         return _ctx
 
@@ -262,6 +274,15 @@ def find_latest_envelope(dpl: Dpl,
     return _files[-1]
 
 
+_INTERNAL_STAGE_IDS: tuple[str, ...] = (
+    "TAS_{2}",
+    "TAS_{3}",
+    "TAS_{4}",
+    "TAS_{5}",
+    "TAS_{6}",
+)
+
+
 def _build_mesh_specs(*,
                       catalogue_version: str | None,
                       workflow_name: str,
@@ -272,14 +293,19 @@ def _build_mesh_specs(*,
                       csv_dir: Path,
                       run_id: str,
                       request_timeout_s: float,
-                      mu_lt: dict[str, float]) -> tuple[list[MeshSpec], list[str]]:
-    """Lay out the TAS mesh: composite at base_port, atomics on the next N ports.
+                      mu_lt: dict[str, float],
+                      target_granularity: str = "collapsed",
+                      inject_internal_stage_mu: bool = False,
+                      stage_routes: dict[str, dict[str, str]] | None = None,
+                      ) -> tuple[list[MeshSpec], list[str]]:
+    """Lay out the TAS mesh.
 
-    Atomic ids come from the catalogue (sorted for stability); each atomic's `mu` comes from the active profile's specs layer via `mu_lt`. The TAS factory gets a matching `svc_id -> URL` map so its dispatch client resolves every atomic.
+    Collapsed mode (default): TAS_1 composite + 7 third-party atomics on consecutive ports.
+    Expanded mode: TAS_1 + 5 internal-stage atomics (TAS_{2..6}) + 7 third-party atomics. Internal stages slot between TAS_1 and the third-parties; the orchestrator threads `internal_endpoint_lt` into the TAS_1 factory so its workflow engine can dispatch to them.
 
     Args:
         catalogue_version (str | None): version layer to load (None reads `_setpoint`).
-        workflow_name (str): workflow stem to load.
+        workflow_name (str): workflow stem to load. `tas` for collapsed, `tas_expanded` for expanded.
         host (str): bind address shared by every spawner.
         base_port (int): port for the composite TAS app.
         atomic_admission (dict[str, Any]): admission caps applied to every atomic (`{"k": ..., "c": ...}`).
@@ -288,30 +314,86 @@ def _build_mesh_specs(*,
         run_id (str): identifier written into every record.
         request_timeout_s (float): per-dispatch HTTP timeout.
         mu_lt (dict[str, float]): `svc_id -> mu` from the profile specs layer.
+        target_granularity (str, optional): `collapsed` (default) or `expanded`.
+        inject_internal_stage_mu (bool, optional): when True (and expanded mode), TAS_{2..6} sleep on their published mu. Defaults to False.
+        stage_routes (dict | None, optional): per-stage `calls_kind` + `operation` map (used in expanded mode). Required when `target_granularity="expanded"`.
 
     Returns:
-        tuple[list[MeshSpec], list[str]]: spec list (TAS first, atomics after) + sorted atomic ids.
+        tuple[list[MeshSpec], list[str]]: spec list + sorted third-party atomic ids.
 
     Raises:
         KeyError: when the profile does not declare a mu for some catalogue service.
+        ValueError: when `target_granularity="expanded"` and `stage_routes` is None.
     """
     _catalogue = load_catalogue(catalogue_version)
     _atomic_ids = sorted(_catalogue.entries.keys())
-    _endpoint_lt: dict[str, str] = {}
+    _is_expanded = target_granularity == "expanded"
+    if _is_expanded and stage_routes is None:
+        _msg = "stage_routes is required when target_granularity='expanded'"
+        raise ValueError(_msg)
+
+    # Port layout: TAS at base_port; in expanded mode TAS_{2..6} occupy
+    # base_port+1..base_port+5; third-party atomics start at the next port.
+    if _is_expanded:
+        _internal_first_port = base_port + 1
+        _atomic_first_port = base_port + 1 + len(_INTERNAL_STAGE_IDS)
+    else:
+        _internal_first_port = base_port + 1  # unused in collapsed
+        _atomic_first_port = base_port + 1
+
+    _atomic_endpoint_lt: dict[str, str] = {}
     for _idx, _svc_id in enumerate(_atomic_ids):
-        _endpoint_lt[_svc_id] = f"http://{host}:{base_port + 1 + _idx}"
+        _atomic_endpoint_lt[_svc_id] = f"http://{host}:{_atomic_first_port + _idx}"
+
+    _internal_endpoint_lt: dict[str, str] | None = None
+    if _is_expanded:
+        _internal_endpoint_lt = {}
+        for _idx, _stage_id in enumerate(_INTERNAL_STAGE_IDS):
+            _internal_endpoint_lt[_stage_id] = f"http://{host}:{_internal_first_port + _idx}"
+
     _tas_factory = functools.partial(
         build_tas_fastapi_app,
-        endpoint_lt=_endpoint_lt,
+        endpoint_lt=_atomic_endpoint_lt,
         catalogue_version=catalogue_version,
         workflow_name=workflow_name,
         flows_path=str(flows_path),
         run_id=run_id,
         timeout_s=request_timeout_s,
+        internal_endpoint_lt=_internal_endpoint_lt,
     )
     _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS", app_factory=_tas_factory)]
+
     _k = atomic_admission.get("k")
     _c = atomic_admission.get("c")
+
+    if _is_expanded:
+        # Internal stages (TAS_{2..6}) come right after TAS_1 on consecutive ports.
+        for _stage_id in _INTERNAL_STAGE_IDS:
+            if _stage_id not in mu_lt:
+                _msg = (f"profile specs layer is missing mu for internal stage {_stage_id!r}; "
+                        "expanded mode requires TAS_{2..6} mu in the profile")
+                raise KeyError(_msg)
+            _route = (stage_routes or {}).get(_stage_id)
+            if _route is None:
+                _msg = f"stage_routes missing entry for {_stage_id!r}"
+                raise ValueError(_msg)
+            _stage_mu = mu_lt[_stage_id] if inject_internal_stage_mu else 0.0
+            _stage_factory = functools.partial(
+                build_internal_stage_fastapi_app,
+                svc_name=_stage_id,
+                calls_kind=_route["calls_kind"],
+                operation=_route["operation"],
+                mu=_stage_mu,
+                atomic_endpoint_lt=_atomic_endpoint_lt,
+                catalogue_version=catalogue_version,
+                k=_k,
+                c=_c,
+                csv_dir=str(csv_dir),
+                run_id=run_id,
+                request_timeout_s=request_timeout_s,
+            )
+            _specs.append(MeshSpec(svc_id=_stage_id, app_factory=_stage_factory))
+
     for _svc_id in _atomic_ids:
         _entry = _catalogue.lookup(_svc_id)
         if _svc_id not in mu_lt:
@@ -403,7 +485,9 @@ def run_experiment(*,
                    run_id: str | None = None,
                    target_cfg: dict[str, Any] | None = None,
                    envelope: dict[str, Any] | None = None,
-                   skip_bounds_check: bool = False) -> dict[str, Any]:
+                   skip_bounds_check: bool = False,
+                   target_granularity: str | None = None,
+                   inject_internal_stage_mu: bool | None = None) -> dict[str, Any]:
     """Mount the TAS topology, drive one trial, write the per-request + per-service logs.
 
     Reads `target.json` for bindings, validates the planned operating point against the latest calibration envelope (unless skipped), brings the mesh up, drives `trial.n_requests` requests through one synthetic user, and appends a row to `runs.parquet`.
@@ -418,9 +502,11 @@ def run_experiment(*,
         target_cfg (dict[str, Any] | None, optional): pre-loaded target config. Defaults to reading the on-disk JSON.
         envelope (dict[str, Any] | None, optional): explicit calibration envelope. Defaults to auto-discover the latest for `dpl`.
         skip_bounds_check (bool, optional): skip the envelope check. Defaults to False.
+        target_granularity (str | None, optional): `collapsed` or `expanded`. Overrides `target.json::target_granularity` when set; falls through to the JSON value when None.
+        inject_internal_stage_mu (bool | None, optional): when True (and expanded), TAS_{2..6} sleep on mu. Overrides `target.json::inject_internal_stage_mu` when set; falls through to the JSON value when None.
 
     Returns:
-        dict[str, Any]: run summary (`run_id`, `adp`, `dpl`, `n_requests`, `outcome_counts`, `paths`, `bounds`).
+        dict[str, Any]: run summary (`run_id`, `adp`, `dpl`, `n_requests`, `outcome_counts`, `paths`, `bounds`, `target_granularity`).
     """
     if target_cfg is None:
         _cfg = load_target_cfg()
@@ -442,9 +528,29 @@ def run_experiment(*,
 
     _mu_lt = _mu_lt_from_profile(adp)
 
+    # Resolve mode: CLI override (function arg) wins over JSON; default to collapsed.
+    if target_granularity is not None:
+        _granularity = target_granularity
+    else:
+        _granularity = str(_cfg.get("target_granularity", "collapsed"))
+    if inject_internal_stage_mu is not None:
+        _inject_mu = inject_internal_stage_mu
+    else:
+        _inject_mu = bool(_cfg.get("inject_internal_stage_mu", False))
+
+    # Pick the workflow file matching the chosen mode.
+    _workflows_map = _cfg.get("workflows")
+    if isinstance(_workflows_map, dict) and _granularity in _workflows_map:
+        _workflow_name = str(_workflows_map[_granularity])
+    else:
+        # Backwards compat: legacy `workflow_name` field.
+        _workflow_name = str(_cfg.get("workflow_name", "tas"))
+
+    _stage_routes = _cfg.get("stage_routes") if _granularity == "expanded" else None
+
     _specs, _atomic_ids = _build_mesh_specs(
         catalogue_version=_cfg.get("catalogue_version"),
-        workflow_name=_cfg["workflow_name"],
+        workflow_name=_workflow_name,
         host=_cfg["host"],
         base_port=int(_cfg["tas_base_port"]),
         atomic_admission=_cfg["atomic_admission"],
@@ -453,6 +559,9 @@ def run_experiment(*,
         run_id=_run_id,
         request_timeout_s=float(_cfg["request_timeout_s"]),
         mu_lt=_mu_lt,
+        target_granularity=_granularity,
+        inject_internal_stage_mu=_inject_mu,
+        stage_routes=_stage_routes,
     )
 
     _trial = _cfg["trial"]
@@ -482,6 +591,8 @@ def run_experiment(*,
         "adp": adp,
         "dpl": dpl,
         "framework": framework,
+        "target_granularity": _granularity,
+        "inject_internal_stage_mu": _inject_mu,
         "n_requests": len(_summaries),
         "n_success": _outcome_counts.get("success", 0),
         "n_timeout": _outcome_counts.get("timeout", 0),
@@ -500,6 +611,8 @@ def run_experiment(*,
         "adp": adp,
         "dpl": dpl,
         "framework": framework,
+        "target_granularity": _granularity,
+        "inject_internal_stage_mu": _inject_mu,
         "n_requests": len(_summaries),
         "outcome_counts": _outcome_counts,
         "atomic_ids": _atomic_ids,
@@ -566,7 +679,9 @@ def run(*,
         write: bool = True,
         run_id: str | None = None,
         cfg: dict[str, Any] | None = None,
-        skip_bounds_check: bool = False) -> dict[str, Any]:
+        skip_bounds_check: bool = False,
+        target_granularity: str | None = None,
+        inject_internal_stage_mu: bool | None = None) -> dict[str, Any]:
     """Run calibration, an experiment trial, or both.
 
     Args:
@@ -579,6 +694,8 @@ def run(*,
         run_id (str | None, optional): explicit run id.
         cfg (dict[str, Any] | None, optional): pre-loaded calibration config (calibration stages only).
         skip_bounds_check (bool, optional): skip the envelope check (experiment stages only). Defaults to False.
+        target_granularity (str | None, optional): `collapsed` / `expanded` override (experiment stages only). None falls through to `target.json`.
+        inject_internal_stage_mu (bool | None, optional): TAS_{2..6} mu-sleep override (experiment stages only). None falls through to `target.json`.
 
     Returns:
         dict[str, Any]: envelope, experiment summary, or `{"calibration": ..., "experiment": ...}`.
@@ -600,7 +717,9 @@ def run(*,
                               wsgi_server=wsgi_server,
                               write=write,
                               run_id=run_id,
-                              skip_bounds_check=skip_bounds_check)
+                              skip_bounds_check=skip_bounds_check,
+                              target_granularity=target_granularity,
+                              inject_internal_stage_mu=inject_internal_stage_mu)
     if stage == "both":
         _calib = run_calibration(dpl=dpl,
                                  framework=framework,
@@ -614,7 +733,9 @@ def run(*,
                               wsgi_server=wsgi_server,
                               write=write,
                               envelope=_calib,
-                              skip_bounds_check=skip_bounds_check)
+                              skip_bounds_check=skip_bounds_check,
+                              target_granularity=target_granularity,
+                              inject_internal_stage_mu=inject_internal_stage_mu)
         return {"calibration": _calib, "experiment": _exp}
     _msg = f"unknown stage {stage!r}; expected 'calibration', 'experiment', or 'both'"
     raise ValueError(_msg)
@@ -647,6 +768,16 @@ def main() -> None:
     _parser.add_argument("--skip-bounds-check",
                          action="store_true",
                          dest="skip_bounds_check")
+    _parser.add_argument("--target-granularity",
+                         choices=["collapsed", "expanded"],
+                         dest="target_granularity",
+                         default=None,
+                         help="override target.json::target_granularity for the experiment stage.")
+    _parser.add_argument("--inject-internal-stage-mu",
+                         action=argparse.BooleanOptionalAction,
+                         dest="inject_internal_stage_mu",
+                         default=None,
+                         help="override target.json::inject_internal_stage_mu for the experiment stage.")
     _args = _parser.parse_args()
     # argparse `choices=...` constrains the value at runtime to the literal set,
     # but the static type stays `str`; cast back to the Literal aliases the run()
@@ -657,7 +788,9 @@ def main() -> None:
                   framework=cast(Framework, _args.framework),
                   wsgi_server=cast(WsgiServer, _args.wsgi_server),
                   write=bool(_args.write),
-                  skip_bounds_check=bool(_args.skip_bounds_check))
+                  skip_bounds_check=bool(_args.skip_bounds_check),
+                  target_granularity=_args.target_granularity,
+                  inject_internal_stage_mu=_args.inject_internal_stage_mu)
     if _args.stage == "calibration":
         _print_calibration_report(_result)
     elif _args.stage == "experiment":

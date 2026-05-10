@@ -23,6 +23,7 @@ from src.experimental.prototype.runtime.server import (
 Dpl = Literal["localhost", "multiprocess", "remote"]
 Framework = Literal["fastapi", "flask"]
 WsgiServer = Literal["waitress", "gunicorn"]
+Granularity = Literal["collapsed", "expanded"]
 AppFactory = Callable[[], Any]
 AdapterFactory = Callable[[], ServerAdapter]
 
@@ -138,7 +139,7 @@ def bring_up_mesh(specs: list[MeshSpec],
                   adapter_factory: AdapterFactory | None = None) -> Iterator[dict[str, str]]:
     """Mount one spawner per spec on consecutive ports; yield a `svc_id -> URL` map.
 
-    Specs mount in order on `base_port + i`. The helper waits for every spawner to pass its readiness probe before yielding; exits shut down spawners in reverse order. Each spawner runs one process (`mount` is one-process-per-adapter); duplicate specs on consecutive ports if you need multiple workers per service.
+    Specs mount on `base_port + i`. The helper waits for every spawner to pass its readiness probe before yielding; on exit, spawners shut down in reverse order. One process per spec; duplicate specs to run multiple workers per service.
 
     Args:
         specs (list[MeshSpec]): mesh entries in mounting order.
@@ -183,6 +184,7 @@ __all__ = [
     "AppFactory",
     "Dpl",
     "Framework",
+    "Granularity",
     "MeshSpec",
     "WsgiServer",
     "bring_up",
