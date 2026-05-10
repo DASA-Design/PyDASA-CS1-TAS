@@ -7,10 +7,41 @@ from __future__ import annotations
 
 from typing import Any
 
+DEFAULT_WORKFLOWS: dict[str, str] = {
+    "collapsed": "tas",
+    "expanded": "tas_expanded",
+}
+
+DEFAULT_STAGE_ROUTES: dict[str, dict[str, str]] = {
+    "TAS_{2}": {
+        "calls_kind": "medical_analysis",
+        "operation": "analyseData",
+    },
+    "TAS_{3}": {
+        "calls_kind": "alarm",
+        "operation": "triggerAlarm",
+    },
+    "TAS_{4}": {
+        "calls_kind": "alarm",
+        "operation": "sendAlarm",
+    },
+    "TAS_{5}": {
+        "calls_kind": "drug",
+        "operation": "changeDrug",
+    },
+    "TAS_{6}": {
+        "calls_kind": "drug",
+        "operation": "changeDose",
+    },
+}
+
 
 def make_target_cfg(*,
                     catalogue_version: str = "weyns_2015",
-                    workflow_name: str = "tas",
+                    workflows: dict[str, str] | None = None,
+                    target_granularity: str = "collapsed",
+                    inject_internal_stage_mu: bool = False,
+                    stage_routes: dict[str, dict[str, str]] | None = None,
                     tas_base_port: int = 18001,
                     host: str = "127.0.0.1",
                     ready_timeout_s: float = 5.0,
@@ -21,12 +52,15 @@ def make_target_cfg(*,
 
     Args:
         catalogue_version (str, optional): catalogue version layer. Defaults to `weyns_2015`.
-        workflow_name (str, optional): workflow stem. Defaults to `tas`.
-        tas_base_port (int, optional): first TCP port. Defaults to 18001 (test-band so it does not clash with the experiment-time 8001 default).
+        workflows (dict[str, str] | None, optional): mode -> workflow stem map. Defaults to `{"collapsed": "tas", "expanded": "tas_expanded"}`.
+        target_granularity (str, optional): `collapsed` or `expanded`. Defaults to `collapsed`.
+        inject_internal_stage_mu (bool, optional): whether `TAS_{2..6}` sleep on mu. Defaults to False.
+        stage_routes (dict | None, optional): per-stage `calls_kind` + `operation` map. Defaults to the standard TAS_{2..6} mapping.
+        tas_base_port (int, optional): first TCP port. Defaults to 18001 (test-band).
         host (str, optional): bind address. Defaults to 127.0.0.1.
-        ready_timeout_s (float, optional): per-spawner readiness timeout. Defaults to 5 s (tighter than the experiment-time 20 s).
+        ready_timeout_s (float, optional): per-spawner readiness timeout. Defaults to 5 s.
         request_timeout_s (float, optional): per-dispatch HTTP timeout. Defaults to 1 s.
-        atomic_admission (dict[str, Any] | None, optional): admission caps. Defaults to `{"k": None, "c": None}` (unbounded).
+        atomic_admission (dict[str, Any] | None, optional): admission caps. Defaults to unbounded.
         trial (dict[str, Any] | None, optional): trial-block overrides. Defaults to a minimal 3-request schedule.
 
     Returns:
@@ -44,9 +78,20 @@ def make_target_cfg(*,
         }
     else:
         _trial = trial
+    if workflows is None:
+        _workflows = dict(DEFAULT_WORKFLOWS)
+    else:
+        _workflows = workflows
+    if stage_routes is None:
+        _stage_routes: dict[str, Any] = {_k: dict(_v) for _k, _v in DEFAULT_STAGE_ROUTES.items()}
+    else:
+        _stage_routes = stage_routes
     _ans = {
         "catalogue_version": catalogue_version,
-        "workflow_name": workflow_name,
+        "workflows": _workflows,
+        "target_granularity": target_granularity,
+        "inject_internal_stage_mu": inject_internal_stage_mu,
+        "stage_routes": _stage_routes,
         "tas_base_port": tas_base_port,
         "host": host,
         "ready_timeout_s": ready_timeout_s,
@@ -58,5 +103,7 @@ def make_target_cfg(*,
 
 
 __all__ = [
+    "DEFAULT_STAGE_ROUTES",
+    "DEFAULT_WORKFLOWS",
     "make_target_cfg",
 ]
