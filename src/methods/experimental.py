@@ -172,7 +172,7 @@ class _BringUpFactory:
         """Return the `bring_up` context manager configured for `n_workers` worker processes."""
         _bring_kw = dict(self._dpl_cfg)
         _bring_kw["workers"] = n_workers
-        _ctx = bring_up(dpl=self._dpl,
+        _ctx = bring_up(self._dpl,
                         app_factory=self._app_factory,
                         framework=self._framework,
                         wsgi_server=self._wsgi_server,

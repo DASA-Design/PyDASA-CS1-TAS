@@ -202,7 +202,7 @@ def _drive_at_rate(target_urls: list[str],
     return _ans
 
 
-def _drive_at_rate_raw(target_urls: list[str],
+def drive_at_rate_raw(target_urls: list[str],
                        rate: int,
                        duration_s: float) -> dict[str, Any]:
     """Driver variant returning raw latencies (`latencies_us` list) instead of pre-aggregated stats.
@@ -219,17 +219,17 @@ def _drive_at_rate_raw(target_urls: list[str],
     """
     async def _coro() -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=_DFLT_REQ_TIMEOUT_S) as _client:
-            return await _drive_at_rate_raw_async(_client, target_urls, rate, duration_s)
+            return await drive_at_rate_raw_async(_client, target_urls, rate, duration_s)
     with windows_timer_resolution(1):
         _ans = run_async_safe(_coro)
     return _ans
 
 
-async def _drive_at_rate_raw_async(client: httpx.AsyncClient,
+async def drive_at_rate_raw_async(client: httpx.AsyncClient,
                                    target_urls: list[str],
                                    rate: int,
                                    duration_s: float) -> dict[str, Any]:
-    """Async core of `_drive_at_rate_raw`: drive the rate, return raw per-request latencies + counts."""
+    """Async core of `drive_at_rate_raw`: drive the rate, return raw per-request latencies + counts."""
     _interval_s = 1.0 / rate if rate > 0 else 0.0
     _deadline = time.perf_counter() + duration_s
     _tasks: list[asyncio.Task[tuple[float, bool]]] = []

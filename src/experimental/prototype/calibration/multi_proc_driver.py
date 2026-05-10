@@ -12,7 +12,7 @@ from src.experimental.prototype.calibration.hoststats import _stats_us
 from src.experimental.prototype.calibration.rate import (
     RateDriver,
     _drive_at_rate,
-    _drive_at_rate_raw,
+    drive_at_rate_raw,
 )
 
 
@@ -37,7 +37,7 @@ def make_multi_proc_driver(n_clients: int) -> RateDriver:
 class _MultiProcDriver:
     """Callable `RateDriver` that splits the requested rate across N child processes.
 
-    Each child runs `_drive_at_rate_raw`, returning its raw latency list. The parent merges the lists and recomputes a single aggregate stats block. Each child opens its own `httpx.AsyncClient`, so the IO bottleneck moves from "one event loop" to "N event loops".
+    Each child runs `drive_at_rate_raw`, returning its raw latency list. The parent merges the lists and recomputes a single aggregate stats block. Each child opens its own `httpx.AsyncClient`, so the IO bottleneck moves from "one event loop" to "N event loops".
     """
 
     def __init__(self, *, n_clients: int) -> None:
@@ -62,7 +62,7 @@ class _MultiProcDriver:
         with ProcessPoolExecutor(max_workers=self._n_clients) as _exe:
             _i = 0
             while _i < self._n_clients:
-                _futures.append(_exe.submit(_drive_at_rate_raw,
+                _futures.append(_exe.submit(drive_at_rate_raw,
                                             target_urls,
                                             _per_client,
                                             duration_s))
@@ -78,7 +78,7 @@ def _merge_results(*,
 
     Args:
         target_rate (int): the aggregate rate the caller asked for; recorded in the output `rate` field.
-        sub_results (list[dict[str, Any]]): one entry per child process (output of `_drive_at_rate_raw`).
+        sub_results (list[dict[str, Any]]): one entry per child process (output of `drive_at_rate_raw`).
 
     Returns:
         dict[str, Any]: aggregate stats. Keys: `rate`, `total`, `errors`, `loss_pct`, `min_us`, `max_us`, `mean_us`, `std_us`, `median_us`, `p95_us`, `p99_us`.
