@@ -1,0 +1,36 @@
+{
+    "_note": "Expanded-mode workflow for TAS_1. Used when target.json::target_granularity='expanded'. TAS_1 dispatches by svc_id to the internal stage atomics (TAS_{2..6}); each internal stage then calls one third-party atomic of the kind/operation declared in target.json::stage_routes. Architecturally separate from tas.json, which is the collapsed-mode workflow and dispatches directly to third-party atomics by kind.",
+    "entry": "pickTask",
+    "kind_aliases": {
+        "alarm": "buttonMsg",
+        "medical_analysis": "vitalParamsMsg"
+    },
+    "branches": {
+        "vitalParamsMsg": {
+            "first": {
+                "svc_id": "TAS_{2}",
+                "operation": "analyseData"
+            },
+            "on_result": {
+                "changeDrug": {
+                    "svc_id": "TAS_{5}",
+                    "operation": "changeDrug"
+                },
+                "changeDose": {
+                    "svc_id": "TAS_{6}",
+                    "operation": "changeDose"
+                },
+                "sendAlarm": {
+                    "svc_id": "TAS_{4}",
+                    "operation": "sendAlarm"
+                }
+            }
+        },
+        "buttonMsg": {
+            "first": {
+                "svc_id": "TAS_{3}",
+                "operation": "triggerAlarm"
+            }
+        }
+    }
+}

@@ -1,7 +1,36 @@
 {
-    "_note": "Target-system bindings for `src/experimental/prototype/target/factory/`. Selects catalogue + workflow, sets ports / admission caps / timeouts; `trial` carries the load-generation knobs.",
+    "_note": "Target-system bindings for src/experimental/prototype/target/factory/. Selects catalogue + workflow, sets ports / admission caps / timeouts; `trial` carries the load-generation knobs. `target_granularity` picks between the collapsed topology (1 composite + 7 third-party atomics) and the expanded topology (1 composite + 5 internal-stage atomics + 7 third-party atomics). `inject_internal_stage_mu` only affects the TAS framework atomics (TAS_{2..6}); third-party atomics always sleep on mu.",
     "catalogue_version": "weyns_2015",
-    "workflow_name": "tas",
+    "workflows": {
+        "_note": "Two on-disk workflow files, one per architectural view. The orchestrator picks `collapsed` or `expanded` based on `target_granularity` and threads the chosen stem into the TAS_1 factory.",
+        "collapsed": "tas",
+        "expanded": "tas_expanded"
+    },
+    "target_granularity": "collapsed",
+    "inject_internal_stage_mu": false,
+    "stage_routes": {
+        "_note": "Used only when target_granularity='expanded'. Per-stage metadata for the TAS_{2..6} atomic factories: which third-party kind each stage calls and with what operation name. The dispatch graph TAS_1 walks lives in workflow/tas_expanded.json, not here.",
+        "TAS_{2}": {
+            "calls_kind": "medical_analysis",
+            "operation": "analyseData"
+        },
+        "TAS_{3}": {
+            "calls_kind": "alarm",
+            "operation": "triggerAlarm"
+        },
+        "TAS_{4}": {
+            "calls_kind": "alarm",
+            "operation": "sendAlarm"
+        },
+        "TAS_{5}": {
+            "calls_kind": "drug",
+            "operation": "changeDrug"
+        },
+        "TAS_{6}": {
+            "calls_kind": "drug",
+            "operation": "changeDose"
+        }
+    },
     "tas_base_port": 8001,
     "host": "127.0.0.1",
     "ready_timeout_s": 20.0,
