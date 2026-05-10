@@ -1,0 +1,219 @@
+{
+    "_note": "Layered third-party service catalogue. Each entry has `kind` (the workflow group the apparatus dispatches against) and a `reported` block (archival numbers from the source paper, kept for documentation + future verdict-comparison;). Apparatus-controlled values (mu service rate, epsilon failure rate, c, K) live in `data/config/profile/{dflt,opti}.json::specs` per node, not here.",
+    "_setpoint": "weyns_2015",
+    "_versions": [
+        "weyns_2015",
+        "weyns_iftikhar_2016",
+        "camara_2023"
+    ],
+    "weyns_2015": {
+        "_source": "Weyns & Calinescu 2015 [1] Table III",
+        "services": {
+            "AS_{1}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.11
+                }
+            },
+            "AS_{2}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.04
+                }
+            },
+            "AS_{3}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.18
+                }
+            },
+            "MAS_{1}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.12
+                }
+            },
+            "MAS_{2}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.07
+                }
+            },
+            "MAS_{3}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.18
+                }
+            },
+            "DS_{3}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.06
+                }
+            }
+        }
+    },
+    "weyns_iftikhar_2016": {
+        "_source": "Weyns & Iftikhar 2016 [13] Table I",
+        "services": {
+            "AS_{1}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.11
+                }
+            },
+            "AS_{2}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.04
+                }
+            },
+            "AS_{3}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.18
+                }
+            },
+            "AS_{4}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.08
+                }
+            },
+            "AS_{5}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.14
+                }
+            },
+            "MAS_{1}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.12
+                }
+            },
+            "MAS_{2}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.07
+                }
+            },
+            "MAS_{3}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.18
+                }
+            },
+            "MAS_{4}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.06
+                }
+            },
+            "MAS_{5}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.15
+                }
+            },
+            "DS_{1}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.01
+                }
+            },
+            "DS_{2}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.03
+                }
+            },
+            "DS_{3}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.05
+                }
+            },
+            "DS_{4}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.07
+                }
+            },
+            "DS_{5}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.02
+                }
+            }
+        }
+    },
+    "camara_2023": {
+        "_source": "Cámara, Wohlrab, Garlan & Schmerl 2023 [10] Table 1a (failure_rate = source % / 100; response_time_s = source ms / 1000)",
+        "services": {
+            "MAS_{1}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.0006,
+                    "response_time_s": 0.022
+                }
+            },
+            "MAS_{2}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.001,
+                    "response_time_s": 0.027
+                }
+            },
+            "MAS_{3}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.0015,
+                    "response_time_s": 0.031
+                }
+            },
+            "MAS_{4}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.0025,
+                    "response_time_s": 0.029
+                }
+            },
+            "MAS_{5}": {
+                "kind": "medical_analysis",
+                "reported": {
+                    "failure_rate": 0.0005,
+                    "response_time_s": 0.020
+                }
+            },
+            "AS_{1}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.003,
+                    "response_time_s": 0.011
+                }
+            },
+            "AS_{2}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.004,
+                    "response_time_s": 0.009
+                }
+            },
+            "AS_{3}": {
+                "kind": "alarm",
+                "reported": {
+                    "failure_rate": 0.0008,
+                    "response_time_s": 0.003
+                }
+            },
+            "DS_{1}": {
+                "kind": "drug",
+                "reported": {
+                    "failure_rate": 0.0012,
+                    "response_time_s": 0.001
+                }
+            }
+        }
+    }
+}

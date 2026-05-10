@@ -1,0 +1,184 @@
+{
+    "_note": "Sidecar to external_services.json. Layered per-service failure-mechanism mix the apparatus samples when the client RNG flags a request for failure injection. Apparatus-level (no published source). Probabilities sum to 1.0 per entry over {timeout, drop, 5xx}. Layout mirrors external_services.json: `_setpoint` names the default version; the loader picks `services` from the requested layer and falls back to top-level `_default` for any service the layer does not list. Starting defaults are kind-opinionated: alarms drop dominantly (network-bound), medical_analysis times out (compute-heavy), drug returns 5xx (DB-bound). Tune per service as the apparatus matures.",
+    "_setpoint": "weyns_2015",
+    "_versions": [
+        "weyns_2015",
+        "weyns_iftikhar_2016",
+        "camara_2023"
+    ],
+    "_default": {
+        "timeout": 0.5,
+        "drop": 0.2,
+        "5xx": 0.3
+    },
+    "weyns_2015": {
+        "_source": "Apparatus-level mix for the Weyns & Calinescu 2015 [1] catalogue (7 services).",
+        "services": {
+            "AS_{1}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{2}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{3}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "MAS_{1}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{2}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{3}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "DS_{3}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            }
+        }
+    },
+    "weyns_iftikhar_2016": {
+        "_source": "Apparatus-level mix for the Weyns & Iftikhar 2016 [13] catalogue (15 services).",
+        "services": {
+            "AS_{1}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{2}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{3}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{4}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{5}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "MAS_{1}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{2}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{3}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{4}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{5}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "DS_{1}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            },
+            "DS_{2}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            },
+            "DS_{3}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            },
+            "DS_{4}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            },
+            "DS_{5}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            }
+        }
+    },
+    "camara_2023": {
+        "_source": "Apparatus-level mix for the Cámara 2023 [10] catalogue (9 services).",
+        "services": {
+            "MAS_{1}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{2}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{3}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{4}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "MAS_{5}": {
+                "timeout": 0.6,
+                "drop": 0.1,
+                "5xx": 0.3
+            },
+            "AS_{1}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{2}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "AS_{3}": {
+                "timeout": 0.2,
+                "drop": 0.5,
+                "5xx": 0.3
+            },
+            "DS_{1}": {
+                "timeout": 0.3,
+                "drop": 0.1,
+                "5xx": 0.6
+            }
+        }
+    }
+}

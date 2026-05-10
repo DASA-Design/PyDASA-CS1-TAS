@@ -1,26 +1,41 @@
 # -*- coding: utf-8 -*-
-"""Experimental method orchestrator for the CS-01 TAS case study.
+"""Experimental method orchestrator.
 
-Two entry points the notebook and the CLI both call:
+Two things to run, one CLI:
 
-- `run_calibration(...)`: drive the full calibration loop and return the envelope.
-- `run(stage, ...)`: dispatcher; only `stage="calibration"` is wired today.
+- `run_calibration` measures the host floor and writes a calibration envelope.
+- `run_experiment` mounts the TAS service mesh, drives a trial, writes the per-request flow + per-service CSV + summary row.
 
-CLI::
+`run(stage=...)` picks one or both. CLI::
 
     python -m src.methods.experimental --stage calibration --dpl localhost
-    python -m src.methods.experimental --stage calibration --dpl multiprocess --framework flask
+    python -m src.methods.experimental --stage experiment --adaptation baseline --dpl multiprocess
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import functools
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
-from src.experimental.common.io.runs import make_run_id
-from src.experimental.procedure.deployment import Dpl, Framework, WsgiServer, bring_up
+from src.experimental.common.io.parquet import append_run_summary
+from src.experimental.common.io.runs import make_run_id, make_run_paths
+from src.experimental.procedure.bounds import (
+    BoundsReport,
+    validate_experimental_limits,
+)
+from src.io.config import load_profile
+from src.experimental.procedure.deployment import (
+    Dpl,
+    Framework,
+    MeshSpec,
+    WsgiServer,
+    bring_up,
+    bring_up_mesh,
+)
 from src.experimental.prototype.calibration import (
     envelope_path,
     load_calibration_cfg,
@@ -35,10 +50,21 @@ from src.experimental.prototype.calibration import (
     stamp_gate,
     write_envelope,
 )
+from src.experimental.prototype.calibration.envelope import (
+    DFLT_RESULTS_BASE as _CALIBRATION_RESULTS_BASE,
+    read_envelope,
+)
 from src.experimental.prototype.calibration.vernier import (
     build_vernier_fastapi_app,
     build_vernier_flask_app,
 )
+from src.experimental.prototype.client.users import User
+from src.experimental.prototype.target.config import load_target_cfg
+from src.experimental.prototype.target.factory.tas import build_tas_fastapi_app
+from src.experimental.prototype.target.factory.third_party import (
+    build_atomic_fastapi_app,
+)
+from src.experimental.prototype.target.service.catalogue import load_catalogue
 
 
 def run_calibration(*,
@@ -48,25 +74,20 @@ def run_calibration(*,
                     write: bool = True,
                     run_id: str | None = None,
                     cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run the calibration procedure end-to-end and return the populated envelope.
+    """Measure the host floor and return a calibration envelope.
 
-    Steps:
-
-        1. Build the envelope skeleton.
-        2. Run the four host-floor probes (timer / jitter / loopback / handler scaling); apparatus-independent.
-        3. Bring up the vernier under `dpl`; drive the rate sweep against its URLs (round-robin under `multiprocess`).
-        4. Stamp the gate verdict; write the envelope to `data/results/calibration/<dpl>/` when `write=True`.
+    Runs the four host-floor probes, brings up the vernier, drives the rate sweep, stamps the gate verdict, and (optionally) writes the envelope to `data/results/calibration/<dpl>/`.
 
     Args:
         dpl (Dpl, optional): deployment mode. Defaults to `"localhost"`.
         framework (Framework, optional): server stack. Defaults to `"fastapi"`.
         wsgi_server (WsgiServer, optional): WSGI engine when `framework="flask"`. Defaults to `"waitress"`.
-        write (bool, optional): write the envelope to disk. Defaults to True.
-        run_id (str | None, optional): explicit run id. Defaults to None, which mints a fresh `make_run_id(prefix="calib")`.
-        cfg (dict[str, Any] | None, optional): pre-loaded calibration config. Defaults to None (loads `data/config/method/prototype/calibration.json`).
+        write (bool, optional): persist the envelope to disk. Defaults to True.
+        run_id (str | None, optional): explicit run id. Defaults to a fresh `calib_<ts>_<nonce>` id.
+        cfg (dict[str, Any] | None, optional): pre-loaded calibration config. Defaults to reading the on-disk JSON.
 
     Returns:
-        dict[str, Any]: the populated envelope (also on disk if `write=True`).
+        dict[str, Any]: the populated envelope.
     """
     if cfg is None:
         _cfg = load_calibration_cfg()
@@ -150,9 +171,9 @@ def run_calibration(*,
 
 
 class _BringUpFactory:
-    """Bind `bring_up` keyword args once; expose a `make_targets`-shaped `(n_workers) -> ctxmgr` callable.
+    """Adapter that lets the workers ramp ask for `n` target URLs without knowing how the mesh is brought up.
 
-    Holds the deployment-side parameters (`dpl`, `framework`, `wsgi_server`, `app_factory`, `dpl_cfg`) so the workers ramp can ask for n target URLs without seeing those details. Replaces the closure inside `_run_workers_scaling` with a module-scope class that's picklable + grep-able.
+    Pre-bind the deployment knobs once; calling the instance with `n_workers` returns the matching `bring_up` context manager. Module-scope (not a closure) so it pickles across `multiprocessing.spawn`.
     """
 
     def __init__(self,
@@ -169,7 +190,7 @@ class _BringUpFactory:
         self._dpl_cfg = dpl_cfg
 
     def __call__(self, n_workers: int) -> Any:
-        """Return the `bring_up` context manager configured for `n_workers` worker processes."""
+        """Return a `bring_up` context manager configured for `n_workers` worker processes."""
         _bring_kw = dict(self._dpl_cfg)
         _bring_kw["workers"] = n_workers
         _ctx = bring_up(self._dpl,
@@ -188,9 +209,9 @@ def _run_workers_scaling(*,
                          framework: Framework,
                          wsgi_server: WsgiServer,
                          dpl_cfg: dict[str, Any]) -> dict[str, Any]:
-    """Run `probe_workers_scaling` with a `bring_up`-backed `make_targets`.
+    """Run the workers ramp against a freshly mounted vernier mesh.
 
-    Auto-derives `rate_per_worker` from `probe_rate`'s saturation when available; otherwise falls back to the absolute `rate_per_worker` in `ws_cfg`.
+    Picks `rate_per_worker` from the prior rate sweep's saturation (when present), falling back to whatever the config says.
 
     Args:
         ws_cfg (dict[str, Any]): pre-loaded `workers_scaling` config block.
@@ -221,57 +242,395 @@ def _run_workers_scaling(*,
     return _ans
 
 
+def find_latest_envelope(dpl: Dpl,
+                         base: Path = _CALIBRATION_RESULTS_BASE) -> Path | None:
+    """Return the most recent calibration envelope for `dpl`, or None if none recorded yet.
+
+    Args:
+        dpl (Dpl): deployment mode.
+        base (Path, optional): calibration results base. Defaults to the standard tree.
+
+    Returns:
+        Path | None: latest envelope path, or None when nothing has been written for this mode.
+    """
+    _dir = base / dpl
+    if not _dir.exists():
+        return None
+    _files = sorted(_dir.glob("*.json"), key=lambda _p: _p.stat().st_mtime)
+    if not _files:
+        return None
+    return _files[-1]
+
+
+def _build_mesh_specs(*,
+                      catalogue_version: str | None,
+                      workflow_name: str,
+                      host: str,
+                      base_port: int,
+                      atomic_admission: dict[str, Any],
+                      flows_path: Path,
+                      csv_dir: Path,
+                      run_id: str,
+                      request_timeout_s: float,
+                      mu_lt: dict[str, float]) -> tuple[list[MeshSpec], list[str]]:
+    """Lay out the TAS mesh: composite at base_port, atomics on the next N ports.
+
+    Atomic ids come from the catalogue (sorted for stability); each atomic's `mu` comes from the active profile's specs layer via `mu_lt`. The TAS factory gets a matching `svc_id -> URL` map so its dispatch client resolves every atomic.
+
+    Args:
+        catalogue_version (str | None): version layer to load (None reads `_setpoint`).
+        workflow_name (str): workflow stem to load.
+        host (str): bind address shared by every spawner.
+        base_port (int): port for the composite TAS app.
+        atomic_admission (dict[str, Any]): admission caps applied to every atomic (`{"k": ..., "c": ...}`).
+        flows_path (Path): per-request JSONL output path.
+        csv_dir (Path): per-pid CSV output directory.
+        run_id (str): identifier written into every record.
+        request_timeout_s (float): per-dispatch HTTP timeout.
+        mu_lt (dict[str, float]): `svc_id -> mu` from the profile specs layer.
+
+    Returns:
+        tuple[list[MeshSpec], list[str]]: spec list (TAS first, atomics after) + sorted atomic ids.
+
+    Raises:
+        KeyError: when the profile does not declare a mu for some catalogue service.
+    """
+    _catalogue = load_catalogue(catalogue_version)
+    _atomic_ids = sorted(_catalogue.entries.keys())
+    _endpoint_lt: dict[str, str] = {}
+    for _idx, _svc_id in enumerate(_atomic_ids):
+        _endpoint_lt[_svc_id] = f"http://{host}:{base_port + 1 + _idx}"
+    _tas_factory = functools.partial(
+        build_tas_fastapi_app,
+        endpoint_lt=_endpoint_lt,
+        catalogue_version=catalogue_version,
+        workflow_name=workflow_name,
+        flows_path=str(flows_path),
+        run_id=run_id,
+        timeout_s=request_timeout_s,
+    )
+    _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS", app_factory=_tas_factory)]
+    _k = atomic_admission.get("k")
+    _c = atomic_admission.get("c")
+    for _svc_id in _atomic_ids:
+        _entry = _catalogue.lookup(_svc_id)
+        if _svc_id not in mu_lt:
+            _msg = f"profile specs layer is missing mu for service id {_svc_id!r}; "
+            _msg += "profile must declare every catalogue service"
+            raise KeyError(_msg)
+        _atomic_factory = functools.partial(
+            build_atomic_fastapi_app,
+            svc_name=_svc_id,
+            kind=_entry.kind,
+            mu=mu_lt[_svc_id],
+            k=_k,
+            c=_c,
+            csv_dir=str(csv_dir),
+            run_id=run_id,
+        )
+        _specs.append(MeshSpec(svc_id=_svc_id, app_factory=_atomic_factory))
+    return _specs, _atomic_ids
+
+
+def _mu_lt_from_profile(adp: str) -> dict[str, float]:
+    """Read mu (service rate, req/s) per service from the active profile's specs layer.
+
+    Args:
+        adp (str): adaptation key (selects which profile + scenario to load).
+
+    Returns:
+        dict[str, float]: mu setpoint per artifact id.
+    """
+    _net = load_profile(adaptation=adp, source="specs")
+    _ans: dict[str, float] = {}
+    for _artifact in _net.artifacts:
+        _ans[_artifact.key] = float(_artifact.mu)
+    return _ans
+
+
+async def _drive_trial(*,
+                       tas_url: str,
+                       n_requests: int,
+                       request_rate_per_s: float,
+                       p_alarm: float,
+                       request_timeout_s: float,
+                       seed: int | None) -> list[dict[str, Any]]:
+    """Drive `n_requests` against the composite TAS at the configured rate; return one summary per request.
+
+    Args:
+        tas_url (str): composite TAS base URL.
+        n_requests (int): number of requests to send.
+        request_rate_per_s (float): pacing rate (0 = no pacing).
+        p_alarm (float): probability the next request is an alarm.
+        request_timeout_s (float): per-request timeout.
+        seed (int | None): RNG seed for kind selection.
+
+    Returns:
+        list[dict[str, Any]]: one row per request (req_id, kind, outcome, status, latency_s).
+    """
+    if request_rate_per_s > 0:
+        _gap_s = 1.0 / request_rate_per_s
+    else:
+        _gap_s = 0.0
+    _summaries: list[dict[str, Any]] = []
+    async with User(client_id="trial-user-0",
+                    base_url=tas_url,
+                    endpoint_path="/",
+                    seed=seed,
+                    p_alarm=p_alarm,
+                    timeout_s=request_timeout_s,
+                    sequential_req_ids=True) as _user:
+        for _ in range(n_requests):
+            _record = await _user.run_one()
+            _summaries.append({
+                "req_id": _record.req_id,
+                "kind": _record.kind,
+                "outcome": _record.outcome,
+                "status": _record.status_code,
+                "latency_s": _record.total_latency_s,
+            })
+            if _gap_s > 0:
+                await asyncio.sleep(_gap_s)
+    return _summaries
+
+
+def run_experiment(*,
+                   adp: str = "baseline",
+                   dpl: Dpl = "localhost",
+                   framework: Framework = "fastapi",
+                   wsgi_server: WsgiServer = "waitress",
+                   write: bool = True,
+                   run_id: str | None = None,
+                   target_cfg: dict[str, Any] | None = None,
+                   envelope: dict[str, Any] | None = None,
+                   skip_bounds_check: bool = False) -> dict[str, Any]:
+    """Mount the TAS topology, drive one trial, write the per-request + per-service logs.
+
+    Reads `target.json` for bindings, validates the planned operating point against the latest calibration envelope (unless skipped), brings the mesh up, drives `trial.n_requests` requests through one synthetic user, and appends a row to `runs.parquet`.
+
+    Args:
+        adp (str, optional): adaptation key (`baseline` / `s1` / `s2` / `aggregate`). Defaults to `"baseline"`.
+        dpl (Dpl, optional): deployment mode. Defaults to `"localhost"`.
+        framework (Framework, optional): server stack. Defaults to `"fastapi"`.
+        wsgi_server (WsgiServer, optional): WSGI engine when `framework="flask"`. Defaults to `"waitress"`.
+        write (bool, optional): persist outputs to disk. Defaults to True.
+        run_id (str | None, optional): explicit run id. Defaults to a fresh `<adp>_<ts>_<nonce>` id.
+        target_cfg (dict[str, Any] | None, optional): pre-loaded target config. Defaults to reading the on-disk JSON.
+        envelope (dict[str, Any] | None, optional): explicit calibration envelope. Defaults to auto-discover the latest for `dpl`.
+        skip_bounds_check (bool, optional): skip the envelope check. Defaults to False.
+
+    Returns:
+        dict[str, Any]: run summary (`run_id`, `adp`, `dpl`, `n_requests`, `outcome_counts`, `paths`, `bounds`).
+    """
+    if target_cfg is None:
+        _cfg = load_target_cfg()
+    else:
+        _cfg = target_cfg
+    if run_id is None:
+        _run_id = make_run_id(prefix=adp)
+    else:
+        _run_id = run_id
+
+    _paths = make_run_paths(adp=adp, run_id=_run_id)
+    _paths.ensure()
+
+    _bounds_report = _maybe_check_bounds(dpl=dpl,
+                                         envelope=envelope,
+                                         trial_cfg=_cfg["trial"],
+                                         atomic_admission=_cfg["atomic_admission"],
+                                         skip=skip_bounds_check)
+
+    _mu_lt = _mu_lt_from_profile(adp)
+
+    _specs, _atomic_ids = _build_mesh_specs(
+        catalogue_version=_cfg.get("catalogue_version"),
+        workflow_name=_cfg["workflow_name"],
+        host=_cfg["host"],
+        base_port=int(_cfg["tas_base_port"]),
+        atomic_admission=_cfg["atomic_admission"],
+        flows_path=_paths.flows,
+        csv_dir=_paths.csv_dir,
+        run_id=_run_id,
+        request_timeout_s=float(_cfg["request_timeout_s"]),
+        mu_lt=_mu_lt,
+    )
+
+    _trial = _cfg["trial"]
+    _kind_p = _trial["kind_probability"]
+    _summaries: list[dict[str, Any]] = []
+    _started_ts = time.time()
+    with bring_up_mesh(_specs,
+                       framework=framework,
+                       wsgi_server=wsgi_server,
+                       host=_cfg["host"],
+                       base_port=int(_cfg["tas_base_port"]),
+                       ready_timeout_s=float(_cfg["ready_timeout_s"])) as _urls:
+        _tas_url = _urls["TAS"]
+        _summaries = asyncio.run(_drive_trial(
+            tas_url=_tas_url,
+            n_requests=int(_trial["n_requests"]),
+            request_rate_per_s=float(_trial["request_rate_per_s"]),
+            p_alarm=float(_kind_p["alarm"]),
+            request_timeout_s=float(_cfg["request_timeout_s"]),
+            seed=_trial.get("seed"),
+        ))
+    _finished_ts = time.time()
+
+    _outcome_counts = _count_outcomes(_summaries)
+    _row: dict[str, Any] = {
+        "run_id": _run_id,
+        "adp": adp,
+        "dpl": dpl,
+        "framework": framework,
+        "n_requests": len(_summaries),
+        "n_success": _outcome_counts.get("success", 0),
+        "n_timeout": _outcome_counts.get("timeout", 0),
+        "n_drop": _outcome_counts.get("drop", 0),
+        "n_5xx": _outcome_counts.get("5xx", 0),
+        "started_ts": _started_ts,
+        "finished_ts": _finished_ts,
+        "envelope_run_id": _bounds_report.envelope_run_id if _bounds_report else None,
+        "bounds_passed": _bounds_report.passed if _bounds_report else None,
+    }
+    if write:
+        append_run_summary(_paths.runs_parquet, _row)
+
+    _ans: dict[str, Any] = {
+        "run_id": _run_id,
+        "adp": adp,
+        "dpl": dpl,
+        "framework": framework,
+        "n_requests": len(_summaries),
+        "outcome_counts": _outcome_counts,
+        "atomic_ids": _atomic_ids,
+        "paths": {
+            "flows": str(_paths.flows),
+            "csv_dir": str(_paths.csv_dir),
+            "runs_parquet": str(_paths.runs_parquet),
+        },
+        "bounds": _bounds_report,
+        "summaries": _summaries,
+    }
+    return _ans
+
+
+def _maybe_check_bounds(*,
+                        dpl: Dpl,
+                        envelope: dict[str, Any] | None,
+                        trial_cfg: dict[str, Any],
+                        atomic_admission: dict[str, Any],
+                        skip: bool) -> BoundsReport | None:
+    """Check the planned `(c, r, w)` against the latest calibration envelope, when one exists.
+
+    Args:
+        dpl (Dpl): deployment mode (drives envelope lookup).
+        envelope (dict[str, Any] | None): explicit envelope override.
+        trial_cfg (dict[str, Any]): trial block from `target.json`.
+        atomic_admission (dict[str, Any]): admission caps from `target.json`.
+        skip (bool): if True, return None without checking.
+
+    Returns:
+        BoundsReport | None: per-axis verdicts, or None when nothing was checked.
+    """
+    if skip:
+        return None
+    if envelope is None:
+        _path = find_latest_envelope(dpl)
+        if _path is None:
+            return None
+        envelope = read_envelope(_path)
+    _exp_cfg: dict[str, Any] = {
+        "r": float(trial_cfg.get("request_rate_per_s", 0)),
+    }
+    _c = atomic_admission.get("c")
+    if isinstance(_c, (int, float)):
+        _exp_cfg["c"] = float(_c)
+    return validate_experimental_limits(_exp_cfg, envelope, raise_on_fail=True)
+
+
+def _count_outcomes(summaries: list[dict[str, Any]]) -> dict[str, int]:
+    """Tally `outcome` values across the summaries."""
+    _counts: dict[str, int] = {}
+    for _row in summaries:
+        _key = str(_row.get("outcome", "?"))
+        _counts[_key] = _counts.get(_key, 0) + 1
+    return _counts
+
+
 def run(*,
         stage: str = "calibration",
+        adp: str = "baseline",
         dpl: Dpl = "localhost",
         framework: Framework = "fastapi",
         wsgi_server: WsgiServer = "waitress",
         write: bool = True,
         run_id: str | None = None,
-        cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Top-level dispatcher for the experimental method.
-
-    Only `stage="calibration"` is wired today; the experiment + sweep paths land later.
+        cfg: dict[str, Any] | None = None,
+        skip_bounds_check: bool = False) -> dict[str, Any]:
+    """Run calibration, an experiment trial, or both.
 
     Args:
-        stage (str, optional): one of `"calibration"`, `"experiment"`, `"both"`. Defaults to `"calibration"`.
+        stage (str, optional): `"calibration"`, `"experiment"`, or `"both"`. Defaults to `"calibration"`.
+        adp (str, optional): adaptation key (used by experiment stages). Defaults to `"baseline"`.
         dpl (Dpl, optional): deployment mode.
         framework (Framework, optional): server stack.
         wsgi_server (WsgiServer, optional): WSGI engine when `framework="flask"`.
-        write (bool, optional): write outputs to disk. Defaults to True.
+        write (bool, optional): persist outputs to disk. Defaults to True.
         run_id (str | None, optional): explicit run id.
+        cfg (dict[str, Any] | None, optional): pre-loaded calibration config (calibration stages only).
+        skip_bounds_check (bool, optional): skip the envelope check (experiment stages only). Defaults to False.
 
     Returns:
-        dict[str, Any]: the populated envelope (calibration path).
+        dict[str, Any]: envelope, experiment summary, or `{"calibration": ..., "experiment": ...}`.
 
     Raises:
-        NotImplementedError: when `stage != "calibration"`; the experiment path is not yet wired.
-        ValueError: when `stage` is not a recognised value.
+        ValueError: on an unknown stage.
     """
-    _ans: dict[str, Any]
     if stage == "calibration":
-        _ans = run_calibration(dpl=dpl,
+        return run_calibration(dpl=dpl,
                                framework=framework,
                                wsgi_server=wsgi_server,
                                write=write,
                                run_id=run_id,
                                cfg=cfg)
-    elif stage in ("experiment", "both"):
-        _msg = f"stage={stage!r} is not yet wired; only 'calibration' is supported"
-        raise NotImplementedError(_msg)
-    else:
-        _msg = f"unknown stage {stage!r}; expected 'calibration', 'experiment', or 'both'"
-        raise ValueError(_msg)
-    return _ans
+    if stage == "experiment":
+        return run_experiment(adp=adp,
+                              dpl=dpl,
+                              framework=framework,
+                              wsgi_server=wsgi_server,
+                              write=write,
+                              run_id=run_id,
+                              skip_bounds_check=skip_bounds_check)
+    if stage == "both":
+        _calib = run_calibration(dpl=dpl,
+                                 framework=framework,
+                                 wsgi_server=wsgi_server,
+                                 write=write,
+                                 run_id=run_id,
+                                 cfg=cfg)
+        _exp = run_experiment(adp=adp,
+                              dpl=dpl,
+                              framework=framework,
+                              wsgi_server=wsgi_server,
+                              write=write,
+                              envelope=_calib,
+                              skip_bounds_check=skip_bounds_check)
+        return {"calibration": _calib, "experiment": _exp}
+    _msg = f"unknown stage {stage!r}; expected 'calibration', 'experiment', or 'both'"
+    raise ValueError(_msg)
 
 
 def main() -> None:
-    """CLI entry: parse args and call `run()`; print the gate verdict on stdout."""
+    """CLI entry: parse flags and run the chosen stage."""
     _parser = argparse.ArgumentParser(prog="src.methods.experimental",
-                                      description="Experimental method orchestrator (calibration path).")
+                                      description="Experimental method orchestrator (calibration + experiment).")
     _parser.add_argument("--stage",
                          choices=["calibration", "experiment", "both"],
                          default="calibration")
+    _parser.add_argument("--adaptation",
+                         choices=["baseline", "s1", "s2", "aggregate"],
+                         default="baseline",
+                         dest="adp")
     _parser.add_argument("--dpl",
                          choices=["localhost", "multiprocess", "remote"],
                          default="localhost")
@@ -285,13 +644,27 @@ def main() -> None:
     _parser.add_argument("--write",
                          action=argparse.BooleanOptionalAction,
                          default=True)
+    _parser.add_argument("--skip-bounds-check",
+                         action="store_true",
+                         dest="skip_bounds_check")
     _args = _parser.parse_args()
-    _envelope = run(stage=_args.stage,
-                    dpl=_args.dpl,
-                    framework=_args.framework,
-                    wsgi_server=_args.wsgi_server,
-                    write=_args.write)
-    _print_calibration_report(_envelope)
+    # argparse `choices=...` constrains the value at runtime to the literal set,
+    # but the static type stays `str`; cast back to the Literal aliases the run()
+    # signature expects.
+    _result = run(stage=str(_args.stage),
+                  adp=str(_args.adp),
+                  dpl=cast(Dpl, _args.dpl),
+                  framework=cast(Framework, _args.framework),
+                  wsgi_server=cast(WsgiServer, _args.wsgi_server),
+                  write=bool(_args.write),
+                  skip_bounds_check=bool(_args.skip_bounds_check))
+    if _args.stage == "calibration":
+        _print_calibration_report(_result)
+    elif _args.stage == "experiment":
+        _print_experiment_summary(_result)
+    else:
+        _print_calibration_report(_result["calibration"])
+        _print_experiment_summary(_result["experiment"])
 
 
 _REPORT_LEGEND_LINES = (
@@ -312,13 +685,13 @@ _TERMINAL_SUBSTITUTIONS = (
 
 
 def _to_terminal(text: str) -> str:
-    """Strip matplotlib mathtext markers from a headline string for stdout printing.
+    """Render a mathtext headline as plain text for the terminal.
 
     Args:
-        text (str): a headline as produced by `gate.summary[*]["headline"]` (may contain mathtext like `$\\pm$ 0.05 $\\mu$s`).
+        text (str): headline that may contain mathtext (e.g. `$\\pm$ 0.05 $\\mu$s`).
 
     Returns:
-        str: the same headline with mathtext markers replaced by ASCII / Unicode equivalents readable in a terminal. Bare `$c=8$` style segments collapse to `c=8`.
+        str: ASCII / Unicode equivalent (e.g. `+/- 0.05 us`).
     """
     _ans = text
     for _src, _dst in _TERMINAL_SUBSTITUTIONS:
@@ -329,7 +702,7 @@ def _to_terminal(text: str) -> str:
 
 
 def _print_calibration_report(envelope: dict[str, Any]) -> None:
-    """Print the calibration report to stdout, matching the figure's Report panel.
+    """Print the calibration report (matches the figure's Report panel layout).
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope (must include `gate`).
@@ -383,6 +756,33 @@ def _print_calibration_report(envelope: dict[str, Any]) -> None:
     print("-" * 64)
     for _line in _REPORT_LEGEND_LINES:
         print(_line)
+
+
+def _print_experiment_summary(result: dict[str, Any]) -> None:
+    """Print one experiment-run summary block.
+
+    Args:
+        result (dict[str, Any]): dict returned by `run_experiment(...)`.
+    """
+    _counts = result.get("outcome_counts", {})
+    _bounds: BoundsReport | None = result.get("bounds")
+    print()
+    print(f"adp:  {result.get('adp', '?')}     dpl: {result.get('dpl', '?')}")
+    print(f"run:  {result.get('run_id', '?')}")
+    print(f"requests: {result.get('n_requests', 0)}")
+    print(f"  success: {_counts.get('success', 0)}")
+    print(f"  timeout: {_counts.get('timeout', 0)}")
+    print(f"  drop:    {_counts.get('drop', 0)}")
+    print(f"  5xx:     {_counts.get('5xx', 0)}")
+    print()
+    print("paths:")
+    for _label, _path in (result.get("paths") or {}).items():
+        print(f"  {_label:<13} {_path}")
+    if _bounds is not None:
+        print()
+        print(f"envelope:        run={_bounds.envelope_run_id}  passed={_bounds.passed}")
+        for _check in _bounds.checks:
+            print(f"  {_check.message}")
 
 
 if __name__ == "__main__":

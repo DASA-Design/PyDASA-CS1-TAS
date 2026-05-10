@@ -1,3 +1,21 @@
 {
-    "_note": "TAS workflow graph spec: pickTask -> {vitalParamsMsg -> analyseData -> {changeDrug | changeDose | sendAlarm}; buttonMsg -> triggerAlarm}. Empty placeholder; populated at stage 6 when prototype/target/workflow/loader.py lands."
+    "_note": "TAS workflow graph spec from Weyns & Calinescu 2015 [1] Fig. 1. pickTask -> {vitalParamsMsg -> analyseData -> {changeDrug | changeDose | sendAlarm}; buttonMsg -> triggerAlarm}. svc_kind selects the catalogue group; the engine picker (default first-of-kind) chooses the concrete service. kind_aliases maps the request schema's `kind` (alarm / medical_analysis from src/experimental/common/payload/request.py) to the published branch keys.",
+    "entry": "pickTask",
+    "kind_aliases": {
+        "alarm": "buttonMsg",
+        "medical_analysis": "vitalParamsMsg"
+    },
+    "branches": {
+        "vitalParamsMsg": {
+            "first": {"svc_kind": "medical_analysis", "operation": "analyseData"},
+            "on_result": {
+                "changeDrug": {"svc_kind": "drug",  "operation": "changeDrug"},
+                "changeDose": {"svc_kind": "drug",  "operation": "changeDose"},
+                "sendAlarm":  {"svc_kind": "alarm", "operation": "sendAlarm"}
+            }
+        },
+        "buttonMsg": {
+            "first": {"svc_kind": "alarm", "operation": "triggerAlarm"}
+        }
+    }
 }

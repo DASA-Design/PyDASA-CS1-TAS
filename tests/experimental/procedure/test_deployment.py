@@ -11,8 +11,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.experimental.procedure.deployment import (
+    MeshSpec,
     _resolve_ports,
     bring_up,
+    bring_up_mesh,
 )
 from src.experimental.prototype.runtime.server import ServerAdapter
 
@@ -93,6 +95,51 @@ class TestDeployment:
             for _adp in _factory.adapters:
                 _adp.mount.assert_called_once()
                 _adp.wait_ready.assert_called_once()
+        for _adp in _factory.adapters:
+            _adp.shutdown.assert_called_once()
+
+    def test_bring_up_mesh_assigns_consecutive_ports(self) -> None:
+        """`bring_up_mesh` mounts one adapter per spec on consecutive ports and yields a `svc_id -> URL` mapping."""
+        _factory = _AdapterFactory()
+        _specs = [
+            MeshSpec(svc_id="TAS", app_factory=_noop_app),
+            MeshSpec(svc_id="MAS_{1}", app_factory=_noop_app),
+            MeshSpec(svc_id="AS_{1}", app_factory=_noop_app),
+        ]
+        with bring_up_mesh(_specs,
+                           base_port=9400,
+                           adapter_factory=_factory) as _urls:
+            assert _urls == {
+                "TAS": "http://127.0.0.1:9400",
+                "MAS_{1}": "http://127.0.0.1:9401",
+                "AS_{1}": "http://127.0.0.1:9402",
+            }
+            assert len(_factory.adapters) == 3
+            for _adp in _factory.adapters:
+                _adp.mount.assert_called_once()
+                _adp.wait_ready.assert_called_once()
+        for _adp in _factory.adapters:
+            _adp.shutdown.assert_called_once()
+
+    def test_bring_up_mesh_empty_specs_raises(self) -> None:
+        """An empty `MeshSpec` list raises `ValueError` immediately (no spawners come up)."""
+        with pytest.raises(ValueError, match="at least one MeshSpec"):
+            with bring_up_mesh([], base_port=9500):
+                pass
+
+    def test_bring_up_mesh_shuts_down_on_exception(self) -> None:
+        """If the calling block raises, every mounted mesh adapter is still shut down (in reverse order)."""
+        _factory = _AdapterFactory()
+        _specs = [
+            MeshSpec(svc_id="TAS", app_factory=_noop_app),
+            MeshSpec(svc_id="MAS_{1}", app_factory=_noop_app),
+        ]
+        with pytest.raises(RuntimeError, match="boom"):
+            with bring_up_mesh(_specs,
+                               base_port=9600,
+                               adapter_factory=_factory):
+                _msg = "boom"
+                raise RuntimeError(_msg)
         for _adp in _factory.adapters:
             _adp.shutdown.assert_called_once()
 

@@ -1,18 +1,18 @@
-"""Bring up calibration spawners and yield their target URLs.
+"""Mount HTTP spawners as context managers; yield their URLs.
 
-Three modes:
+Two helpers, both `mount -> wait_ready -> yield -> shutdown` context managers:
 
-- `localhost`: one spawner on `<host>:<base_port>`.
-- `multiprocess`: N spawners on consecutive ports; the rate driver round-robins across them.
-- `remote`: reserved for the distributed deployment; raises `NotImplementedError` for now.
+- `bring_up`: one app on N ports (calibration vernier).
+- `bring_up_mesh`: N apps on N ports (TAS service mesh).
 
-`bring_up(...)` is a context manager: mount, wait for ready, yield URLs, shut down on exit. Tests pass `adapter_factory` to exercise the orchestration without real spawns.
+Three deployment modes: `localhost` (one process), `multiprocess` (N processes on consecutive ports), `remote` (reserved). Tests pass `adapter_factory` to skip real spawning.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from src.experimental.prototype.runtime.server import (
@@ -25,6 +25,19 @@ Framework = Literal["fastapi", "flask"]
 WsgiServer = Literal["waitress", "gunicorn"]
 AppFactory = Callable[[], Any]
 AdapterFactory = Callable[[], ServerAdapter]
+
+
+@dataclass(frozen=True)
+class MeshSpec:
+    """One mesh entry: an id paired with the factory that builds its app.
+
+    Attributes:
+        svc_id (str): catalogue key (e.g. `MAS_{1}`, `TAS`).
+        app_factory (AppFactory): zero-arg picklable callable returning the app.
+    """
+
+    svc_id: str
+    app_factory: AppFactory
 
 # Runtime fallbacks for data/config/method/experimental.json::dpl.*.
 _DFLT_BASE_PORT = 8001
@@ -43,25 +56,27 @@ def bring_up(dpl: Dpl,
              workers: int = _DFLT_WORKERS,
              ready_timeout_s: float = _DFLT_READY_TIMEOUT_S,
              adapter_factory: AdapterFactory | None = None) -> Iterator[list[str]]:
-    """Mount calibration spawners for `dpl`, yield their target URLs, shut them down on exit.
+    """Mount one app on N ports for `dpl`; yield URLs while the body runs.
+
+    `localhost` mounts one spawner; `multiprocess` mounts `workers` copies of the same app on consecutive ports.
 
     Args:
-        dpl (Dpl): deployment mode. `"localhost"` mounts one spawner; `"multiprocess"` mounts `workers` spawners on consecutive ports.
-        app_factory (AppFactory): zero-arg picklable callable returning the app to serve (e.g. `build_vernier_fastapi_app`).
+        dpl (Dpl): deployment mode.
+        app_factory (AppFactory): zero-arg picklable callable returning the app.
         framework (Framework, optional): server stack. Defaults to `"fastapi"`.
         wsgi_server (WsgiServer, optional): WSGI engine when `framework="flask"`. Defaults to `"waitress"`.
         host (str, optional): bind address. Defaults to `"127.0.0.1"`.
-        base_port (int, optional): first TCP port. Defaults to the runtime fallback.
-        workers (int, optional): worker count for the multiprocess mode. Defaults to the runtime fallback.
-        ready_timeout_s (float, optional): per-spawner readiness timeout. Defaults to the runtime fallback.
-        adapter_factory (AdapterFactory | None, optional): callable returning a fresh `ServerAdapter` per spawner. Defaults to None, which uses the real `make_server_adapter`. Tests inject a fake.
+        base_port (int, optional): first TCP port.
+        workers (int, optional): spawner count for `multiprocess`.
+        ready_timeout_s (float, optional): per-spawner readiness timeout.
+        adapter_factory (AdapterFactory | None, optional): test seam; defaults to the real adapter.
 
     Yields:
-        list[str]: target URLs for the mounted spawners (one per port). Caller drives the rate sweep against these URLs.
+        list[str]: one base URL per spawner.
 
     Raises:
-        ValueError: if `dpl` is not a recognised mode.
-        NotImplementedError: if `dpl="remote"` (not yet wired).
+        ValueError: unknown `dpl`.
+        NotImplementedError: `dpl="remote"` (not yet wired).
     """
     _ports = _resolve_ports(dpl, base_port, workers)
     _spawners: list[ServerAdapter] = []
@@ -84,19 +99,19 @@ def bring_up(dpl: Dpl,
 
 
 def _resolve_ports(dpl: Dpl, base_port: int, workers: int) -> list[int]:
-    """Resolve the list of TCP ports to bind for the given deployment mode.
+    """Pick which TCP ports to bind for the given mode.
 
     Args:
         dpl (Dpl): deployment mode.
         base_port (int): first port.
-        workers (int): worker count for the multiprocess mode.
+        workers (int): spawner count for `multiprocess`.
 
     Returns:
-        list[int]: ports to bind, in order.
+        list[int]: ports in mounting order.
 
     Raises:
-        ValueError: if `dpl` is not recognised.
-        NotImplementedError: if `dpl="remote"` (not yet wired).
+        ValueError: unknown `dpl`.
+        NotImplementedError: `dpl="remote"` (not yet wired).
     """
     _ans: list[int]
     if dpl == "localhost":
@@ -112,11 +127,64 @@ def _resolve_ports(dpl: Dpl, base_port: int, workers: int) -> list[int]:
     return _ans
 
 
+@contextmanager
+def bring_up_mesh(specs: list[MeshSpec],
+                  *,
+                  framework: Framework = "fastapi",
+                  wsgi_server: WsgiServer = "waitress",
+                  host: str = "127.0.0.1",
+                  base_port: int = _DFLT_BASE_PORT,
+                  ready_timeout_s: float = _DFLT_READY_TIMEOUT_S,
+                  adapter_factory: AdapterFactory | None = None) -> Iterator[dict[str, str]]:
+    """Mount one spawner per spec on consecutive ports; yield a `svc_id -> URL` map.
+
+    Specs mount in order on `base_port + i`. The helper waits for every spawner to pass its readiness probe before yielding; exits shut down spawners in reverse order. Each spawner runs one process (`mount` is one-process-per-adapter); duplicate specs on consecutive ports if you need multiple workers per service.
+
+    Args:
+        specs (list[MeshSpec]): mesh entries in mounting order.
+        framework (Framework, optional): server stack. Defaults to `"fastapi"`.
+        wsgi_server (WsgiServer, optional): WSGI engine when `framework="flask"`. Defaults to `"waitress"`.
+        host (str, optional): bind address. Defaults to `"127.0.0.1"`.
+        base_port (int, optional): first TCP port.
+        ready_timeout_s (float, optional): per-spawner readiness timeout.
+        adapter_factory (AdapterFactory | None, optional): test seam.
+
+    Yields:
+        dict[str, str]: `svc_id -> base URL` for every mounted spawner.
+
+    Raises:
+        ValueError: when `specs` is empty.
+    """
+    if not specs:
+        _msg = "bring_up_mesh requires at least one MeshSpec"
+        raise ValueError(_msg)
+    _spawners: list[ServerAdapter] = []
+    _urls: dict[str, str] = {}
+    try:
+        for _idx, _spec in enumerate(specs):
+            _port = base_port + _idx
+            if adapter_factory is None:
+                _adp = make_server_adapter(framework, wsgi_server)
+            else:
+                _adp = adapter_factory()
+            _adp.mount(_spec.app_factory, port=_port, host=host)
+            _spawners.append(_adp)
+            _urls[_spec.svc_id] = f"http://{host}:{_port}"
+        for _adp in _spawners:
+            _adp.wait_ready(timeout_s=ready_timeout_s)
+        yield _urls
+    finally:
+        for _adp in reversed(_spawners):
+            _adp.shutdown()
+
+
 __all__ = [
     "AdapterFactory",
     "AppFactory",
     "Dpl",
     "Framework",
+    "MeshSpec",
     "WsgiServer",
     "bring_up",
+    "bring_up_mesh",
 ]

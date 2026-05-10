@@ -1,3 +1,22 @@
 {
-    "_note": "Target-system bindings: workflow_path, catalogue_path_template, factory bindings (TAS / third-party / vernier), healthz endpoint. Empty placeholder; populated at stage 6 when prototype/target/ lands."
+    "_note": "Target-system bindings for `src/experimental/prototype/target/factory/`. Selects catalogue + workflow, sets ports / admission caps / timeouts; `trial` carries the load-generation knobs.",
+    "catalogue_version": "weyns_2015",
+    "workflow_name": "tas",
+    "tas_base_port": 8001,
+    "host": "127.0.0.1",
+    "ready_timeout_s": 20.0,
+    "request_timeout_s": 5.0,
+    "atomic_admission": {
+        "k": null,
+        "c": null
+    },
+    "trial": {
+        "n_requests": 42,
+        "request_rate_per_s": 10,
+        "kind_probability": {
+            "alarm": 0.25,
+            "medical_analysis": 0.75
+        },
+        "atomic_response_time_overrides": null
+    }
 }
