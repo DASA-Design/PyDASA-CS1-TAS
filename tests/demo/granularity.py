@@ -2,9 +2,9 @@
 
 Three trial runs over real localhost TCP:
 
-1. `collapsed` — 8-spawner mesh; TAS_{2..6} are inline workflow code.
-2. `expanded` with `inject_internal_stage_mu=False` — 13-spawner mesh; internal stages are real but skip the mu sleep.
-3. `expanded` with `inject_internal_stage_mu=True` — 13-spawner mesh; internal stages also sleep on mu.
+1. `collapsed`: 8-spawner mesh; TAS_{2..6} are inline workflow code.
+2. `expanded` with `inject_internal_stage_mu=False`: 13-spawner mesh; internal stages are real but skip the mu sleep.
+3. `expanded` with `inject_internal_stage_mu=True`: 13-spawner mesh; internal stages also sleep on mu.
 
 Each run uses the same trial knobs (small `n_requests` for a quick demo) and the on-disk `target.json` config; only `target_granularity` and `inject_internal_stage_mu` are overridden per run.
 
@@ -14,6 +14,7 @@ Run from the project root:
 
 Outputs:
 - One stdout block per run with mode, n_requests, outcome counts, latency p50 / p95 / max.
+- Per-run worker table: svc, OS PID, host:port (parsed from per-pid CSVs and flow JSONL).
 - A side-by-side comparison table at the end.
 - Full run summaries land under `_sandbox/demo_granularity/granularity.json`.
 - Each run's flow JSONL + per-pid CSV land under `data/results/experimental/baseline/`.
@@ -22,6 +23,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import re
 import statistics
 from copy import deepcopy
 from pathlib import Path
@@ -32,7 +34,10 @@ from src.methods.experimental import run_experiment
 
 DEMO_REQUESTS = 5
 DEMO_BASE_PORT = 8001
+DEMO_HOST = "127.0.0.1"
 SCRATCH_DIR = Path("_sandbox/demo_granularity")
+INTERNAL_STAGE_IDS = ("TAS_{2}", "TAS_{3}", "TAS_{4}", "TAS_{5}", "TAS_{6}")
+_PID_FNAME_RE = re.compile(r"^(?P<svc>.+)__pid(?P<pid>\d+)\.csv$")
 
 
 def run_one(label: str,
@@ -105,6 +110,116 @@ def summarise(label: str, result: dict[str, Any]) -> dict[str, Any]:
     return _ans
 
 
+def _port_layout(granularity: str,
+                 atomic_ids: list[str],
+                 base_port: int) -> dict[str, int]:
+    """Reconstruct the `svc_id -> port` mapping the orchestrator used for one run.
+
+    Mirrors `_build_mesh_specs` in `src/methods/experimental.py`: TAS at `base_port`; in expanded mode the five internal stages occupy the next five ports, then the third-party atomics.
+
+    Args:
+        granularity (str): `collapsed` or `expanded`.
+        atomic_ids (list[str]): sorted third-party atomic ids from the result dict.
+        base_port (int): `tas_base_port` from the config.
+
+    Returns:
+        dict[str, int]: `svc_id -> TCP port`.
+    """
+    _ans: dict[str, int] = {"TAS": base_port}
+    if granularity == "expanded":
+        _internal_first = base_port + 1
+        for _idx, _stage_id in enumerate(INTERNAL_STAGE_IDS):
+            _ans[_stage_id] = _internal_first + _idx
+        _atomic_first = base_port + 1 + len(INTERNAL_STAGE_IDS)
+    else:
+        _atomic_first = base_port + 1
+    for _idx, _svc_id in enumerate(atomic_ids):
+        _ans[_svc_id] = _atomic_first + _idx
+    return _ans
+
+
+def _tas_pid_from_flows(flows_path: Path) -> int | None:
+    """Read the first JSONL flow record and return its `pid` (TAS_1's OS PID).
+
+    Args:
+        flows_path (Path): path to the per-run flows JSONL.
+
+    Returns:
+        int | None: PID, or None when the file is missing or has no parseable record.
+    """
+    if not flows_path.exists():
+        return None
+    with flows_path.open(encoding="utf-8") as _fh:
+        for _line in _fh:
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _rec = json.loads(_line)
+            except ValueError:
+                continue
+            _pid = _rec.get("pid")
+            if isinstance(_pid, int):
+                return _pid
+            break
+    return None
+
+
+def gather_workers(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Walk the run's CSV dir + flows JSONL to collect `(svc, pid, host, port)` per worker.
+
+    Args:
+        result (dict[str, Any]): output of `run_one`.
+
+    Returns:
+        list[dict[str, Any]]: one row per worker, ordered TAS first then by port.
+    """
+    _paths = result.get("paths", {})
+    _csv_dir = Path(_paths.get("csv_dir", ""))
+    _flows_path = Path(_paths.get("flows", ""))
+    _atomic_ids: list[str] = sorted(result.get("atomic_ids", []))
+    _ports = _port_layout(result["target_granularity"], _atomic_ids, DEMO_BASE_PORT)
+    _safe_to_id: dict[str, str] = {}
+    for _svc_id in _ports:
+        _safe = _svc_id.replace("{", "").replace("}", "").replace(",", "").replace(" ", "")
+        _safe_to_id[_safe] = _svc_id
+    _pids: dict[str, int] = {}
+    if _csv_dir.exists():
+        for _f in _csv_dir.glob("*__pid*.csv"):
+            _m = _PID_FNAME_RE.match(_f.name)
+            if _m is None:
+                continue
+            _safe = _m.group("svc")
+            _svc_id = _safe_to_id.get(_safe, _safe)
+            _pids[_svc_id] = int(_m.group("pid"))
+    _tas_pid = _tas_pid_from_flows(_flows_path)
+    if _tas_pid is not None:
+        _pids["TAS"] = _tas_pid
+    _rows: list[dict[str, Any]] = []
+    for _svc_id, _port in sorted(_ports.items(), key=lambda _kv: _kv[1]):
+        _rows.append({
+            "svc": _svc_id,
+            "pid": _pids.get(_svc_id),
+            "host": DEMO_HOST,
+            "port": _port,
+            "url": f"http://{DEMO_HOST}:{_port}",
+        })
+    return _rows
+
+
+def print_workers(rows: list[dict[str, Any]]) -> None:
+    """Print one worker per line: `svc  pid  host:port`."""
+    if not rows:
+        return
+    print("\tworkers:")
+    print(f"\t\t{'svc':<12} {'pid':>8}  {'host:port'}")
+    print(f"\t\t{'-' * 12} {'-' * 8}  {'-' * 21}")
+    for _r in rows:
+        _pid_str = "?" if _r["pid"] is None else str(_r["pid"])
+        _hp = f"{_r['host']}:{_r['port']}"
+        print(f"\t\t{_r['svc']:<12} {_pid_str:>8}  {_hp}")
+
+
 def print_one(summary: dict[str, Any]) -> None:
     """Print one run's headline numbers to stdout.
 
@@ -175,7 +290,10 @@ def main() -> None:
     for _label, _granularity, _mu in _runs:
         _result = run_one(_label, _granularity, _mu)
         _summary = summarise(_label, _result)
+        _workers = gather_workers(_result)
+        _summary["workers"] = _workers
         print_one(_summary)
+        print_workers(_workers)
         _summaries.append(_summary)
     print_table(_summaries)
     _out = save(_summaries)
