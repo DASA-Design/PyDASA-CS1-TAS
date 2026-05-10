@@ -184,5 +184,6 @@ build/
 # Figures: tracked by default (referenced by notes and reports).
 # Configs (data/config/) and notes/: always tracked.
 
-# old files
+# old files and sandbox for demos
 __OLD__
+_sandbox
