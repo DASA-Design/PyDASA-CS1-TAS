@@ -2,6 +2,78 @@
 
 Running log of design decisions, pivots, and open questions for the Tele Assistance System case study. Append only; newest entry on top.
 
+## 2026-05-10 — Calibration stage 4 closed (apparatus characterisation end-to-end)
+
+**Decision.** Close stage 4 of the `src/experimental/` rebuild. The calibration ping/echo apparatus, the gate / report layer, the per-probe + summary plotters, the notebook-driven workflow, and the multi-process load generator are all wired end-to-end. The apparatus produces a per-deployment envelope JSON and a 2x3 figure (single) / 2x4 figure (overlay) characterising clock + scheduler + kernel + handler + worker scaling floors, plus the operating envelope (`c_max`, `r_max`, `w_max`). Test surface holds at 416+ green across the repo; calibration namespace alone is at 94 tests.
+
+**Probes (six, all adaptive / self-terminating).**
+
+- `probe_timer` — clock floor (median delta between consecutive `perf_counter_ns` reads).
+- `probe_jitter` — scheduler floor (`asyncio.sleep` overshoot vs target, wrapped in `windows_timer_resolution(1)`).
+- `probe_loopback` — kernel TCP floor; 32 KiB payload via a `_recv_exact()` accumulator (`recv()` returns up to N bytes; at kB-scale the response spans multiple syscalls and the timer must wait for all of them).
+- `probe_handler_scaling` — asyncio multiplexing floor; adaptive ramp `start / stop / step`, halts when the median drifts beyond `max_drift_pct`. Localhost only (mode-invariant; re-running on multiprocess produces duplicate numbers).
+- `probe_rate` — per-worker saturation knee; `start / stop / step` ramp, halts on `target_loss_pct` or `max_p95_latency_us`. Always runs at `workers=1` (mode-independent per-worker measurement).
+- `probe_workers_scaling` — parallel-limit knee; ramps `bring_up(workers=n)`, drives `n * rate_per_worker_factor * saturation_rate` aggregate, halts on `min_eff_pct`. Multiprocess only.
+
+**Multi-process load generator** ([multi_proc_driver.py](src/experimental/prototype/calibration/multi_proc_driver.py)).
+
+A single `httpx.AsyncClient` saturates around 1-1.5k req/s on Windows; past that the client misattributes its own busy-state as worker saturation. `make_multi_proc_driver(n_clients)` returns a `RateDriver` that fans the load across N `ProcessPoolExecutor` children, each running `drive_at_rate_raw` with its own httpx pool, and merges the **raw latency lists** before computing aggregate percentiles (median-of-medians is statistically invalid; merging the underlying samples first is correct). Default `n_clients=8` is deliberately overdimensioned: we want the host-vernier interaction to fail before the client does. `n_clients=1` short-circuits to the existing single-process driver.
+
+**Gate / report layer** ([gate.py](src/experimental/prototype/calibration/gate.py), [characterization.py](src/view/characterization.py)).
+
+- `gate.verdict()` returns a structured **report**, not a binary pass/fail. Sections: `precision_band_us` (quadrature sum of timer / jitter / loopback std-devs), `verifiable_range` (`c_max / r_max_req_s / w_max`), `gates` (handler / saturation / workers — each with the knee, not a runaway), `floors` (informational), `summary` (one mathtext-formatted headline per probe). The `passed` flag stays for downstream programmatic use but is no longer foregrounded; the user explicitly rejected the FAIL banner ("the verdict is dissertation territory; the tool's job is to measure and present").
+- Report panel is a borderless attribute-vs-column table. Single-envelope panel: one column whose header is the host name; pre-table `RUN` got dropped, `<host>: <datetime>` lives in the panel title (parsed from `make_run_id`'s `<prefix>_<timestamp>_<nonce>` shape). Overlay panel: one column per envelope with mode-aware bottom-left scaling slot (handler vs workers).
+- Static three-block legend (`Latency:` / `Floors:` / `Envelope:`) explains the data-only rows in plain prose.
+- Mathtext for math symbols (`$\pm$`, `$\mu$s`, `$\leq$`); the CLI helper `_to_terminal()` strips mathtext markers for stdout-friendly output.
+
+**Figure layout.** Single-envelope summary stays 2x3 (timer / jitter / loopback / scaling-slot / rate / report). Cross-deployment overlay is 2x4 portrait (`figsize=(14, 18)`): timer / jitter, loopback / rate, handler-scaling / workers-scaling, report-spans-both-cols. Bottom Report cell is centred horizontally via an `x_offset` plumbed through the put-helpers.
+
+**Configuration knobs** ([calibration.json](data/config/method/prototype/calibration.json)) — all probes parameterised from one JSON; runtime fallbacks in source.
+
+```json
+{
+  "vernier":          {"K": null, "c": null},
+  "dpl":              {"host": "127.0.0.1", "base_port": 9042, "workers": 4, "ready_timeout_s": 20.0},
+  "hoststats": {
+    "timer":           {"samples_n": 1000},
+    "jitter":          {"samples_n": 100, "target_us": 1000},
+    "loopback":        {"samples_n": 100, "payload_bytes": 32768},
+    "handler_scaling": {"start": 8, "stop": 1024, "step": 32, "samples_per_c": 50, "max_drift_pct": 5.0}
+  },
+  "rate":              {"start": 8, "stop": 1024, "step": 32, "per_rate_s": 5.0, "target_loss_pct": 5.0, "max_p95_latency_us": 100000.0},
+  "workers_scaling":   {"start": 1, "stop": 32, "step": 1, "per_step_s": 5.0, "rate_per_worker_factor": 0.7, "rate_per_worker": 200, "min_eff_pct": 90.0, "n_clients": 8},
+  "gate":              {"noise_floor_pct": 5.0}
+}
+```
+
+**Notebook** ([00-calibration.ipynb](00-calibration.ipynb)).
+
+Twelve thin cells. Imports + `DPLS: list[Dpl]` typed annotations + `Dpl`-typed `DISPLAY` map. Cell-3 runs `run_calibration` over `["localhost", "multiprocess"]`. Cell-5 prints the structured report via `_print_calibration_report`. Cell-7 saves the per-deployment summary figures. Cell-9 saves the cross-deployment overlay. Cell-11 saves the per-probe standalone figures (handler_scaling guarded for localhost, workers_scaling guarded for multiprocess). Cell-2 markdown explains the deliberate `n_clients=8` overdimensioning.
+
+**Conventions captured this round.**
+
+- Calibration `c` (handler concurrency, asyncio multiplexing axis) is **not** queueing-theory `c` (parallel servers in a station, M/M/c/K). Memory entry [feedback_calibration_c_vs_queueing_c.md](C:/Users/Felipe/.claude/projects/c--Users-Felipe-OneDrive-Documents-GitHub-DASA-Design-PyDASA-CS1-TAS/memory/feedback_calibration_c_vs_queueing_c.md) records the collision; the project's existing "do not conflate" rule applies. Calibration `r` = arrival rate per worker; calibration `w` = parallel worker processes. Report-panel labels use the verbose words (`Concurrency:`, `Rate:`, `Workers:`) to dodge the bare-`c` collision.
+- `make_run_id` separator unified to a single `_` between prefix and timestamp (was `__`). All disk paths and run-id parsers updated; `_fmt_run_date` is now shape-tolerant (scans for the `YYYYMMDDTHHMMSSZ` segment regardless of position).
+- Handler scaling and workers scaling probes now follow the **adaptive ramp** pattern (`start / stop / step / max_drift_pct` or `min_eff_pct`), mirroring the rate sweep. Self-termination keeps slow-box runs to ~1-3 minutes per deployment; explicit fixed-list configs are gone.
+- Gate / summary / report contract: data-only headlines (`gate.summary[*].headline`), no per-row interpretive prose, no FAIL banner. Interpretation lives in the dissertation, not the tool.
+- Bar-chart panels (timer / jitter / loopback) use horizontal bars with `±s²` error caps; loopback gets a translucent precision band `[φ-s², φ+s²]`.
+- Workers scaling panel: y-axis = "worker rate (req/s)", twin axis = "efficiency (%)", green-shaded verifiable region up to the stable knee.
+
+**Stop-gate verification.**
+
+1. `pytest tests/` -> 416+ passed (94 in calibration namespace; rest unaffected).
+2. `python -m tests.demo.calibration` runs end-to-end on `dpl=localhost`; prints the structured report; writes one envelope JSON.
+3. `data/img/calibration/<dpl>/{timer,jitter,loopback,handler_scaling,rate_sweep,summary}.{png,svg}` produced; `data/img/calibration/comparison/overlay.{png,svg}` produced.
+4. CLI mathtext strip verified: `_print_calibration_report` outputs `+/- 0.05 us`, `c <= 8`, `knee at c=4 (+1.2%)` (no leftover `$...$` markers).
+
+**Open follow-ups (none blocking).**
+
+- Commit a baseline envelope under `data/results/calibration/<dpl>/` for the case-study reference (user runs this manually as part of the stage-4 wrap-up).
+- `validate_experiment_against_envelope(exp_cfg, envelope)` helper — three guard checks against `c_max / r_max / w_max`. Adds 5 minutes when the experiment method (stage 5+) lands.
+- Multiprocess-specific tuning: if `n_clients=8` still leaves the client as the bottleneck on slow boxes, the next step is multi-host load generation (`wrk2`, `vegeta`, `oha`); currently out of scope.
+
+**Next step.** Stage 5 — wire the actual TAS service topology (`MAS_{1..3}`, `AS_{1..3}`, `DS_{3}`) under the experimental method, drive R1/R2 measurements against `data/config/profile/{dflt,opti}.json`, write per-request flow JSONLs and per-service CSVs. Calibration's `c_max / r_max / w_max` feeds the experiment's bounds checker.
+
 ## 2026-05-09 — Experimental stage 3 closed (runtime variants) + audit pass
 
 **Decision.** Close stage 3 of the `src/experimental/` rebuild ([log/prototype-refactor-plan.md](log/prototype-refactor-plan.md)) and run an audit pass over the new code.
