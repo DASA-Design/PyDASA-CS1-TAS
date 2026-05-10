@@ -300,6 +300,33 @@ _REPORT_LEGEND_LINES = (
     "Envelope: Operating limits where the apparatus's measurements\n remain trustworthy (concurrency knee + rate saturation knee).",
 )
 
+# Mathtext-to-terminal substitutions: gate.summary headlines use mathtext (`$\pm$`, `$\mu$s`,
+# `$\leq$`) so they render correctly in the matplotlib panel; for stdout we swap them for the
+# Unicode glyphs that any modern terminal can display.
+_TERMINAL_SUBSTITUTIONS = (
+    (r"$\pm$", "+/-"),
+    (r"$\mu$s", "us"),
+    (r"$\mu$", "u"),
+    (r"$\leq$", "<="),
+)
+
+
+def _to_terminal(text: str) -> str:
+    """Strip matplotlib mathtext markers from a headline string for stdout printing.
+
+    Args:
+        text (str): a headline as produced by `gate.summary[*]["headline"]` (may contain mathtext like `$\\pm$ 0.05 $\\mu$s`).
+
+    Returns:
+        str: the same headline with mathtext markers replaced by ASCII / Unicode equivalents readable in a terminal. Bare `$c=8$` style segments collapse to `c=8`.
+    """
+    _ans = text
+    for _src, _dst in _TERMINAL_SUBSTITUTIONS:
+        _ans = _ans.replace(_src, _dst)
+    # Strip any leftover bare `$...$` mathtext segments (e.g. `$c=8$` -> `c=8`).
+    _ans = _ans.replace("$", "")
+    return _ans
+
 
 def _print_calibration_report(envelope: dict[str, Any]) -> None:
     """Print the calibration report to stdout, matching the figure's Report panel.
@@ -345,12 +372,12 @@ def _print_calibration_report(envelope: dict[str, Any]) -> None:
     print()
     print("Floors")
     for _name, _label in (("timer", "Timer"), ("jitter", "Jitter"), ("loopback", "Loopback")):
-        _hl = _summary.get(_name, {}).get("headline", "n/a")
+        _hl = _to_terminal(_summary.get(_name, {}).get("headline", "n/a"))
         print(f"   {_label:<11} {_hl}")
     print()
     print("Envelope")
     for _name, _label in (("scaling", "Scaling"), ("rate", "Rate sweep"), ("workers", "Workers")):
-        _hl = _summary.get(_name, {}).get("headline", "n/a")
+        _hl = _to_terminal(_summary.get(_name, {}).get("headline", "n/a"))
         print(f"   {_label:<11} {_hl}")
     print()
     print("-" * 64)

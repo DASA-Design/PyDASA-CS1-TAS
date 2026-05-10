@@ -16,10 +16,10 @@ DFLT_RESULTS_BASE = Path("data/results")
 
 
 def make_run_id(prefix: str = "") -> str:
-    """Build a unique run id of the form `<UTC-ts>_<short-hash>`.
+    """Build a unique run id of the form `<UTC-ts>_<short-hash>`, optionally prefixed.
 
     Args:
-        prefix (str): optional label prepended (e.g. `s1`, `aggregate`); separated by `__`. Defaults to empty.
+        prefix (str): optional label prepended (e.g. `s1`, `aggregate`); separated by `_`. Defaults to empty.
 
     Returns:
         str: run-id string. Same call yields different output (uses a fresh secret-token nonce).
@@ -28,7 +28,7 @@ def make_run_id(prefix: str = "") -> str:
     _nonce = secrets.token_hex(4)
     _rid = f"{_ts}_{_nonce}"
     if prefix:
-        _rid = f"{prefix}__{_rid}"
+        _rid = f"{prefix}_{_rid}"
     return _rid
 
 

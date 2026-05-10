@@ -7,7 +7,7 @@ Six per-probe panels plus a 2x3 summary grid (with a Report panel) and an overla
 - `plot_jitter`: `chi-hat`, `phi`, `p_{95}`, `p_{99}` relative to target sleep; `s^2` as caps.
 - `plot_loopback`: `Min`, `phi`, `p_{95}`, `p_{99}`; precision band `[phi - s^2, phi + s^2]` shaded behind bars.
 - `plot_handler_scaling`: linear latency vs concurrency; three traces (`phi`, `p_{95}`, `p_{99}`) + p95-p99 fill.
-- `plot_workers_scaling`: per-worker rps + efficiency vs `n_workers`; vertical marker at the stable-knee.
+- `plot_workers_scaling`: worker rate (req/s) + efficiency vs `n_workers`; vertical marker at the stable-knee.
 - `plot_rate_sweep`: latency + loss-rate vs rate; verifiable region (below saturation) shaded green.
 - `plot_calibration_summary`: 2x3 grid; bottom-left slot shows `handler_scaling` on localhost and `workers_scaling` on multiprocess (the more actionable probe per mode); bottom-right is the Report.
 - `plot_envelope_overlay`: same 2x3 grid; the bottom-left slot falls back to `handler_scaling` when any envelope lacks workers data, ensuring localhost-vs-multiprocess overlays still produce a coherent panel.
@@ -181,7 +181,7 @@ def plot_workers_scaling(envelope: dict[str, Any],
                          file_path: str | None = None,
                          fname: str = "workers_scaling",
                          verbose: bool = False) -> Figure:
-    """Twin-axis plot of per-worker rps + efficiency percent vs `n_workers`, with the stable-knee marker.
+    """Twin-axis plot of worker rate (req/s) + efficiency percent vs `n_workers`, with the stable-knee marker.
 
     Args:
         envelope (dict[str, Any]): populated calibration envelope (reads `envelope["workers_scaling"]`).
@@ -235,8 +235,7 @@ def plot_calibration_summary(envelope: dict[str, Any],
                      subtract_floor=subtract_floor)
     _draw_report(_axes[1, 2], envelope.get("gate", {}), envelope=envelope)
     if title is None:
-        _title = (f"Calibration: {envelope.get('host', '?')}, "
-                  f"dpl={envelope.get('dpl', '?')}")
+        _title = f"Calibration: {envelope.get('dpl', '?')}"
     else:
         _title = title
     _fig.suptitle(_title, color=_TEXT_BLACK, fontsize=15, fontweight="bold")
@@ -252,9 +251,15 @@ def plot_envelope_overlay(envelopes: dict[str, dict[str, Any]],
                           fname: str = "overlay",
                           verbose: bool = False,
                           subtract_floor: bool = True) -> Figure:
-    """Cross-envelope overlay grid (2x3); the bottom-left scaling panel is mode-aware.
+    """Cross-envelope overlay grid (2 cols x 4 rows, portrait); bottom row is the Report (spans both columns).
 
-    Localhost overlays (no envelope carries `workers_scaling`) render handler_scaling so multiple localhost runs can be compared by per-handler concurrency. Multiprocess overlays (every envelope carries `workers_scaling`) render workers_scaling so multiple multiprocess runs can be compared by parallel-limit. Mixed-mode overlays fall back to handler_scaling.
+    Layout:
+        Row 0: Timer            | Jitter
+        Row 1: Loopback         | Rate sweep
+        Row 2: Handler scaling  | Workers scaling
+        Row 3: Calibration Reports (spans both columns)
+
+    Both scaling panels render every envelope's data even when only one mode populated each block (cross-mode overlays compare handler_scaling on the localhost line and workers_scaling on the multiprocess line in their respective panels).
 
     Args:
         envelopes (dict[str, dict[str, Any]]): label-to-envelope mapping. Order is preserved across the legend, Report-table columns, and the per-row offset on the bar panels.
@@ -268,43 +273,61 @@ def plot_envelope_overlay(envelopes: dict[str, dict[str, Any]],
         Figure: the matplotlib figure (caller owns its lifecycle).
     """
     _items = list(envelopes.items())
-    _all_have_workers = True
-    for _, _env in _items:
-        if not _has_workers_data(_env):
-            _all_have_workers = False
-    _fig, _axes = plt.subplots(2, 3, figsize=(18, 9))
+    _fig = plt.figure(figsize=(14, 18))
+    _gs = _fig.add_gridspec(4, 2)
+    _ax_timer = _fig.add_subplot(_gs[0, 0])
+    _ax_jitter = _fig.add_subplot(_gs[0, 1])
+    _ax_loopback = _fig.add_subplot(_gs[1, 0])
+    _ax_rate = _fig.add_subplot(_gs[1, 1])
+    _ax_handler = _fig.add_subplot(_gs[2, 0])
+    _ax_workers = _fig.add_subplot(_gs[2, 1])
+    _ax_report = _fig.add_subplot(_gs[3, 0:2])
+
     _palette = _generate_color_map(_items)
     _total = len(_items)
     for _i, (_label, _env) in enumerate(_items):
         _color = _palette[_i]
         _loopback = _env.get("loopback", {})
-        _draw_timer(_axes[0, 0], _env.get("timer", {}),
+        _draw_timer(_ax_timer, _env.get("timer", {}),
                     color=_color, label=_label, idx=_i, total=_total)
-        _draw_jitter(_axes[0, 1], _env.get("jitter", {}),
+        _draw_jitter(_ax_jitter, _env.get("jitter", {}),
                      color=_color, label=_label, idx=_i, total=_total)
-        _draw_loopback(_axes[0, 2], _loopback,
+        _draw_loopback(_ax_loopback, _loopback,
                        color=_color, label=_label, idx=_i, total=_total)
-        if _all_have_workers:
-            _draw_workers_scaling(_axes[1, 0],
-                                  _env.get("workers_scaling", {}),
-                                  color=_color, label=_label)
-        else:
-            _draw_handler_scaling(_axes[1, 0],
-                                  _env.get("handler_scaling", {}),
-                                  loopback=_loopback,
-                                  color=_color, label=_label,
-                                  subtract_floor=subtract_floor)
-        _draw_rate_sweep(_axes[1, 1],
+        _draw_rate_sweep(_ax_rate,
                          _env.get("rate", {}),
                          loopback=_loopback,
                          color=_color, label=_label,
                          subtract_floor=subtract_floor)
-    _draw_report_overlay(_axes[1, 2], envelopes)
-    # Report panel is text-only; skip its legend to silence "no artists" warnings.
-    for _ax in (_axes[0, 0], _axes[0, 1], _axes[0, 2], _axes[1, 0], _axes[1, 1]):
+        _draw_handler_scaling(_ax_handler,
+                              _env.get("handler_scaling", {}),
+                              loopback=_loopback,
+                              color=_color, label=_label,
+                              subtract_floor=subtract_floor)
+        _draw_workers_scaling(_ax_workers,
+                              _env.get("workers_scaling", {}),
+                              color=_color, label=_label)
+    _draw_report_overlay(_ax_report, envelopes)
+
+    # Legend per panel; skip those with no artists (e.g. an empty workers panel on a
+    # localhost-only overlay) to silence matplotlib's "no artists" warnings.
+    _has_handler = False
+    _has_workers = False
+    for _, _env in _items:
+        if _env.get("handler_scaling"):
+            _has_handler = True
+        if _has_workers_data(_env):
+            _has_workers = True
+    _legend_axes = [_ax_timer, _ax_jitter, _ax_loopback, _ax_rate]
+    if _has_handler:
+        _legend_axes.append(_ax_handler)
+    if _has_workers:
+        _legend_axes.append(_ax_workers)
+    for _ax in _legend_axes:
         _ax.legend(fontsize=9)
+
     if title is None:
-        _title = "Calibration overlay"
+        _title = "Calibration Overlay"
     else:
         _title = title
     _fig.suptitle(_title, color=_TEXT_BLACK, fontsize=15, fontweight="bold")
@@ -400,7 +423,7 @@ def _draw_jitter(ax: Axes,
                        xerr=_std)
     ax.set_xlabel(r"$[\mu s]$ (actual $-$ target; caps: $s^{2}$)", color=_TEXT_BLACK)
     if title is None:
-        _t = f"Jitter (target {_target_us / 1000:.0f} ms)"
+        _t = f"Jitter (target {_target_us / 1000:.1f} ms)"
     else:
         _t = title
     ax.set_title(_t, color=_TEXT_BLACK, fontweight="bold")
@@ -456,7 +479,7 @@ def _draw_handler_scaling(ax: Axes,
     _stats = block.get("stats", {})
     _cs = sorted(int(_k) for _k in _stats.keys())
     if not _cs:
-        ax.set_title(title or "Handler scaling", color=_TEXT_BLACK, fontweight="bold")
+        ax.set_title(title or "Handler Scaling", color=_TEXT_BLACK, fontweight="bold")
         return
     _floor = _resolve_floor_us(loopback, subtract_floor)
     _phi = [max(_stats[str(_c)].get("median_us", 0.0) - _floor, 0.0) for _c in _cs]
@@ -489,7 +512,7 @@ def _draw_handler_scaling(ax: Axes,
     ax.set_xlabel(r"concurrency $c$", color=_TEXT_BLACK)
     ax.set_ylabel(r"Latency $[\mu s]$", color=_TEXT_BLACK)
     if title is None:
-        _t = "Handler scaling"
+        _t = "Handler Scaling"
     else:
         _t = title
     ax.set_title(_t, color=_TEXT_BLACK, fontweight="bold")
@@ -526,9 +549,9 @@ def _draw_rate_sweep(ax: Axes,
     if title is None:
         _sat = block.get("saturation_rate")
         if _sat is None:
-            _t = "Rate sweep"
+            _t = "Rate Sweep"
         else:
-            _t = f"Rate sweep (sat. {_sat} req/s)"
+            _t = f"Rate Sweep (sat. {_sat} req/s)"
     else:
         _t = title
     ax.set_title(_t, color=_TEXT_BLACK, fontweight="bold")
@@ -551,14 +574,14 @@ def _draw_workers_scaling(ax: Axes,
                           title: str | None = None,
                           color: Any = _NEUTRAL_BAR,
                           label: str | None = None) -> None:
-    """Twin-axis: per-worker rps on the left, efficiency percent on the right; vertical marker at the stable knee.
+    """Twin-axis: worker rate (req/s) on the left, efficiency percent on the right; vertical marker at the stable knee.
 
     Args:
         ax (Axes): target axis.
         block (dict[str, Any]): the `workers_scaling` envelope block (`{ramp, per_step, stable_workers, ...}`).
-        title (str | None, optional): override title; defaults to "Workers scaling (stable n=N)" when a knee is known.
+        title (str | None, optional): override title; defaults to "Workers Scaling (stable n=N)" when a knee is known.
         color (Any, optional): primary trace colour.
-        label (str | None, optional): legend label for the per-worker rps trace.
+        label (str | None, optional): legend label for the worker-rate trace.
     """
     _per_step = block.get("per_step") or []
     _ns = [_row.get("n_workers", 0) for _row in _per_step]
@@ -571,16 +594,16 @@ def _draw_workers_scaling(ax: Axes,
         ax.axvline(_stable, color="#C44536", linestyle="--", linewidth=1.2,
                    alpha=0.7, label=f"stable (n={_stable})")
     if _ns:
-        _lat_label = label or "per-worker rps"
+        _lat_label = label or "worker rate"
         ax.plot(_ns, _per_w, marker="o", color=color,
                 linestyle="-", linewidth=2, label=_lat_label)
     ax.set_xlabel(r"workers $n$", color=_TEXT_BLACK)
-    ax.set_ylabel("per-worker rps", color=_TEXT_BLACK)
+    ax.set_ylabel("worker rate (req/s)", color=_TEXT_BLACK)
     if title is None:
         if _stable is None:
-            _t = "Workers scaling"
+            _t = "Workers Scaling"
         else:
-            _t = f"Workers scaling (stable n={_stable})"
+            _t = f"Workers Scaling (stable n={_stable})"
     else:
         _t = title
     ax.set_title(_t, color=_TEXT_BLACK, fontweight="bold")
@@ -638,17 +661,14 @@ def _draw_report(ax: Axes,
     _summary = gate_block.get("summary", {}) or {}
     if envelope is None:
         _host = "?"
-        _run = "?"
     else:
         _host = str(envelope.get("host", "?"))
-        _run = _fmt_run_date(envelope.get("run_id"))
     _noise = _fmt_noise_floor(gate_block.get("noise_floor_pct"))
     _wrapped = {"gate": gate_block}
 
     _y = 0.99
     _y = _draw_table_rows(ax,
                           names=[_host],
-                          run_values=[_run],
                           noise_values=[_noise],
                           band_values=[_overlay_band(_wrapped)],
                           c_values=[_overlay_c_max(_wrapped)],
@@ -657,7 +677,12 @@ def _draw_report(ax: Axes,
                           summaries=[_summary],
                           y=_y)
     _draw_legend_rows(ax, _y)
-    ax.set_title("Calibration Report", color=_NEUTRAL_BAR, fontweight="bold")
+    if envelope is None:
+        _dt = "?"
+    else:
+        _dt = _fmt_run_date(envelope.get("run_id"))
+    ax.set_title(f"Calibration Report\n{_host}: {_dt}",
+                 color=_NEUTRAL_BAR, fontweight="bold")
 
 
 def _fmt_noise_floor(value: Any) -> str:
@@ -676,45 +701,52 @@ def _fmt_noise_floor(value: Any) -> str:
 
 
 def _fmt_run_date(run_id: Any) -> str:
-    """Extract the ISO-style timestamp from a `calib_<YYYYMMDDTHHMMSSZ>_<hash>` run id.
+    """Extract the ISO-style timestamp from a run id minted by `make_run_id`.
+
+    Run ids are either `<timestamp>_<nonce>` (no prefix) or `<prefix>_<timestamp>_<nonce>` (with prefix); the timestamp is the only segment matching `YYYYMMDDTHHMMSSZ`. Scans the underscore-split parts for it.
 
     Args:
-        run_id (Any): the envelope's run id (string typically minted by `make_run_id`).
+        run_id (Any): the envelope's run id.
 
     Returns:
-        str: `YYYY-MM-DD HH:MM:SS` when the timestamp can be parsed; otherwise the raw run id (or `"?"` when missing).
+        str: `YYYY-MM-DD HH:MM:SS` when the timestamp segment is found; otherwise the raw run id (or `"?"` when missing / non-string).
     """
     _ans = "?"
     if isinstance(run_id, str) and run_id:
         _ans = run_id
-        _parts = run_id.split("_")
-        if len(_parts) >= 2:
-            _ts = _parts[1]
-            if len(_ts) == 16 and _ts[8] == "T" and _ts.endswith("Z"):
-                _ans = (f"{_ts[0:4]}-{_ts[4:6]}-{_ts[6:8]}"
-                        f" {_ts[9:11]}:{_ts[11:13]}:{_ts[13:15]}")
+        _ts: str | None = None
+        for _part in run_id.split("_"):
+            if _ts is None and _is_run_ts(_part):
+                _ts = _part
+        if _ts is not None:
+            _ans = (f"{_ts[0:4]}-{_ts[4:6]}-{_ts[6:8]}"
+                    f" {_ts[9:11]}:{_ts[11:13]}:{_ts[13:15]}")
     return _ans
+
+
+def _is_run_ts(s: str) -> bool:
+    """True iff `s` matches the `YYYYMMDDTHHMMSSZ` shape used by `make_run_id`."""
+    return len(s) == 16 and s[8] == "T" and s.endswith("Z")
 
 
 def _draw_table_rows(ax: Axes,
                      *,
                      names: list[str],
-                     run_values: list[str],
                      noise_values: list[str],
                      band_values: list[str],
                      c_values: list[str],
                      r_values: list[str],
                      w_values: list[str],
                      summaries: list[dict[str, Any]],
-                     y: float) -> float:
+                     y: float,
+                     x_offset: float = 0.0) -> float:
     """Render the borderless attribute-vs-column table.
 
-    Sections, top to bottom: column header (host names) -> RUN + NOISE FLOOR rows -> PRECISION BAND -> OPERATING RANGE (c / r / workers max) -> FLOORS (timer / jitter / loopback) -> ENVELOPE (scaling / rate / workers).
+    Sections, top to bottom: column header (host names) -> NOISE FLOOR -> PRECISION BAND -> OPERATING RANGE (c / r / workers max) -> FLOORS (timer / jitter / loopback) -> ENVELOPE (scaling / rate / workers). The run-id timestamp lives in the figure suptitle, not in the table.
 
     Args:
         ax (Axes): target axis.
         names (list[str]): one column header per envelope.
-        run_values (list[str]): per-column `run_id` values.
         noise_values (list[str]): per-column noise-floor budget strings.
         band_values (list[str]): per-column precision-band strings.
         c_values (list[str]): per-column `c_max` strings.
@@ -727,45 +759,57 @@ def _draw_table_rows(ax: Axes,
         float: next y-coordinate after the table.
     """
     _y = y
-    _y = _put_overlay_columns(ax, names, _y)
+    _y = _put_overlay_columns(ax, names, _y, x_offset=x_offset)
     _y -= _REPORT_LINE_H * 0.3
-    _y = _put_overlay_row(ax, "RUN:", run_values, _y, indent=False)
-    _y = _put_overlay_row(ax, "NOISE FLOOR:", noise_values, _y, indent=False)
+    _y = _put_overlay_row(ax, "NOISE FLOOR:", noise_values, _y,
+                          indent=False, x_offset=x_offset)
     _y -= _REPORT_LINE_H * 0.3
-    _y = _put_overlay_row(ax, "PRECISION BAND:", band_values, _y, indent=False)
+    _y = _put_overlay_row(ax, "PRECISION BAND:", band_values, _y,
+                          indent=False, x_offset=x_offset)
     _y -= _REPORT_LINE_H * 0.3
-    _y = _put_section(ax, "OPERATING RANGE:", _y)
-    _y = _put_overlay_row(ax, "Concurrency:", c_values, _y, indent=True)
-    _y = _put_overlay_row(ax, "Rate:", r_values, _y, indent=True)
-    _y = _put_overlay_row(ax, "Workers:", w_values, _y, indent=True)
+    _y = _put_section(ax, "OPERATING RANGE:", _y, x_offset=x_offset)
+    _y = _put_overlay_row(ax, "Concurrency:", c_values, _y,
+                          indent=True, x_offset=x_offset)
+    _y = _put_overlay_row(ax, "Rate:", r_values, _y,
+                          indent=True, x_offset=x_offset)
+    _y = _put_overlay_row(ax, "Workers:", w_values, _y,
+                          indent=True, x_offset=x_offset)
     _y -= _REPORT_LINE_H * 0.3
-    _y = _put_section(ax, "FLOORS:", _y)
+    _y = _put_section(ax, "FLOORS:", _y, x_offset=x_offset)
     for _name, _label in (("timer", "Timer:"), ("jitter", "Jitter:"), ("loopback", "Loopback:")):
         _vals = [_s.get(_name, {}).get("headline", "n/a") for _s in summaries]
-        _y = _put_overlay_row(ax, _label, _vals, _y, indent=True)
+        _y = _put_overlay_row(ax, _label, _vals, _y,
+                              indent=True, x_offset=x_offset)
     _y -= _REPORT_LINE_H * 0.3
-    _y = _put_section(ax, "ENVELOPE:", _y)
+    _y = _put_section(ax, "ENVELOPE:", _y, x_offset=x_offset)
     for _name, _label in (("scaling", "Scaling:"), ("rate", "Rate sweep:"), ("workers", "Workers:")):
         _vals = [_s.get(_name, {}).get("headline", "n/a") for _s in summaries]
-        _y = _put_overlay_row(ax, _label, _vals, _y, indent=True)
+        _y = _put_overlay_row(ax, _label, _vals, _y,
+                              indent=True, x_offset=x_offset)
     _y -= _REPORT_LINE_H * 0.3
     return _y
 
 
-def _draw_legend_rows(ax: Axes, y: float) -> None:
-    """Static three-block legend explaining Latency / Floors / Envelope; bold labels, regular body."""
+def _draw_legend_rows(ax: Axes, y: float, *, x_offset: float = 0.0) -> None:
+    """Static three-block legend explaining Latency / Floors / Envelope; bold labels, regular body.
+
+    Args:
+        ax (Axes): target axis.
+        y (float): top y-coordinate (axes-fraction).
+        x_offset (float, optional): horizontal shift; used by the overlay's spanning panel to centre content.
+    """
     _y = y
-    ax.text(_REPORT_LABEL_X, _y, "─" * 64,
+    ax.text(_REPORT_LABEL_X + x_offset, _y, "─" * 64,
             transform=ax.transAxes, va="top",
             fontsize=_REPORT_FONTSIZE, color=_TEXT_BLACK, family="monospace")
     _y -= _REPORT_LINE_H
     for _label, _body_lines in _REPORT_LEGEND_ROWS:
-        ax.text(_REPORT_LABEL_X, _y, _label,
+        ax.text(_REPORT_LABEL_X + x_offset, _y, _label,
                 transform=ax.transAxes, va="top",
                 fontsize=_REPORT_FONTSIZE, fontweight="bold",
                 color=_TEXT_BLACK, family="monospace")
         for _line in _body_lines:
-            ax.text(_REPORT_LEGEND_BODY_X, _y, _line,
+            ax.text(_REPORT_LEGEND_BODY_X + x_offset, _y, _line,
                     transform=ax.transAxes, va="top",
                     fontsize=_REPORT_FONTSIZE,
                     color=_TEXT_BLACK, family="monospace")
@@ -786,9 +830,9 @@ def _put_kv(ax: Axes, label: str, value: str, y: float) -> float:
     return y - _REPORT_LINE_H
 
 
-def _put_section(ax: Axes, label: str, y: float) -> float:
+def _put_section(ax: Axes, label: str, y: float, *, x_offset: float = 0.0) -> float:
     """Render a bold uppercase section label on its own row; return the next y."""
-    ax.text(_REPORT_LABEL_X, y, label,
+    ax.text(_REPORT_LABEL_X + x_offset, y, label,
             transform=ax.transAxes, va="top",
             fontsize=_REPORT_FONTSIZE, fontweight="bold",
             color=_TEXT_BLACK, family="monospace")
@@ -804,7 +848,6 @@ def _draw_report_overlay(ax: Axes,
     ax.axis("off")
     _items = list(envelopes.items())
     _names = [str(_label) for _label, _ in _items]
-    _run_values = [_fmt_run_date(_env.get("run_id")) for _, _env in _items]
     _noise_values = [_fmt_noise_floor(_env.get("gate", {}).get("noise_floor_pct"))
                      for _, _env in _items]
     _band_values = [_overlay_band(_env) for _, _env in _items]
@@ -813,55 +856,76 @@ def _draw_report_overlay(ax: Axes,
     _w_values = [_overlay_w_max(_env) for _, _env in _items]
     _summaries = [_env.get("gate", {}).get("summary", {}) or {} for _, _env in _items]
 
+    # Centre the table + legend in the spanning panel: estimate the content width
+    # (label column + N value columns + a margin), then offset by half the leftover.
+    _content_w = _REPORT_LABEL_X + (len(_names) * _OVERLAY_COL_WIDTH) + 0.05
+    _x_offset = max(0.0, (1.0 - _content_w) / 2.0 - _REPORT_LABEL_X)
+
     _y = 0.99
     _y = _draw_table_rows(ax,
                           names=_names,
-                          run_values=_run_values,
                           noise_values=_noise_values,
                           band_values=_band_values,
                           c_values=_c_values,
                           r_values=_r_values,
                           w_values=_w_values,
                           summaries=_summaries,
-                          y=_y)
-    _draw_legend_rows(ax, _y)
-    ax.set_title("Calibration Reports", color=_NEUTRAL_BAR, fontweight="bold")
+                          y=_y,
+                          x_offset=_x_offset)
+    _draw_legend_rows(ax, _y, x_offset=_x_offset)
+    _segments: list[str] = []
+    for _, _env in _items:
+        _segments.append(f"{_env.get('host', '?')}: {_fmt_run_date(_env.get('run_id'))}")
+    if _segments:
+        _subtitle = " vs ".join(_segments)
+    else:
+        _subtitle = "?"
+    ax.set_title(f"Calibration Reports\n{_subtitle}",
+                 color=_NEUTRAL_BAR, fontweight="bold")
 
 
 def _overlay_columns_x(n: int) -> list[float]:
     """Compute the left edge of each value column in the overlay table.
 
+    Uses a fixed per-column width so the table content stays packed near the centre of the panel rather than spreading across the full width (the overlay's Report cell spans two grid columns and would otherwise leave a wide empty gap on the right).
+
     Args:
         n (int): number of envelope columns.
 
     Returns:
-        list[float]: x positions (axes-fraction); evenly spaced from 0.30 to 1.0.
+        list[float]: x positions (axes-fraction); each column is `_OVERLAY_COL_WIDTH` apart, starting at `_OVERLAY_COL_START`.
     """
     _ans: list[float] = []
-    if n > 0:
-        _start = 0.30
-        _width = (1.0 - _start) / n
-        _i = 0
-        while _i < n:
-            _ans.append(_start + _i * _width)
-            _i += 1
+    _i = 0
+    while _i < n:
+        _ans.append(_OVERLAY_COL_START + _i * _OVERLAY_COL_WIDTH)
+        _i += 1
     return _ans
 
 
-def _put_overlay_columns(ax: Axes, names: list[str], y: float) -> float:
+_OVERLAY_COL_START = 0.20
+_OVERLAY_COL_WIDTH = 0.15
+
+
+def _put_overlay_columns(ax: Axes,
+                         names: list[str],
+                         y: float,
+                         *,
+                         x_offset: float = 0.0) -> float:
     """Render the column-header row (uppercase bold envelope names).
 
     Args:
         ax (Axes): target axis.
         names (list[str]): envelope labels (one per column).
         y (float): top y-coordinate (axes-fraction).
+        x_offset (float, optional): horizontal shift applied to every column position; used by the overlay's spanning panel to centre content.
 
     Returns:
         float: next y-coordinate after the row.
     """
     _xs = _overlay_columns_x(len(names))
     for _x, _name in zip(_xs, names, strict=True):
-        ax.text(_x, y, _name.upper(),
+        ax.text(_x + x_offset, y, _name.upper(),
                 transform=ax.transAxes, va="top",
                 fontsize=_REPORT_FONTSIZE, fontweight="bold",
                 color=_TEXT_BLACK, family="monospace")
@@ -873,7 +937,8 @@ def _put_overlay_row(ax: Axes,
                      values: list[str],
                      y: float,
                      *,
-                     indent: bool) -> float:
+                     indent: bool,
+                     x_offset: float = 0.0) -> float:
     """Render one table row: bold label + one value per envelope column.
 
     Args:
@@ -882,6 +947,7 @@ def _put_overlay_row(ax: Axes,
         values (list[str]): per-envelope value strings; length must match the column count.
         y (float): top y-coordinate.
         indent (bool): True for nested rows under a section header (uses `_REPORT_ROW_LABEL_X`).
+        x_offset (float, optional): horizontal shift applied to label + every column; used by the overlay's spanning panel to centre content.
 
     Returns:
         float: next y-coordinate after the row.
@@ -890,13 +956,13 @@ def _put_overlay_row(ax: Axes,
         _x_label = _REPORT_ROW_LABEL_X
     else:
         _x_label = _REPORT_LABEL_X
-    ax.text(_x_label, y, label,
+    ax.text(_x_label + x_offset, y, label,
             transform=ax.transAxes, va="top",
             fontsize=_REPORT_FONTSIZE, fontweight="bold",
             color=_TEXT_BLACK, family="monospace")
     _xs = _overlay_columns_x(len(values))
     for _x, _val in zip(_xs, values, strict=True):
-        ax.text(_x, y, _val,
+        ax.text(_x + x_offset, y, _val,
                 transform=ax.transAxes, va="top",
                 fontsize=_REPORT_FONTSIZE,
                 color=_TEXT_BLACK, family="monospace")

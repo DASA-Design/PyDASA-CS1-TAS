@@ -2,6 +2,53 @@
 
 Running log of design decisions, pivots, and open questions for the Tele Assistance System case study. Append only; newest entry on top.
 
+## 2026-05-09 — Experimental stage 3 closed (runtime variants) + audit pass
+
+**Decision.** Close stage 3 of the `src/experimental/` rebuild ([log/prototype-refactor-plan.md](log/prototype-refactor-plan.md)) and run an audit pass over the new code.
+
+**What landed (stage 3).** Six modules under [src/experimental/prototype/runtime/](src/experimental/prototype/runtime/):
+
+- `server.py`: `ServerAdapter` ABC + `FastAPIAdapter` / `FlaskAdapter` + `Handler` protocol + `make_server_adapter` factory + `FlaskProcess` / `ManagedProcess` type aliases.
+- `uvicorn_process.py` / `waitress_process.py` / `gunicorn_process.py`: `mp.spawn` process spawners, identical surface (`start` / `wait_ready` / `shutdown` / `is_alive`). Each registers in a module-level `WeakSet` + `atexit` hook for crash-path zombie cleanup. `GunicornProcess` raises on Windows pointing at `WaitressProcess`; gunicorn import gated by `try / except ImportError` (POSIX-only).
+- `os_timer.py`: `windows_timer_resolution` ctxmgr (winmm wrapper, no-op on POSIX).
+- `async_loop.py`: `run_async_safe` (Jupyter-safe sync entry); `CoroFactory: TypeAlias = Callable[[], Coroutine[Any, Any, Any]]`.
+- `config.py`: loader for `data/config/method/experimental.json::server.{uvicorn,waitress,gunicorn}` runtime tuning blocks.
+
+**Test surface.** [tests/experimental/prototype/runtime/](tests/experimental/prototype/runtime/) mirrors the source 1:1; 50 tests, 90% coverage on the runtime package. Linux-only spawn paths exercised on Windows by mocking `multiprocessing.get_context` + `httpx.get`. Shared helpers added at [tests/utils/exp/apps.py](tests/utils/exp/apps.py) (FastAPI + Flask `/healthz` factories, picklable across `mp.spawn`) and a new [tests/utils/exp/ports.py](tests/utils/exp/ports.py) (`free_port()` + `PORT_MOCK = 9042` sentinel).
+
+**Demo.** [tests/demo/runtime.py](tests/demo/runtime.py): `python -m tests.demo.runtime` brings up FastAPI (uvicorn) + Flask (waitress) side-by-side on free localhost ports, hits `/healthz` on each over real TCP, prints responses, tears down.
+
+**Deps pinned.** `flask==3.1.3`, `waitress==3.0.2`, `gunicorn==23.0.0; sys_platform != "win32"`.
+
+**Audit pass — what changed.**
+
+- Constants `_DFLT_*` privatised across all three spawners; constructors take `ready_timeout_s` / `terminate_grace_s` / `kill_grace_s` kwargs sourced from `experimental.json::server.<spawner>.*`.
+- `ServerAdapter.wait_ready(timeout_s=None)` now propagates to the spawner's configured `_ready_timeout_s` instead of hard-coding 10.0.
+- gunicorn import refactor: `if sys.platform != "win32":` block replaced with standard `try / except ImportError` optional-dep idiom; `_GunicornDriver` (renamed from `_GunicornApp`) lives at module scope unconditionally.
+- Pyright literal-narrowing fix: platform check delegated to `_check_linux_or_raise()` so `__init__` body stays reachable.
+- Dead code removed: vestigial `from ...async_loop import CoroFactory` re-export in `uvicorn_process.py`; `AttributeError` from `os_timer.py` exception list (cannot fire after `sys.platform` guard); literal-narrowed `if sys.platform == "win32":` branch in `async_loop._worker_run_coro` (Python 3.8+ `WindowsProactorEventLoopPolicy` already returns the right loop class).
+- Test cleanup: `test_flask_picks_gunicorn` deleted (duplicate of `test_make_flask_gunicorn`); vacuous `assert GunicornProcess is not None` deleted; nested `def`s in `test_async_loop.py` lifted to module scope; lazy imports moved to module top in `test_uvicorn_process.py` + `test_waitress_process.py`; `port=0` / `port=1` sentinel values replaced with 9042+ via `PORT_MOCK` and `free_port()`; `tests/experimental/prototype/runtime/conftest.py` deleted (only one `conftest.py` per `tests/experimental/`); test method names shortened across the runtime suite.
+- Module + class + method docstrings rewritten across the runtime package + test mirror: shorter, plain-language, less code-symbol density.
+- Atexit hook + `_LIVE_PROCESSES` registry inline-commented across all three spawners (one-liner `# Crash-path safety net.` and `# Live spawners; atexit cleans these up on exit.`).
+
+**Stop-gate verification.**
+
+1. `pytest tests/experimental/` -> 135 passed (50 new under `runtime/`).
+2. `pytest tests/` -> 308 passed (full surviving suite + new runtime tests).
+3. `python -m tests.demo.{log_format,client,runtime}` all run cleanly.
+4. `grep -r "src\.experiment\|src\.calibration\|MockTransport" src/` -> zero hits (transport mock allowed only in `tests/`).
+5. Coverage: 95% on `src/experimental/`; 90% on `src/experimental/prototype/runtime/` specifically. Above the 80% gate.
+
+**Conventions captured elsewhere this turn.**
+
+- Memory: [project_experimental_stage_3_closed_2026_05_08.md](C:/Users/Felipe/.claude/projects/c--Users-Felipe-OneDrive-Documents-GitHub-DASA-Design-PyDASA-CS1-TAS/memory/project_experimental_stage_3_closed_2026_05_08.md) records the stage-3 closure + naming pins (mocking pattern for Linux-only spawn, app-factory pickling rule).
+- New rule pinned: app factories that cross `mp.spawn` boundaries MUST be top-level functions (closures + lambdas don't survive Windows pickle).
+
+**Next steps.**
+
+- Stage 4: calibration ping/echo (`prototype/calibration/{vernier,hoststats,rate,envelope,gate}.py`); `tests/demo/vernier.py`; first end-to-end run of the apparatus through a 1-service mesh.
+- Stage 5: deployment options (`localhost` / `multiprocess` / `remote`); calibration reruns under all three.
+
 ## 2026-05-07 — `notes/case-study.md` rebuilt as full ACS 6-section reconstruction; SVG-crop pattern locked
 
 **Decision.** Replace the ad-hoc 129-line `notes/case-study.md` with a clean ACS 6-section reconstruction merged from `__OLD__/notes/context.md` (long-form draft) and `__OLD__/notes/objective.md` (concise version). Lock down an inline-SVG figure-embedding pattern that survives VS Code markdown preview's HTML sanitizer.

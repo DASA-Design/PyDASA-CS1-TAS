@@ -38,7 +38,7 @@ def _synth_envelope(*,
     """
     _env: dict[str, Any] = {
         "version": "1.0",
-        "run_id": "calib__test",
+        "run_id": "calib_test",
         "host": host,
         "dpl": dpl,
         "framework": "fastapi",

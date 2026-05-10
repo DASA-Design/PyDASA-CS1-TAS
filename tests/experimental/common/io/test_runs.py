@@ -3,7 +3,7 @@
 **TestRuns**:
 
 - `test_run_id_unique`: confirms the run-id generator is non-repeating across consecutive calls so each run gets a stable, unique handle.
-- `test_run_id_prefix`: confirms a non-empty prefix is preserved verbatim with the `__` separator (so adaptation labels survive into filenames).
+- `test_run_id_prefix`: confirms a non-empty prefix is preserved verbatim with a single `_` separator (so adaptation labels survive into filenames).
 - `test_run_paths_layout`: confirms every path in `RunPaths` resolves under `<base>/experimental/<adp>/...` and matches the canonical filenames the orchestrator expects.
 - `test_run_paths_ensure_creates_dirs`: confirms `RunPaths.ensure()` materialises the flow, csv, and logs directories so subsequent writers find them in place.
 """
@@ -29,9 +29,11 @@ class TestRuns:
         assert _a != _b
 
     def test_run_id_prefix(self) -> None:
-        """A non-empty prefix is prepended verbatim with the `__` separator, so adaptation labels (`s1`, `aggregate`, ...) appear at the start of the run id."""
+        """A non-empty prefix is prepended verbatim with a single `_` separator, so adaptation labels (`s1`, `aggregate`, ...) appear at the start of the run id."""
         _rid = make_run_id("s1")
-        assert _rid.startswith("s1__")
+        assert _rid.startswith("s1_")
+        # Ensure no double underscore (legacy format) leaks back in.
+        assert not _rid.startswith("s1__")
 
     def test_run_paths_layout(self, tmp_path: Path) -> None:
         """`make_run_paths` resolves the canonical run-folder layout: every path lands under `<base>/experimental/<adp>/...` with the expected filenames for flows, csv, parquet, requirements, and logs.
