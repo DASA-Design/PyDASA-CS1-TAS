@@ -326,7 +326,10 @@ def _build_mesh_specs(*,
         ValueError: when `target_granularity="expanded"` and `stage_routes` is None.
     """
     _catalogue = load_catalogue(catalogue_version)
-    _atomic_ids = sorted(_catalogue.entries.keys())
+    # Spawn only the catalogue entries the active profile declares (mu_lt is keyed by
+    # artifact id). Different adp values can declare different service sets while
+    # sharing one catalogue layer that covers the union.
+    _atomic_ids = sorted(_id for _id in _catalogue.entries if _id in mu_lt)
     _is_expanded = target_granularity == "expanded"
     if _is_expanded and stage_routes is None:
         _msg = "stage_routes is required when target_granularity='expanded'"
@@ -396,10 +399,6 @@ def _build_mesh_specs(*,
 
     for _svc_id in _atomic_ids:
         _entry = _catalogue.lookup(_svc_id)
-        if _svc_id not in mu_lt:
-            _msg = f"profile specs layer is missing mu for service id {_svc_id!r}; "
-            _msg += "profile must declare every catalogue service"
-            raise KeyError(_msg)
         _atomic_factory = functools.partial(
             build_atomic_fastapi_app,
             svc_name=_svc_id,

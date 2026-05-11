@@ -1,6 +1,6 @@
 {
     "_note": "Target-system bindings for src/experimental/prototype/target/factory/. Selects catalogue + workflow, sets ports / admission caps / timeouts; `trial` carries the load-generation knobs. `target_granularity` picks between the collapsed topology (1 composite + 7 third-party atomics) and the expanded topology (1 composite + 5 internal-stage atomics + 7 third-party atomics). `inject_internal_stage_mu` only affects the TAS framework atomics (TAS_{2..6}); third-party atomics always sleep on mu.",
-    "catalogue_version": "weyns_2015",
+    "catalogue_version": "weyns_iftikhar_2016",
     "workflows": {
         "_note": "Two on-disk workflow files, one per architectural view. The orchestrator picks `collapsed` or `expanded` based on `target_granularity` and threads the chosen stem into the TAS_1 factory.",
         "collapsed": "tas",

@@ -27,7 +27,10 @@ from src.experimental.common.registry.cache import ServiceCache
 from src.experimental.common.registry.description import ServiceDescription
 from src.experimental.common.registry.service import ServiceRegistry
 from src.experimental.prototype.target.factory.healthz import add_healthz_route
-from src.experimental.prototype.target.service.catalogue import load_catalogue
+from src.experimental.prototype.target.service.catalogue import (
+    ServiceCatalogue,
+    load_catalogue,
+)
 from src.experimental.prototype.target.service.client import (
     DFLT_TIMEOUT_S,
     ServiceClient,
@@ -38,6 +41,27 @@ from src.experimental.prototype.target.workflow.loader import (
     DFLT_WORKFLOW_NAME,
     load_workflow,
 )
+
+
+def _filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
+                              endpoint_lt: dict[str, str]) -> ServiceCatalogue:
+    """Return a new catalogue restricted to entries the active mesh actually spawned.
+
+    The on-disk catalogue layer (e.g. `weyns_iftikhar_2016`) lists every service across all adp scenarios. The active mesh only spawns the services declared in the active profile (e.g. baseline gets DS_{3}; s2 gets DS_{1}). Without this filter, `catalogue.by_kind` would happily return services the cache can't reach and the picker would hand them to `ServiceClient.invoke_operation` which then raises `UnknownServiceError`.
+
+    Args:
+        catalogue (ServiceCatalogue): full on-disk catalogue.
+        endpoint_lt (dict[str, str]): `svc_id -> URL` map of the active third-party mesh.
+
+    Returns:
+        ServiceCatalogue: same `name` / `source`, but `entries` filtered to ids in `endpoint_lt`.
+    """
+    _filtered = {_id: _entry for _id, _entry in catalogue.entries.items()
+                 if _id in endpoint_lt}
+    _ans = ServiceCatalogue(name=catalogue.name,
+                            source=catalogue.source,
+                            entries=_filtered)
+    return _ans
 
 
 def _build_registry(endpoint_lt: dict[str, str]) -> ServiceRegistry:
@@ -121,7 +145,7 @@ def build_tas_fastapi_app(*,
         _all_endpoints.update(internal_endpoint_lt)
     _registry = _build_registry(_all_endpoints)
     _cache = ServiceCache(_registry)
-    _catalogue = load_catalogue(catalogue_version)
+    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), endpoint_lt)
     _workflow_spec = load_workflow(workflow_name)
     _engine = WorkflowEngine(spec=_workflow_spec, catalogue=_catalogue)
     if flows_path is None:

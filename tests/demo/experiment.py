@@ -190,7 +190,10 @@ def save(rows: list[dict[str, Any]]) -> Path:
 
 
 def main() -> None:
-    """Run four trials (one per adp), print each, print a comparison table, save the summary JSON."""
+    """Run four trials (one per adp), print each, print a comparison table, save the summary JSON.
+
+    Each adp spawns its own service set per the active profile's `_nodes` (baseline / s1 use dflt's MAS_3, AS_3, DS_3; s2 / aggregate use opti's MAS_4, AS_4, DS_1). All four runs are full restarts.
+    """
     _runs: list[tuple[str, str]] = [
         ("baseline",            "baseline"),
         ("s1 retry",            "s1"),
