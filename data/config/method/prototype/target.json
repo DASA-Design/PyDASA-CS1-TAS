@@ -40,8 +40,9 @@
         "c": null
     },
     "trial": {
-        "n_requests": 1000,
-        "request_rate_per_s": 10,
+        "_note_rate": "request_rate_per_s = 345 matches `lambda_z` = TAS_{1}.lambda_z in `data/config/profile/dflt.json` (the case-study design point). The latest calibration on this host measured a per-worker saturation knee at ~328 req/s, so the envelopes under `data/results/calibration/<dpl>/` were manually bumped to `r_max_req_s = 350` to keep the bounds gate aligned with the case-study design rather than the host's hardware ceiling. The undershoot (real throughput < 345) lands in `verdict.operational.X_0_req_per_s` for stage 9 to see.",
+        "n_requests": 10000,
+        "request_rate_per_s": 345,
         "kind_probability": {
             "alarm": 0.25,
             "medical_analysis": 0.75
@@ -56,7 +57,7 @@
     "controller": {
         "_note": "Thin MAPE-K agent for the target system: M = poll TAS_1 /samples; E = one-shot POST /config to TAS_1 at trial start. A and P are not modelled; the decision is the run's `adp` value.",
         "port": 9001,
-        "ready_timeout_s": 5.0,
+        "ready_timeout_s": 20.0,
         "poll_interval_ms": 100,
         "warmup_n": 100,
         "r1_r2_stop_enabled": true,
