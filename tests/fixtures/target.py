@@ -35,6 +35,21 @@ DEFAULT_STAGE_ROUTES: dict[str, dict[str, str]] = {
     },
 }
 
+DEFAULT_STRATEGIES: dict[str, Any] = {
+    "max_attempts": 3,
+    "window_size": 100,
+}
+
+DEFAULT_CONTROLLER: dict[str, Any] = {
+    "port": 19001,
+    "ready_timeout_s": 5.0,
+    "poll_interval_ms": 50,
+    "warmup_n": 10,
+    "r1_r2_stop_enabled": True,
+    "orchestrator_poll_every_n": 5,
+    "samples_buffer_size": 1024,
+}
+
 
 def make_target_cfg(*,
                     catalogue_version: str = "weyns_2015",
@@ -47,7 +62,9 @@ def make_target_cfg(*,
                     ready_timeout_s: float = 5.0,
                     request_timeout_s: float = 1.0,
                     atomic_admission: dict[str, Any] | None = None,
-                    trial: dict[str, Any] | None = None) -> dict[str, Any]:
+                    trial: dict[str, Any] | None = None,
+                    strategies: dict[str, Any] | None = None,
+                    controller: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build a target-config dict shaped like the on-disk `target.json`.
 
     Args:
@@ -86,6 +103,14 @@ def make_target_cfg(*,
         _stage_routes: dict[str, Any] = {_k: dict(_v) for _k, _v in DEFAULT_STAGE_ROUTES.items()}
     else:
         _stage_routes = stage_routes
+    if strategies is None:
+        _strategies = dict(DEFAULT_STRATEGIES)
+    else:
+        _strategies = strategies
+    if controller is None:
+        _controller = dict(DEFAULT_CONTROLLER)
+    else:
+        _controller = controller
     _ans = {
         "catalogue_version": catalogue_version,
         "workflows": _workflows,
@@ -98,12 +123,16 @@ def make_target_cfg(*,
         "request_timeout_s": request_timeout_s,
         "atomic_admission": _admission,
         "trial": _trial,
+        "strategies": _strategies,
+        "controller": _controller,
     }
     return _ans
 
 
 __all__ = [
+    "DEFAULT_CONTROLLER",
     "DEFAULT_STAGE_ROUTES",
+    "DEFAULT_STRATEGIES",
     "DEFAULT_WORKFLOWS",
     "make_target_cfg",
 ]

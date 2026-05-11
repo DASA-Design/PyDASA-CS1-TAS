@@ -43,7 +43,8 @@ class RunPaths:
         flows (Path): per-request flow JSONL file path.
         csv_dir (Path): directory holding per-service per-pid CSV logs.
         runs_parquet (Path): cross-run summary parquet path (one row per run).
-        adaptation_reqs (Path): R1 + R2 verdict JSON path.
+        verdict_json (Path): post-trial verdict (R1 / R2 + operational variables + stop reason). Bit-comparable across `adp` runs.
+        window_parquet (Path): per-sample trajectory drained from the controller's `/history`. Inputs for stage-7+ R1 / R2 trajectory plots.
         logs_dir (Path): per-process Python-logging output directory.
     """
 
@@ -53,7 +54,8 @@ class RunPaths:
     flows: Path
     csv_dir: Path
     runs_parquet: Path
-    adaptation_reqs: Path
+    verdict_json: Path
+    window_parquet: Path
     logs_dir: Path
 
     def ensure(self) -> None:
@@ -61,10 +63,13 @@ class RunPaths:
         self.root.mkdir(parents=True, exist_ok=True)
         self.flows.parent.mkdir(parents=True, exist_ok=True)
         self.csv_dir.mkdir(parents=True, exist_ok=True)
+        self.window_parquet.parent.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
 
-def make_run_paths(adp: str, run_id: str, base: Path = DFLT_RESULTS_BASE) -> RunPaths:
+def make_run_paths(adp: str,
+                   run_id: str,
+                   base: Path = DFLT_RESULTS_BASE) -> RunPaths:
     """Resolve every path used by one experimental run.
 
     Args:
@@ -83,7 +88,8 @@ def make_run_paths(adp: str, run_id: str, base: Path = DFLT_RESULTS_BASE) -> Run
         flows=_root / "flows" / f"{run_id}.jsonl",
         csv_dir=_root / "csv",
         runs_parquet=_root / "runs.parquet",
-        adaptation_reqs=_root / "adaptation-reqs.json",
+        verdict_json=_root / "verdict.json",
+        window_parquet=_root / "window" / f"{run_id}.parquet",
         logs_dir=_root / "logs" / run_id,
     )
     return _paths

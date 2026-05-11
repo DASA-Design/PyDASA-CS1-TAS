@@ -40,12 +40,27 @@
         "c": null
     },
     "trial": {
-        "n_requests": 42,
+        "n_requests": 1000,
         "request_rate_per_s": 10,
         "kind_probability": {
             "alarm": 0.25,
             "medical_analysis": 0.75
         },
         "atomic_response_time_overrides": null
+    },
+    "strategies": {
+        "_note": "Honoured by controller.strategies.make_picker; the controller threads these to TAS_1 via POST /config at trial start.",
+        "max_attempts": 3,
+        "window_size": 100
+    },
+    "controller": {
+        "_note": "Thin MAPE-K agent for the target system: M = poll TAS_1 /samples; E = one-shot POST /config to TAS_1 at trial start. A and P are not modelled; the decision is the run's `adp` value.",
+        "port": 9001,
+        "ready_timeout_s": 5.0,
+        "poll_interval_ms": 100,
+        "warmup_n": 100,
+        "r1_r2_stop_enabled": true,
+        "orchestrator_poll_every_n": 10,
+        "samples_buffer_size": 1024
     }
 }

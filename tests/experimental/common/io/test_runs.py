@@ -46,7 +46,8 @@ class TestRuns:
         assert _paths.flows == _paths.root / "flows" / "rid123.jsonl"
         assert _paths.csv_dir == _paths.root / "csv"
         assert _paths.runs_parquet == _paths.root / "runs.parquet"
-        assert _paths.adaptation_reqs == _paths.root / "adaptation-reqs.json"
+        assert _paths.verdict_json == _paths.root / "verdict.json"
+        assert _paths.window_parquet == _paths.root / "window" / "rid123.parquet"
         assert _paths.logs_dir == _paths.root / "logs" / "rid123"
         assert isinstance(_paths, RunPaths)
 

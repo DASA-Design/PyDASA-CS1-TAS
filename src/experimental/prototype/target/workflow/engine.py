@@ -1,8 +1,8 @@
 """WorkflowEngine: drive one request through a `WorkflowSpec` (Weyns & Calinescu 2015 Fig. 1).
 
-Takes one inbound payload, picks the matching branch, dispatches the `first` atomic call via the supplied `ServiceClient`, and (when the branch declares `on_result`) follows up with the matching second call. Returns `(body, status)` plus a per-step audit trail.
+Picks the matching branch from the request `kind`, dispatches via the supplied `ServiceClient`, follows the `on_result` link when the first step completes, and returns `(body, status)` with a per-attempt audit trail.
 
-Service selection within a `svc_kind` step is delegated to a pluggable `picker` callable so adaptation strategies can replace the default first-of-kind behaviour without touching the engine. Status `0` from the client (transport error) is surfaced as `502` to the outer caller.
+Service selection is delegated to a picker callable, so adaptation strategies can swap the dispatch policy without touching the engine. Reliability-aware strategies receive feedback through an optional `picker.observe(svc_id, success)` hook.
 """
 
 from __future__ import annotations
@@ -22,20 +22,21 @@ from src.experimental.prototype.target.workflow.loader import (
     WorkflowStepSpec,
 )
 
-ServicePicker = Callable[[str, ServiceCatalogue], ServiceCatalogueEntry]
+ServicePicker = Callable[[str, str, ServiceCatalogue], list[ServiceCatalogueEntry]]
 
 
 @dataclass(frozen=True)
 class WorkflowStep:
-    """Audit record for one atomic call inside the workflow.
+    """Audit record for one atomic call attempt inside the workflow.
 
     Attributes:
-        svc_id (str): concrete service id picked for this step (e.g. `MAS_{1}`).
+        svc_id (str): concrete service id picked for this attempt (e.g. `MAS_{1}`).
         operation (str): logical operation name passed to the atomic.
         status (int): HTTP status returned (0 on transport error).
         send_ts (float): client-side timestamp before dispatch.
         recv_ts (float): client-side timestamp after the response arrived.
         c_used_at_start (int | None): in-flight count at the receiving service when admission succeeded; None on transport error.
+        attempt (int): 1-indexed attempt number within the step. >1 means the first attempt failed and the picker fell through to the next candidate.
     """
 
     svc_id: str
@@ -44,6 +45,7 @@ class WorkflowStep:
     send_ts: float
     recv_ts: float
     c_used_at_start: int | None
+    attempt: int = 1
 
 
 @dataclass
@@ -53,7 +55,7 @@ class WorkflowResult:
     Attributes:
         body (dict[str, Any]): final body returned to the composite caller.
         status (int): final HTTP status code.
-        steps (list[WorkflowStep]): per-step audit entries (in execution order).
+        steps (list[WorkflowStep]): per-attempt audit entries (in execution order).
     """
 
     body: dict[str, Any]
@@ -62,25 +64,30 @@ class WorkflowResult:
 
 
 def first_of_kind_picker(svc_kind: str,
-                         catalogue: ServiceCatalogue) -> ServiceCatalogueEntry:
-    """Default service picker: return the first catalogue entry matching `svc_kind`.
+                         operation: str,
+                         catalogue: ServiceCatalogue) -> list[ServiceCatalogueEntry]:
+    """Default picker: return a single-element list with the first catalogue entry of `svc_kind`.
+
+    Used as the workflow engine's fallback when no strategy picker is supplied. The `operation` argument is part of the picker contract for parity with strategy pickers, but this default ignores it.
 
     Args:
         svc_kind (str): catalogue group.
+        operation (str): logical operation name; ignored by this default.
         catalogue (ServiceCatalogue): loaded catalogue.
 
     Returns:
-        ServiceCatalogueEntry: the first matching entry.
+        list[ServiceCatalogueEntry]: single-element list with the first matching entry.
 
     Raises:
         LookupError: when the catalogue has no entry of that kind.
     """
+    del operation
     _matches = catalogue.by_kind(svc_kind)
     if not _matches:
         _msg = (f"catalogue {catalogue.name!r} has no entry of kind {svc_kind!r}; "
                 f"known kinds: {sorted({_e.kind for _e in catalogue.entries.values()})}")
         raise LookupError(_msg)
-    _ans = _matches[0]
+    _ans = [_matches[0]]
     return _ans
 
 
@@ -90,7 +97,7 @@ class WorkflowEngine:
     Attributes:
         spec (WorkflowSpec): branch graph + kind aliases.
         catalogue (ServiceCatalogue): concrete service entries.
-        picker (ServicePicker): selects which concrete service of a kind to call.
+        picker (ServicePicker): returns an ordered candidate chain for each step.
     """
 
     def __init__(self,
@@ -122,7 +129,7 @@ class WorkflowEngine:
             client (ServiceClient): pre-opened dispatch client.
 
         Returns:
-            tuple[dict[str, Any], int]: final body + HTTP status. The body is augmented with a `workflow.steps` list summarising every atomic call.
+            tuple[dict[str, Any], int]: final body + HTTP status. The body is augmented with a `workflow.steps` list summarising every atomic call attempt.
         """
         _result = await self.execute_full(payload=payload, client=client)
         _body_out = dict(_result.body)
@@ -142,7 +149,7 @@ class WorkflowEngine:
             client (ServiceClient): dispatch client.
 
         Returns:
-            WorkflowResult: final body + status + per-step audit.
+            WorkflowResult: final body + status + per-attempt audit.
 
         Raises:
             KeyError: if the request `kind` does not resolve to any branch.
@@ -175,10 +182,9 @@ class WorkflowEngine:
                         payload: dict[str, Any],
                         client: ServiceClient,
                         ans: WorkflowResult) -> tuple[dict[str, Any], int]:
-        """Resolve the concrete service for `step`, dispatch over HTTP, append the audit entry.
+        """Try the picker's candidate chain in order; return the first success or the last failure.
 
-        - `step.svc_kind` set: catalogue picker selects the concrete id (collapsed-mode dispatch).
-        - `step.svc_id` set: direct cache lookup, no picker (expanded-mode dispatch to `TAS_{2..6}`).
+        An attempt is "successful" when the HTTP status is 200 and the body has no `error` field. When the picker exposes `observe(svc_id, success)`, the engine feeds it after every attempt so reliability-aware strategies update their rolling windows. Every attempt is appended to `ans.steps` with its 1-indexed `attempt` number.
 
         Args:
             step (WorkflowStepSpec): step to execute.
@@ -187,41 +193,81 @@ class WorkflowEngine:
             ans (WorkflowResult): result accumulator; audit trail is mutated in place.
 
         Returns:
-            tuple[dict[str, Any], int]: body and status from the dispatched call. Status `0` is rewritten to `502`.
+            tuple[dict[str, Any], int]: body and status from the last attempt. Status 0 (transport error) is rewritten to 502.
         """
+        if step.svc_kind is None:
+            _kind_hint = ""
+        else:
+            _kind_hint = step.svc_kind
         if step.svc_id is not None:
-            _svc_id = step.svc_id
+            _candidates: list[ServiceCatalogueEntry] = [
+                self._lookup_or_synth(step.svc_id, _kind_hint),
+            ]
         else:
-            _entry = self.picker(step.svc_kind, self.catalogue)  # type: ignore[arg-type]
-            _svc_id = _entry.svc_id
-        _send_ts = time.time()
-        _body, _status = await client.invoke_operation(svc_name=_svc_id,
-                                                       operation=step.operation,
-                                                       payload=payload)
-        _recv_ts = time.time()
-        if isinstance(_body, dict):
-            _c_used_raw = _body.get("c_used_at_start")
-        else:
-            _c_used_raw = None
-        if isinstance(_c_used_raw, int):
-            _c_used: int | None = _c_used_raw
-        else:
-            _c_used = None
-        ans.steps.append(WorkflowStep(svc_id=_svc_id,
-                                      operation=step.operation,
-                                      status=_status,
-                                      send_ts=_send_ts,
-                                      recv_ts=_recv_ts,
-                                      c_used_at_start=_c_used))
-        if _status == 0:
+            _candidates = self.picker(_kind_hint, step.operation, self.catalogue)
+        _last_body: dict[str, Any] = {"error": "no_candidate",
+                                      "detail": "picker returned empty list"}
+        _last_status = 502
+        _observe = getattr(self.picker, "observe", None)
+        _done = False
+        _idx = 0
+        while _idx < len(_candidates) and not _done:
+            _entry = _candidates[_idx]
+            _attempt_idx = _idx + 1
+            _send_ts = time.time()
+            _body, _status = await client.invoke_operation(svc_name=_entry.svc_id,
+                                                           operation=step.operation,
+                                                           payload=payload)
+            _recv_ts = time.time()
+            _success = (_status == 200) and not (isinstance(_body, dict) and "error" in _body)
+            if callable(_observe):
+                _observe(_entry.svc_id, _success)
+            _c_used = _read_c_used(_body)
+            ans.steps.append(WorkflowStep(svc_id=_entry.svc_id,
+                                          operation=step.operation,
+                                          status=_status,
+                                          send_ts=_send_ts,
+                                          recv_ts=_recv_ts,
+                                          c_used_at_start=_c_used,
+                                          attempt=_attempt_idx))
+            _last_body, _last_status = _body, _status
+            if _success:
+                _done = True
+            _idx += 1
+        if _last_status == 0:
             _status_out = 502
         else:
-            _status_out = _status
-        return _body, _status_out
+            _status_out = _last_status
+        return _last_body, _status_out
+
+    def _lookup_or_synth(self, svc_id: str, kind: str) -> ServiceCatalogueEntry:
+        """Return the catalogue entry for `svc_id`, or synthesise one when it isn't in the catalogue.
+
+        Internal-stage atomics (`TAS_{2..6}`) are not in the third-party catalogue but the engine still needs a `ServiceCatalogueEntry` to thread through `_dispatch`.
+
+        Args:
+            svc_id (str): catalogue key.
+            kind (str): kind hint copied into the synthesised entry when needed.
+
+        Returns:
+            ServiceCatalogueEntry: real entry from the catalogue, or a minimal synthesised one.
+        """
+        try:
+            _ans = self.catalogue.lookup(svc_id)
+        except KeyError:
+            _ans = ServiceCatalogueEntry(svc_id=svc_id, kind=kind)
+        return _ans
 
     @staticmethod
     def _step_to_dict(step: WorkflowStep) -> dict[str, Any]:
-        """Serialise a `WorkflowStep` for inclusion in the response body."""
+        """Serialise a `WorkflowStep` to a plain dict for inclusion in the response body.
+
+        Args:
+            step (WorkflowStep): audit record for one attempt.
+
+        Returns:
+            dict[str, Any]: dict view of the record (all fields preserved as-is).
+        """
         _ans: dict[str, Any] = {
             "svc_id": step.svc_id,
             "operation": step.operation,
@@ -229,8 +275,26 @@ class WorkflowEngine:
             "send_ts": step.send_ts,
             "recv_ts": step.recv_ts,
             "c_used_at_start": step.c_used_at_start,
+            "attempt": step.attempt,
         }
         return _ans
+
+
+def _read_c_used(body: dict[str, Any]) -> int | None:
+    """Extract `c_used_at_start` from a response body, if present and integer-typed.
+
+    Args:
+        body (dict[str, Any]): atomic-service response body.
+
+    Returns:
+        int | None: the in-flight count when present and a real int; None otherwise.
+    """
+    _ans: int | None = None
+    if isinstance(body, dict):
+        _raw = body.get("c_used_at_start")
+        if isinstance(_raw, int):
+            _ans = _raw
+    return _ans
 
 
 __all__ = [
