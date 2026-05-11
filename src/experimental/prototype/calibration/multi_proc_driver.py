@@ -1,6 +1,8 @@
 """Multi-process load generator for the workers ramp.
 
-Single-process httpx clients saturate around 1-1.5k req/s on Python; past that the client itself becomes the bottleneck and the workers ramp mis-attributes 'client busy' as 'workers saturated'. This module fans the load out across N driver processes so each one stays well below its own saturation. The aggregator merges the raw latency lists (NOT pre-computed percentiles) before recomputing one combined `_stats_us` block, so the percentiles stay statistically valid.
+Single-process httpx clients saturate around 1-1.5k req/s on Python; past that the client itself becomes the bottleneck and the workers ramp mis-attributes 'client busy' as 'workers saturated'.
+
+This module fans the load out across N driver processes so each one stays well below its own saturation. The aggregator merges the raw latency lists (NOT pre-computed percentiles) before recomputing one combined `_stats_us` block, so the percentiles stay statistically valid.
 """
 
 from __future__ import annotations

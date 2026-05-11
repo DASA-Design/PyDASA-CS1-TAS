@@ -58,5 +58,11 @@ class JsonlWriter:
                  _exc_type: type[BaseException] | None,
                  _exc: BaseException | None,
                  _tb: TracebackType | None,) -> None:
-        """Exit the context manager: flush + close, propagating any exception."""
+        """Exit the context manager: flush + close, propagating any exception.
+
+        Args:
+            _exc_type (type[BaseException] | None): exception type if raised in the block, else None.
+            _exc (BaseException | None): exception instance if raised in the block, else None.
+            _tb (TracebackType | None): traceback if raised in the block, else None.
+        """
         self.close()

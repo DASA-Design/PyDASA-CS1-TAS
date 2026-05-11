@@ -6,12 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-DFLT_CALIBRATION_CFG_PATH = (
+DFLT_CALIB_CFG_PATH = (
     Path("data") / "config" / "method" / "prototype" / "calibration.json"
 )
 
 
-def load_calibration_cfg(path: Path = DFLT_CALIBRATION_CFG_PATH) -> dict[str, Any]:
+def load_calibration_cfg(path: Path = DFLT_CALIB_CFG_PATH) -> dict[str, Any]:
     """Load the calibration-config JSON from disk.
 
     Args:

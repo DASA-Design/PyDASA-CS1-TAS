@@ -1,12 +1,8 @@
 """Read and write the calibration envelope JSON.
 
-Each calibration run writes one **envelope** file under
-`data/results/calibration/<dpl>/` containing the host-floor probe outputs
-(timer, jitter, loopback, handler-scaling) and the pre-run gate verdict.
-This module owns both ends of that file: `write_envelope` serialises the
-envelope dict to disk; `read_envelope` loads it back. Keeping the two
-functions next to each other in one module means schema changes need only
-one edit.
+Each calibration run writes one **envelope** file under `data/results/calibration/<dpl>/` containing the host-floor probe outputs (timer, jitter, loopback, handler-scaling) and the pre-run gate verdict.
+
+This module owns both ends of that file: `write_envelope` serialises the envelope dict to disk; `read_envelope` loads it back. Keeping the two functions next to each other in one module means schema changes need only one edit.
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ def write_envelope(path: Path, envelope: dict[str, Any]) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as _fh:
-        json.dump(envelope, _fh, indent=2, sort_keys=True)
+        json.dump(envelope, _fh, indent=4, sort_keys=True)
 
 
 def read_envelope(path: Path) -> dict[str, Any]:

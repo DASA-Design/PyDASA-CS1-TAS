@@ -1,6 +1,6 @@
 """`Sender`: build a `Request`, POST it, return a completed `RequestRecord`.
 
-The sender is the boundary between the apparatus discipline (typed `Request` payloads, deterministic blob, optional `inject_failure` flag) and the wire (`httpx.AsyncClient`). It owns the request-construction recipe (including the request-id mint) and the `User` class drives it iteratively. The catalogue + adaptation strategy decide whether `inject_failure` is set on a given request.
+It owns the request-construction recipe (including the request-id mint) and the `User` class drives it iteratively. The catalogue + adaptation strategy decide whether `inject_failure` is set on a given request.
 """
 
 from __future__ import annotations

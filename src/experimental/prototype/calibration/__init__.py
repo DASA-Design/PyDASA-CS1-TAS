@@ -12,7 +12,7 @@ The whole package together produces one calibration envelope JSON per `dpl` mode
 """
 
 from src.experimental.prototype.calibration.config import (
-    DFLT_CALIBRATION_CFG_PATH,
+    DFLT_CALIB_CFG_PATH,
     load_calibration_cfg,
 )
 from src.experimental.prototype.calibration.envelope import (
@@ -58,7 +58,7 @@ from src.experimental.prototype.calibration.workers import (
 )
 
 __all__ = [
-    "DFLT_CALIBRATION_CFG_PATH",
+    "DFLT_CALIB_CFG_PATH",
     "DFLT_RESULTS_BASE",
     "ENVELOPE_VER",
     "HOST_FLOOR_PROBES",

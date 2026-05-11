@@ -30,8 +30,6 @@ _DFLT_PAYLOAD_BYTES = 1024
 class User:
     """One synthetic user issuing requests against an HTTP target.
 
-    Owns: the user identity (`client_id`), the `httpx.AsyncClient` (opened on `__aenter__`, closed on `__aexit__`), the `Sender` that builds + dispatches each request, the `StopGuard` that decides when to halt, and the `Stats` aggregator. The seeded RNG is used for kind selection only; payload-blob bytes come from `Sender.build_request` which uses a separate seed configured at sender construction.
-
     Attributes:
         _client_id (str): synthetic-user identifier.
         _base_url (str): target base URL (e.g. `http://127.0.0.1:8001`).

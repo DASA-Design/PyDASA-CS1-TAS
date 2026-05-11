@@ -1,4 +1,4 @@
-"""Calibration report: precision band, verifiable range, envelope gates, summary headlines."""
+"""Calibration report: precision band, verifiable range, envel gates, summary headlines."""
 
 from __future__ import annotations
 
@@ -6,35 +6,35 @@ import math
 from typing import Any
 
 # Runtime fallback for data/config/method/prototype/calibration.json::gate.noise_floor_pct.
-_DFLT_NOISE_FLOOR_PCT = 5.0
+_DFLT_NOISE_BASE_PCT = 5.0
 
 # Probe blocks the gate reads.
 HOST_FLOOR_PROBES = ("timer", "jitter", "loopback", "handler_scaling")
 
 
-def verdict(envelope: dict[str, Any],
+def verdict(envel: dict[str, Any],
             *,
-            noise_floor_pct: float = _DFLT_NOISE_FLOOR_PCT) -> dict[str, Any]:
-    """Build the calibration report dict from a populated envelope.
+            noise_floor_pct: float = _DFLT_NOISE_BASE_PCT) -> dict[str, Any]:
+    """Build the calibration report dict from a populated envel.
 
-    Computes the precision band (RMS of the floor std-devs), the verifiable range (highest c within the band + saturation rate), the per-block envelope gates, and the per-row summary headlines.
+    Computes the precision band (RMS of the floor std-devs), the verifiable range (highest c within the band + saturation rate), the per-block envel gates, and the per-row summary headlines.
 
     Args:
-        envelope (dict[str, Any]): populated calibration envelope (probes + rate sweep).
-        noise_floor_pct (float, optional): per-side tolerance for the envelope gates. Defaults to 5.0.
+        envel (dict[str, Any]): populated calibration envel (probes + rate sweep).
+        noise_floor_pct (float, optional): per-side tolerance for the envel gates. Defaults to 5.0.
 
     Returns:
         dict[str, Any]: keys `passed`, `noise_floor_pct`, `precision_band_us`, `verifiable_range`, `gates`, `floors`, `summary`.
     """
-    _floors = _floor_block(envelope)
+    _floors = _floor_block(envel)
     _band = _precision_band(_floors)
     _gates = {
-        "handler_scaling": _gate_handler_scaling(envelope.get("handler_scaling", {}), noise_floor_pct),
-        "saturation_knee": _gate_saturation(envelope.get("rate", {})),
-        "workers_scaling": _gate_workers(envelope.get("workers_scaling", {})),
+        "handler_scaling": _gate_handler_scaling(envel.get("handler_scaling", {}), noise_floor_pct),
+        "saturation_knee": _gate_saturation(envel.get("rate", {})),
+        "workers_scaling": _gate_workers(envel.get("workers_scaling", {})),
     }
-    _range = _verifiable_range(envelope, noise_floor_pct)
-    _summary = _summary_block(envelope, _gates, _range)
+    _range = _verifiable_range(envel, noise_floor_pct)
+    _summary = _summary_block(envel, _gates, _range)
     _all_passed = True
     for _g in _gates.values():
         if not _g["passed"]:
@@ -51,35 +51,35 @@ def verdict(envelope: dict[str, Any],
     return _ans
 
 
-def stamp_gate(envelope: dict[str, Any],
+def stamp_gate(envel: dict[str, Any],
                *,
-               noise_floor_pct: float = _DFLT_NOISE_FLOOR_PCT) -> dict[str, Any]:
-    """Compute the report and stamp it into `envelope["gate"]`.
+               noise_floor_pct: float = _DFLT_NOISE_BASE_PCT) -> dict[str, Any]:
+    """Compute the report and stamp it into `envel["gate"]`.
 
     Args:
-        envelope (dict[str, Any]): the calibration envelope; mutated in place.
+        envel (dict[str, Any]): the calibration envel; mutated in place.
         noise_floor_pct (float, optional): per-side tolerance. Defaults to 5.0.
 
     Returns:
-        dict[str, Any]: the report dict (also stored at `envelope["gate"]`).
+        dict[str, Any]: the report dict (also stored at `envel["gate"]`).
     """
-    _v = verdict(envelope, noise_floor_pct=noise_floor_pct)
-    envelope["gate"] = _v
+    _v = verdict(envel, noise_floor_pct=noise_floor_pct)
+    envel["gate"] = _v
     return _v
 
 
-def _floor_block(envelope: dict[str, Any]) -> dict[str, dict[str, float | None]]:
+def _floor_block(envel: dict[str, Any]) -> dict[str, dict[str, float | None]]:
     """Extract each floor's central value + std-dev (us) for the precision-band calculation.
 
     Args:
-        envelope (dict[str, Any]): populated calibration envelope (must include timer / jitter / loopback blocks).
+        envel (dict[str, Any]): populated calibration envel (must include timer / jitter / loopback blocks).
 
     Returns:
         dict[str, dict[str, float | None]]: keys `timer`, `jitter`, `loopback`, each mapping to `{value_us, std_us}`. Missing fields fall through as None.
     """
-    _timer = envelope.get("timer", {})
-    _jitter = envelope.get("jitter", {})
-    _loopback = envelope.get("loopback", {})
+    _timer = envel.get("timer", {})
+    _jitter = envel.get("jitter", {})
+    _loopback = envel.get("loopback", {})
     _ans: dict[str, dict[str, float | None]] = {
         "timer": {
             "value_us": _to_us_or_none(_timer.get("median_ns"), 1_000.0),
@@ -173,7 +173,7 @@ def _gate_handler_scaling(block: dict[str, Any],
     Mirrors the saturation gate. The gate fails only when even the first non-trivial concurrency already drifts (no headroom at all).
 
     Args:
-        block (dict[str, Any]): the `handler_scaling` envelope block (`{concurs, stats}`).
+        block (dict[str, Any]): the `handler_scaling` envel block (`{concurs, stats}`).
         noise_floor_pct (float): per-side tolerance for the drift check.
 
     Returns:
@@ -208,7 +208,7 @@ def _gate_workers(block: dict[str, Any]) -> dict[str, Any]:
     Empty block (skipped on `dpl='localhost'`) is treated as `passed=True` with reason `not applicable` so the overall verdict isn't penalised by mode.
 
     Args:
-        block (dict[str, Any]): the `workers_scaling` envelope block.
+        block (dict[str, Any]): the `workers_scaling` envel block.
 
     Returns:
         dict[str, Any]: gate dict with keys `passed`, `value_pct`, `limit_pct`, `reason`.
@@ -244,7 +244,7 @@ def _gate_saturation(rate_block: dict[str, Any]) -> dict[str, Any]:
     """Envelope gate: the rate sweep must report a saturation knee.
 
     Args:
-        rate_block (dict[str, Any]): the `rate` envelope block.
+        rate_block (dict[str, Any]): the `rate` envel block.
 
     Returns:
         dict[str, Any]: gate dict with keys `passed`, `value_pct`, `limit_pct`, `reason`.
@@ -271,21 +271,21 @@ def _gate_saturation(rate_block: dict[str, Any]) -> dict[str, Any]:
     return _ans
 
 
-def _verifiable_range(envelope: dict[str, Any],
+def _verifiable_range(envel: dict[str, Any],
                       noise_floor_pct: float) -> dict[str, Any]:
-    """Compute the operating envelope: max stable concurrency, saturation rate, and parallel-worker limit.
+    """Compute the operating envel: max stable concurrency, saturation rate, and parallel-worker limit.
 
     Args:
-        envelope (dict[str, Any]): populated calibration envelope.
+        envel (dict[str, Any]): populated calibration envel.
         noise_floor_pct (float): per-side tolerance for the concurrency drift check.
 
     Returns:
         dict[str, Any]: keys `c_max` (int | None), `r_max_req_s` (number | None), `w_max` (int | None).
     """
     _ans: dict[str, Any] = {
-        "c_max": _max_stable_concurrency(envelope.get("handler_scaling", {}), noise_floor_pct),
-        "r_max_req_s": envelope.get("rate", {}).get("saturation_rate"),
-        "w_max": envelope.get("workers_scaling", {}).get("stable_workers"),
+        "c_max": _max_stable_concurrency(envel.get("handler_scaling", {}), noise_floor_pct),
+        "r_max_req_s": envel.get("rate", {}).get("saturation_rate"),
+        "w_max": envel.get("workers_scaling", {}).get("stable_workers"),
     }
     return _ans
 
@@ -295,7 +295,7 @@ def _max_stable_concurrency(block: dict[str, Any],
     """Walk concurrencies in ascending order; return the highest c whose median stays within the band of c=1.
 
     Args:
-        block (dict[str, Any]): the `handler_scaling` envelope block.
+        block (dict[str, Any]): the `handler_scaling` envel block.
         noise_floor_pct (float): per-side drift tolerance (percent).
 
     Returns:
@@ -358,28 +358,28 @@ def _missing(label: str) -> dict[str, Any]:
     return _ans
 
 
-def _summary_block(envelope: dict[str, Any],
+def _summary_block(envel: dict[str, Any],
                    gates: dict[str, dict[str, Any]],
                    verifiable_range: dict[str, Any]) -> dict[str, dict[str, str]]:
     """Build the per-plot summary headlines (one short string per probe + rate).
 
     Args:
-        envelope (dict[str, Any]): populated calibration envelope.
-        gates (dict[str, dict[str, Any]]): freshly computed envelope gates.
+        envel (dict[str, Any]): populated calibration envel.
+        gates (dict[str, dict[str, Any]]): freshly computed envel gates.
         verifiable_range (dict[str, Any]): output of `_verifiable_range`.
 
     Returns:
         dict[str, dict[str, str]]: keys `timer`, `jitter`, `loopback`, `scaling`, `rate`, each mapping to `{"headline": ...}`.
     """
     _ans: dict[str, dict[str, str]] = {
-        "timer": _summarise_timer(envelope.get("timer", {})),
-        "jitter": _summarise_jitter(envelope.get("jitter", {})),
-        "loopback": _summarise_loopback(envelope.get("loopback", {})),
-        "scaling": _summarise_scaling(envelope.get("handler_scaling", {}),
+        "timer": _summarise_timer(envel.get("timer", {})),
+        "jitter": _summarise_jitter(envel.get("jitter", {})),
+        "loopback": _summarise_loopback(envel.get("loopback", {})),
+        "scaling": _summarise_scaling(envel.get("handler_scaling", {}),
                                       gates["handler_scaling"]["passed"],
                                       verifiable_range.get("c_max")),
-        "rate": _summarise_rate(envelope.get("rate", {})),
-        "workers": _summarise_workers(envelope.get("workers_scaling", {})),
+        "rate": _summarise_rate(envel.get("rate", {})),
+        "workers": _summarise_workers(envel.get("workers_scaling", {})),
     }
     return _ans
 
@@ -388,7 +388,7 @@ def _summarise_timer(block: dict[str, Any]) -> dict[str, str]:
     """Build the timer headline: clock-noise std-dev rendered as `$\\pm$ X $\\mu$s` mathtext.
 
     Args:
-        block (dict[str, Any]): the `timer` envelope block (`{samples_n, median_ns, std_ns, ...}`).
+        block (dict[str, Any]): the `timer` envel block (`{samples_n, median_ns, std_ns, ...}`).
 
     Returns:
         dict[str, str]: `{"headline": ...}`; `"n/a"` when `std_ns` is missing.
@@ -405,7 +405,7 @@ def _summarise_jitter(block: dict[str, Any]) -> dict[str, str]:
     """Build the jitter headline: median offset vs target, with std-dev as a `$\\pm$` band.
 
     Args:
-        block (dict[str, Any]): the `jitter` envelope block (`{target_us, median_us, std_us, ...}`).
+        block (dict[str, Any]): the `jitter` envel block (`{target_us, median_us, std_us, ...}`).
 
     Returns:
         dict[str, str]: `{"headline": ...}`; `"n/a"` when target / median is missing or non-positive.
@@ -429,7 +429,7 @@ def _summarise_loopback(block: dict[str, Any]) -> dict[str, str]:
     """Build the loopback headline: median round-trip + std-dev band, with payload size when known.
 
     Args:
-        block (dict[str, Any]): the `loopback` envelope block (`{median_us, std_us, payload_bytes, ...}`).
+        block (dict[str, Any]): the `loopback` envel block (`{median_us, std_us, payload_bytes, ...}`).
 
     Returns:
         dict[str, str]: `{"headline": ...}`; `"n/a"` when median is missing.
@@ -456,7 +456,7 @@ def _summarise_scaling(block: dict[str, Any],
     """Build the handler-scaling headline: knee concurrency + drift at the knee.
 
     Args:
-        block (dict[str, Any]): the `handler_scaling` envelope block.
+        block (dict[str, Any]): the `handler_scaling` envel block.
         passed (bool): the freshly computed handler-scaling gate verdict.
         c_max (int | None): highest stable concurrency from `_max_stable_concurrency`.
 
@@ -482,7 +482,7 @@ def _summarise_rate(block: dict[str, Any]) -> dict[str, str]:
     """Build the rate-sweep headline: saturation rate or 'no knee within ramp'.
 
     Args:
-        block (dict[str, Any]): the `rate` envelope block (`{saturation_rate, ...}`).
+        block (dict[str, Any]): the `rate` envel block (`{saturation_rate, ...}`).
 
     Returns:
         dict[str, str]: `{"headline": ...}`; `"n/a"` when the block is empty.
@@ -501,7 +501,7 @@ def _summarise_workers(block: dict[str, Any]) -> dict[str, str]:
     """Build the workers-scaling headline: stable parallel-worker count + efficiency at the knee.
 
     Args:
-        block (dict[str, Any]): the `workers_scaling` envelope block.
+        block (dict[str, Any]): the `workers_scaling` envel block.
 
     Returns:
         dict[str, str]: `{"headline": ...}`; `"n/a"` when the block is empty (localhost mode); `"no parallel headroom"` when even n=1 fails efficiency.

@@ -104,8 +104,6 @@ def probe_workers_scaling(*,
                           driver: RateDriver | None = None) -> dict[str, Any]:
     """Walk worker count from `start` to `stop`; halt when per-worker efficiency drops below `min_eff_pct`.
 
-    For each n, enters `make_targets(n)`, drives `n * rate_per_worker` req/s for `per_step_s`, records per-step stats, exits the context manager. The n=1 row's `per_worker_rps` is the baseline used to compute `efficiency_pct` on later rows.
-
     Args:
         start (int, optional): first worker count. Defaults to 1.
         stop (int, optional): inclusive ramp ceiling. Defaults to 32.
