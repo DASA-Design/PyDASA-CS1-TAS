@@ -9,12 +9,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-DFLT_EXPERIMENTAL_CFG_PATH = (
+DFLT_EXP_CFG_PATH = (
     Path("data") / "config" / "method" / "experimental.json"
 )
 
 
-def load_experimental_cfg(path: Path = DFLT_EXPERIMENTAL_CFG_PATH) -> dict[str, Any]:
+def load_experimental_cfg(path: Path = DFLT_EXP_CFG_PATH) -> dict[str, Any]:
     """Load the orchestrator-level experimental-config JSON from disk.
 
     Args:
@@ -29,7 +29,7 @@ def load_experimental_cfg(path: Path = DFLT_EXPERIMENTAL_CFG_PATH) -> dict[str, 
 
 
 def load_server_cfg(name: str,
-                    path: Path = DFLT_EXPERIMENTAL_CFG_PATH) -> dict[str, Any]:
+                    path: Path = DFLT_EXP_CFG_PATH) -> dict[str, Any]:
     """Return the runtime sub-block for one spawner.
 
     Args:

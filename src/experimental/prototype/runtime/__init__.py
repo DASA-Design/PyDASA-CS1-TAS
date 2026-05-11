@@ -13,7 +13,7 @@ Modules:
 
 from src.experimental.prototype.runtime.async_loop import CoroFactory, run_async_safe
 from src.experimental.prototype.runtime.config import (
-    DFLT_EXPERIMENTAL_CFG_PATH,
+    DFLT_EXP_CFG_PATH,
     load_experimental_cfg,
     load_server_cfg,
 )
@@ -31,7 +31,7 @@ from src.experimental.prototype.runtime.uvicorn_process import UvicornProcess
 from src.experimental.prototype.runtime.waitress_process import WaitressProcess
 
 __all__ = [
-    "DFLT_EXPERIMENTAL_CFG_PATH",
+    "DFLT_EXP_CFG_PATH",
     "CoroFactory",
     "FastAPIAdapter",
     "FlaskAdapter",
