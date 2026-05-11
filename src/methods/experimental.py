@@ -59,6 +59,13 @@ from src.experimental.prototype.calibration.vernier import (
     build_vernier_flask_app,
 )
 from src.experimental.prototype.client.users import User
+from src.experimental.prototype.controller import (
+    bring_up_controller,
+    compute_verdict,
+    extract_op_weights,
+    write_verdict_json,
+    write_window_parquet,
+)
 from src.experimental.prototype.target.config import load_target_cfg
 from src.experimental.prototype.target.factory.internal_stage import (
     build_internal_stage_fastapi_app,
@@ -67,7 +74,11 @@ from src.experimental.prototype.target.factory.tas import build_tas_fastapi_app
 from src.experimental.prototype.target.factory.third_party import (
     build_atomic_fastapi_app,
 )
-from src.experimental.prototype.target.service.catalogue import load_catalogue
+from src.experimental.prototype.target.service.catalogue import (
+    load_catalogue,
+    load_failure_modes,
+)
+from src.io.config import load_reference
 
 
 def run_calibration(*,
@@ -294,6 +305,8 @@ def _build_mesh_specs(*,
                       run_id: str,
                       request_timeout_s: float,
                       mu_lt: dict[str, float],
+                      eps_lt: dict[str, float] | None = None,
+                      failure_modes_cfg: Any = None,
                       target_granularity: str = "collapsed",
                       inject_internal_stage_mu: bool = False,
                       stage_routes: dict[str, dict[str, str]] | None = None,
@@ -399,6 +412,14 @@ def _build_mesh_specs(*,
 
     for _svc_id in _atomic_ids:
         _entry = _catalogue.lookup(_svc_id)
+        if eps_lt is None:
+            _eps = 0.0
+        else:
+            _eps = float(eps_lt.get(_svc_id, 0.0))
+        if failure_modes_cfg is None:
+            _failure_mix = None
+        else:
+            _failure_mix = dict(failure_modes_cfg.mix_for(_svc_id))
         _atomic_factory = functools.partial(
             build_atomic_fastapi_app,
             svc_name=_svc_id,
@@ -408,9 +429,118 @@ def _build_mesh_specs(*,
             c=_c,
             csv_dir=str(csv_dir),
             run_id=run_id,
+            eps=_eps,
+            failure_mix=_failure_mix,
         )
         _specs.append(MeshSpec(svc_id=_svc_id, app_factory=_atomic_factory))
     return _specs, _atomic_ids
+
+
+def _thresholds_from_reference() -> dict[str, float]:
+    """Read R1 / R2 numeric thresholds from `data/reference/baseline.json`.
+
+    Returns:
+        dict[str, float]: `{"r1_max": <float>, "r2_max": <float>}`.
+    """
+    _ref = load_reference("baseline")
+    _reqs = _ref["requirements"]
+    _ans: dict[str, float] = {
+        "r1_max": float(_reqs["R1"]["threshold"]),
+        "r2_max": float(_reqs["R2"]["threshold"]),
+    }
+    return _ans
+
+
+def _op_weights_from_profile(adp: str,
+                             stage_routes: dict[str, dict[str, str]]) -> dict[str, dict[str, float]]:
+    """Extract per-operation routing weights from the active profile's `_routs[adp]`.
+
+    The orchestrator threads these into the controller's one-shot `POST /config` so the picker (when `_routs`-aware) draws weighted-random over the right service set.
+
+    Args:
+        adp (str): adaptation key (selects which profile + scenario to load).
+        stage_routes (dict[str, dict[str, str]]): `target.json::stage_routes`-shaped mapping. Drives which row of `_routs` becomes which operation's weights.
+
+    Returns:
+        dict[str, dict[str, float]]: `{operation: {svc_id: weight}}` with weights summing to 1 per operation.
+    """
+    _net = load_profile(adaptation=adp, source="artifacts")
+    _node_ids = [_a.key for _a in _net.artifacts]
+    _routs = {_net.scenario: _net.routing.tolist()}
+    _ans = extract_op_weights(_routs, _node_ids, stage_routes, scenario=_net.scenario)
+    return _ans
+
+
+def _fetch_controller_history(controller_url: str,
+                              timeout_s: float = 5.0) -> list[dict[str, Any]]:
+    """Drain the controller's `/history` for the just-finished trial.
+
+    Args:
+        controller_url (str): controller base URL.
+        timeout_s (float, optional): HTTP timeout. Defaults to 5.0.
+
+    Returns:
+        list[dict[str, Any]]: per-sample trajectory records. Empty on transport error.
+    """
+    import httpx
+    _ans: list[dict[str, Any]] = []
+    try:
+        with httpx.Client(timeout=timeout_s) as _http:
+            _resp = _http.get(f"{controller_url.rstrip('/')}/history")
+        if _resp.status_code == 200:
+            _records = _resp.json().get("records", [])
+            if isinstance(_records, list):
+                _ans = _records
+    except httpx.RequestError:
+        pass
+    return _ans
+
+
+_STOP_PREDICATES: dict[str, tuple[str, ...]] = {
+    "baseline": ("r1_and_r2_breach",),
+    "s1": ("r1_breach",),
+    "s2": ("r2_breach",),
+    "aggregate": ("r1_breach", "r2_breach"),
+}
+
+
+def _should_stop_from_aggregates(adp: str, agg: dict[str, Any]) -> tuple[bool, str]:
+    """Apply the strategy-specific breach predicate to one `/aggregates` response.
+
+    Args:
+        adp (str): adaptation key.
+        agg (dict[str, Any]): payload returned by the controller's `GET /aggregates`.
+
+    Returns:
+        tuple[bool, str]: `(stop, reason)` where `reason` is `""` when not stopping.
+    """
+    _r1, _r2 = bool(agg.get("r1_breach", False)), bool(agg.get("r2_breach", False))
+    _stop = False
+    _reason = ""
+    _checks = _STOP_PREDICATES.get(adp, ())
+    if "r1_and_r2_breach" in _checks and _r1 and _r2:
+        _stop, _reason = True, "r1_and_r2_breach"
+    elif "r1_breach" in _checks and _r1:
+        _stop, _reason = True, "r1_breach"
+    elif "r2_breach" in _checks and _r2:
+        _stop, _reason = True, "r2_breach"
+    return _stop, _reason
+
+
+def _eps_lt_from_profile(adp: str) -> dict[str, float]:
+    """Read per-service epsilon (failure rate) from the active profile's specs layer.
+
+    Args:
+        adp (str): adaptation key (selects which profile + scenario to load).
+
+    Returns:
+        dict[str, float]: epsilon setpoint per artifact id.
+    """
+    _net = load_profile(adaptation=adp, source="specs")
+    _ans: dict[str, float] = {}
+    for _artifact in _net.artifacts:
+        _ans[_artifact.key] = float(_artifact.epsilon)
+    return _ans
 
 
 def _mu_lt_from_profile(adp: str) -> dict[str, float]:
@@ -435,44 +565,97 @@ async def _drive_trial(*,
                        request_rate_per_s: float,
                        p_alarm: float,
                        request_timeout_s: float,
-                       seed: int | None) -> list[dict[str, Any]]:
-    """Drive `n_requests` against the composite TAS at the configured rate; return one summary per request.
+                       seed: int | None,
+                       controller_url: str | None = None,
+                       adp: str = "baseline",
+                       poll_every_n: int = 0) -> tuple[list[dict[str, Any]], str]:
+    """Drive up to `n_requests` against the composite TAS; halt early on a breach.
+
+    When `controller_url` is set and `poll_every_n > 0`, the loop polls the controller's `/aggregates` every `poll_every_n` requests and applies the strategy-specific stop predicate. The trial halts on the first breach, or after `n_requests` if no breach fires.
 
     Args:
         tas_url (str): composite TAS base URL.
-        n_requests (int): number of requests to send.
+        n_requests (int): max number of requests to send.
         request_rate_per_s (float): pacing rate (0 = no pacing).
         p_alarm (float): probability the next request is an alarm.
         request_timeout_s (float): per-request timeout.
         seed (int | None): RNG seed for kind selection.
+        controller_url (str | None, optional): controller base URL. None disables the breach poll. Defaults to None.
+        adp (str, optional): adaptation key (drives the stop predicate). Defaults to `"baseline"`.
+        poll_every_n (int, optional): poll the controller every N completed requests. 0 disables. Defaults to 0.
 
     Returns:
-        list[dict[str, Any]]: one row per request (req_id, kind, outcome, status, latency_s).
+        tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"` / `"r1_and_r2_breach"`).
     """
     if request_rate_per_s > 0:
         _gap_s = 1.0 / request_rate_per_s
     else:
         _gap_s = 0.0
     _summaries: list[dict[str, Any]] = []
-    async with User(client_id="trial-user-0",
-                    base_url=tas_url,
-                    endpoint_path="/",
-                    seed=seed,
-                    p_alarm=p_alarm,
-                    timeout_s=request_timeout_s,
-                    sequential_req_ids=True) as _user:
-        for _ in range(n_requests):
-            _record = await _user.run_one()
-            _summaries.append({
-                "req_id": _record.req_id,
-                "kind": _record.kind,
-                "outcome": _record.outcome,
-                "status": _record.status_code,
-                "latency_s": _record.total_latency_s,
-            })
-            if _gap_s > 0:
-                await asyncio.sleep(_gap_s)
-    return _summaries
+    _stop_reason = "n_reached"
+    import httpx
+    _http: httpx.AsyncClient | None = None
+    if controller_url is not None and poll_every_n > 0:
+        _http = httpx.AsyncClient(timeout=2.0)
+    try:
+        async with User(client_id="trial-user-0",
+                        base_url=tas_url,
+                        endpoint_path="/",
+                        seed=seed,
+                        p_alarm=p_alarm,
+                        timeout_s=request_timeout_s,
+                        sequential_req_ids=True) as _user:
+            for _i in range(n_requests):
+                _record = await _user.run_one()
+                _summaries.append({
+                    "req_id": _record.req_id,
+                    "kind": _record.kind,
+                    "outcome": _record.outcome,
+                    "status": _record.status_code,
+                    "latency_s": _record.total_latency_s,
+                })
+                _done_count = _i + 1
+                if _http is not None and (_done_count % poll_every_n == 0):
+                    _stop, _reason = await _check_breach(_http,
+                                                         controller_url,
+                                                         adp)
+                    if _stop:
+                        _stop_reason = _reason
+                        break
+                if _gap_s > 0:
+                    await asyncio.sleep(_gap_s)
+    finally:
+        if _http is not None:
+            await _http.aclose()
+    return _summaries, _stop_reason
+
+
+async def _check_breach(http: "httpx.AsyncClient",
+                        controller_url: str,
+                        adp: str) -> tuple[bool, str]:
+    """Poll the controller's `/aggregates` and apply the strategy-specific stop predicate.
+
+    Args:
+        http (httpx.AsyncClient): shared async client.
+        controller_url (str): controller base URL.
+        adp (str): adaptation key.
+
+    Returns:
+        tuple[bool, str]: `(stop, reason)`. Transport errors return `(False, "")` so a flaky controller doesn't cut the trial short.
+    """
+    _ans: tuple[bool, str] = (False, "")
+    try:
+        _resp = await http.get(f"{controller_url.rstrip('/')}/aggregates")
+    except Exception:
+        return _ans
+    if _resp.status_code != 200:
+        return _ans
+    try:
+        _agg = _resp.json()
+    except ValueError:
+        return _ans
+    _ans = _should_stop_from_aggregates(adp, _agg)
+    return _ans
 
 
 def run_experiment(*,
@@ -526,6 +709,8 @@ def run_experiment(*,
                                          skip=skip_bounds_check)
 
     _mu_lt = _mu_lt_from_profile(adp)
+    _eps_lt = _eps_lt_from_profile(adp)
+    _failure_modes_cfg = load_failure_modes()
 
     # Resolve mode: CLI override (function arg) wins over JSON; default to collapsed.
     if target_granularity is not None:
@@ -558,6 +743,8 @@ def run_experiment(*,
         run_id=_run_id,
         request_timeout_s=float(_cfg["request_timeout_s"]),
         mu_lt=_mu_lt,
+        eps_lt=_eps_lt,
+        failure_modes_cfg=_failure_modes_cfg,
         target_granularity=_granularity,
         inject_internal_stage_mu=_inject_mu,
         stage_routes=_stage_routes,
@@ -565,7 +752,27 @@ def run_experiment(*,
 
     _trial = _cfg["trial"]
     _kind_p = _trial["kind_probability"]
+    _ctrl_cfg = _cfg.get("controller", {})
+    _strat_cfg = _cfg.get("strategies", {})
+    _thresholds = _thresholds_from_reference()
+    _stage_routes_for_weights = _cfg.get("stage_routes") or {}
+    _op_weights = _op_weights_from_profile(adp, _stage_routes_for_weights)
+    _window_size = int(_strat_cfg.get("window_size", 100))
+    _warmup_n = int(_ctrl_cfg.get("warmup_n", 100))
+    _max_attempts = int(_strat_cfg.get("max_attempts", 3))
+    _poll_interval_ms = int(_ctrl_cfg.get("poll_interval_ms", 100))
+    _ctrl_port = int(_ctrl_cfg.get("port", 9001))
+    _ctrl_ready_timeout_s = float(_ctrl_cfg.get("ready_timeout_s", 5.0))
+    _r1_r2_stop_enabled = bool(_ctrl_cfg.get("r1_r2_stop_enabled", True))
+    _poll_every_n_raw = int(_ctrl_cfg.get("orchestrator_poll_every_n", 10))
+    if _r1_r2_stop_enabled:
+        _poll_every_n = _poll_every_n_raw
+    else:
+        _poll_every_n = 0
+
     _summaries: list[dict[str, Any]] = []
+    _stop_reason = "n_reached"
+    _history: list[dict[str, Any]] = []
     _started_ts = time.time()
     with bring_up_mesh(_specs,
                        framework=framework,
@@ -574,17 +781,43 @@ def run_experiment(*,
                        base_port=int(_cfg["tas_base_port"]),
                        ready_timeout_s=float(_cfg["ready_timeout_s"])) as _urls:
         _tas_url = _urls["TAS"]
-        _summaries = asyncio.run(_drive_trial(
-            tas_url=_tas_url,
-            n_requests=int(_trial["n_requests"]),
-            request_rate_per_s=float(_trial["request_rate_per_s"]),
-            p_alarm=float(_kind_p["alarm"]),
-            request_timeout_s=float(_cfg["request_timeout_s"]),
-            seed=_trial.get("seed"),
-        ))
+        with bring_up_controller(target_url=_tas_url,
+                                 adp=adp,
+                                 op_weights=_op_weights,
+                                 thresholds=_thresholds,
+                                 window_size=_window_size,
+                                 warmup_n=_warmup_n,
+                                 max_attempts=_max_attempts,
+                                 poll_interval_ms=_poll_interval_ms,
+                                 port=_ctrl_port,
+                                 host=_cfg["host"],
+                                 ready_timeout_s=_ctrl_ready_timeout_s) as _ctrl_url:
+            _summaries, _stop_reason = asyncio.run(_drive_trial(
+                tas_url=_tas_url,
+                n_requests=int(_trial["n_requests"]),
+                request_rate_per_s=float(_trial["request_rate_per_s"]),
+                p_alarm=float(_kind_p["alarm"]),
+                request_timeout_s=float(_cfg["request_timeout_s"]),
+                seed=_trial.get("seed"),
+                controller_url=_ctrl_url,
+                adp=adp,
+                poll_every_n=_poll_every_n,
+            ))
+            _history = _fetch_controller_history(_ctrl_url)
     _finished_ts = time.time()
 
     _outcome_counts = _count_outcomes(_summaries)
+    _verdict = compute_verdict(flows_path=_paths.flows,
+                               adp=adp,
+                               run_id=_run_id,
+                               stop_reason=_stop_reason,
+                               n_planned=int(_trial["n_requests"]),
+                               thresholds=_thresholds,
+                               client_n_requests=len(_summaries))
+    if write:
+        write_verdict_json(_verdict, _paths.verdict_json)
+        if _history:
+            write_window_parquet(_history, _paths.window_parquet)
     _row: dict[str, Any] = {
         "run_id": _run_id,
         "adp": adp,
@@ -619,9 +852,13 @@ def run_experiment(*,
             "flows": str(_paths.flows),
             "csv_dir": str(_paths.csv_dir),
             "runs_parquet": str(_paths.runs_parquet),
+            "verdict_json": str(_paths.verdict_json),
+            "window_parquet": str(_paths.window_parquet),
         },
         "bounds": _bounds_report,
         "summaries": _summaries,
+        "verdict": _verdict,
+        "stop_reason": _stop_reason,
     }
     return _ans
 

@@ -10,6 +10,7 @@ The route honours the request payload's `inject_failure` flag (`timeout` / `drop
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -19,6 +20,68 @@ from starlette.responses import Response
 from src.experimental.common.payload.request import FailureMechanism
 
 DFLT_TIMEOUT_GRACE_S = 30.0
+_DROP_MARKER = "synthetic drop mid-stream"
+
+
+def _is_synthetic_drop(exc: BaseException | None) -> bool:
+    """Walk an exception (including `BaseExceptionGroup` sub-exceptions and `__cause__` / `__context__` links) and return True when any leaf is the synthetic drop `RuntimeError`.
+
+    Args:
+        exc (BaseException | None): root exception from the log record's `exc_info`.
+
+    Returns:
+        bool: True when the synthetic-drop marker appears anywhere in the tree.
+    """
+    if exc is None:
+        return False
+    if isinstance(exc, RuntimeError) and _DROP_MARKER in str(exc):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        for _sub in exc.exceptions:
+            if _is_synthetic_drop(_sub):
+                return True
+    if exc.__cause__ is not None and _is_synthetic_drop(exc.__cause__):
+        return True
+    if exc.__context__ is not None and _is_synthetic_drop(exc.__context__):
+        return True
+    return False
+
+
+class _SyntheticDropFilter(logging.Filter):
+    """Logging filter that suppresses uvicorn-error records caused by the synthetic-drop abort.
+
+    Drops are the expected mechanism for `inject_failure="drop"`: the response generator raises a `RuntimeError` mid-stream so uvicorn closes the TCP connection (the client sees `RemoteProtocolError`). Without this filter, every drop produces a noisy traceback on stderr that has no diagnostic value.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return False to drop the record when its `exc_info` traces back to the synthetic drop.
+
+        Args:
+            record (logging.LogRecord): the log record uvicorn emitted.
+
+        Returns:
+            bool: True to keep, False to drop.
+        """
+        if record.exc_info is None:
+            return True
+        _exc = record.exc_info[1]
+        _ans = not _is_synthetic_drop(_exc)
+        return _ans
+
+
+_FILTER_INSTALLED = False
+
+
+def _install_synthetic_drop_filter() -> None:
+    """Attach `_SyntheticDropFilter` to the `uvicorn.error` logger once per process."""
+    global _FILTER_INSTALLED
+    if _FILTER_INSTALLED:
+        return
+    logging.getLogger("uvicorn.error").addFilter(_SyntheticDropFilter())
+    _FILTER_INSTALLED = True
+
+
+_install_synthetic_drop_filter()
 
 
 async def timeout_request(grace_s: float = DFLT_TIMEOUT_GRACE_S) -> None:

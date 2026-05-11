@@ -93,6 +93,7 @@ def summarise(label: str, result: dict[str, Any]) -> dict[str, Any]:
         "n_requests": result["n_requests"],
         "outcomes": dict(_outcome_counts),
         "n_atomic_ids": len(result.get("atomic_ids", [])),
+        "verdict": result.get("verdict"),
     }
     if _latencies:
         _sorted = sorted(_latencies)
@@ -237,6 +238,25 @@ def print_one(summary: dict[str, Any]) -> None:
               f"mean={summary['latency_mean_ms']} ms")
 
 
+def print_verdict(summary: dict[str, Any]) -> None:
+    """Print one run's R1 / R2 verdict block.
+
+    Args:
+        summary (dict[str, Any]): output of `summarise`.
+    """
+    _v = summary.get("verdict")
+    if _v is None:
+        return
+    _r1 = _v.get("r1", {})
+    _r2 = _v.get("r2", {})
+    print(f"\tverdict:\t\tR1={_r1.get('value', 0.0):.5f} (threshold {_r1.get('threshold')}, "
+          f"pass={_r1.get('pass')})")
+    print(f"\t\t\tR2={_r2.get('value', 0.0):.5f} s (threshold {_r2.get('threshold')}, "
+          f"pass={_r2.get('pass')})")
+    print(f"\t\t\tstop_reason={_v.get('stop_reason')}  "
+          f"completed={_v.get('n_completed')}/{_v.get('n_planned')}")
+
+
 def print_table(rows: list[dict[str, Any]]) -> None:
     """Print a side-by-side comparison table over all runs.
 
@@ -294,6 +314,7 @@ def main() -> None:
         _summary["workers"] = _workers
         print_one(_summary)
         print_workers(_workers)
+        print_verdict(_summary)
         _summaries.append(_summary)
     print_table(_summaries)
     _out = save(_summaries)
