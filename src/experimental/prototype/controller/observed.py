@@ -19,7 +19,9 @@ def observed_nodes_from_run(*,
                             mesh_admission: dict[str, dict[str, Any]],
                             kind_lt: dict[str, str],
                             window_s: float,
-                            run_id: str | None = None) -> pd.DataFrame:
+                            run_id: str | None = None,
+                            composite_op: dict[str, Any] | None = None,
+                            composite_id: str = "TAS_{1}") -> pd.DataFrame:
     """Aggregate per-pid CSVs into a nodes DataFrame matching analytic's shape.
 
     Operational derivations (per row in the output):
@@ -32,18 +34,29 @@ def observed_nodes_from_run(*,
     - `L_i = lambda_i * R_i` (Little's law).
     - `rho_i = lambda_i / (c_i * mu_i)` (utilisation; +inf when `c_i * mu_i = 0`).
 
+    When `composite_op` is supplied, a synthetic row is prepended for the composite TAS service. The composite writes flow JSONL rather than per-pid CSV, so its operational metrics come from `verdict.operational` (A / C / F / T_s / X_0_req_per_s / R_s) instead of the CSV aggregation. This lets the same row schema cover both atomic and composite services so the analytic plotters can render a uniform topology.
+
     Args:
         csv_dir (Path): per-pid CSV directory (from `RunPaths.csv_dir`).
-        atomic_ids (list[str]): ordered svc ids actually spawned for this run.
+        atomic_ids (list[str]): ordered svc ids that drop per-pid CSVs (third-party atomics + internal stages in expanded mode).
         mesh_admission (dict[str, dict[str, Any]]): per-svc `{c, K, mu, eps}` block written into `verdict.json::mesh`.
         kind_lt (dict[str, str]): per-svc kind (`alarm` / `medical_analysis` / `drug`) for the `name` column.
         window_s (float): trial duration in seconds (`verdict.json::operational.T_s`).
         run_id (str | None, optional): when set, rows with a different `run_id` are filtered out (per-pid CSVs are append-only across runs, so this scoping is required for repeat invocations against the same `csv_dir`). Defaults to None (no filter).
+        composite_op (dict[str, Any] | None, optional): the `verdict.operational` block. When set, prepend a synthetic row for the composite using its `A` / `C` / `F` / `R_s` instead of CSV aggregation. Defaults to None.
+        composite_id (str, optional): svc id for the synthetic composite row. Defaults to `"TAS_{1}"`.
 
     Returns:
-        pd.DataFrame: one row per atomic id with columns `node`, `key`, `name`, `type`, `lambda`, `mu`, `c`, `K`, `rho`, `L`, `W`, `A`, `C`, `F`.
+        pd.DataFrame: one row per svc with columns `node`, `key`, `name`, `type`, `lambda`, `mu`, `c`, `K`, `rho`, `L`, `W`, `A`, `C`, `F`. Composite row (when included) is at index 0.
     """
     _rows: list[dict[str, Any]] = []
+    if composite_op is not None:
+        _rows.append(_composite_row(composite_id=composite_id,
+                                    composite_op=composite_op,
+                                    mesh_admission=mesh_admission,
+                                    kind_lt=kind_lt,
+                                    node_idx=0))
+    _start_idx = len(_rows)
     for _i, _svc_id in enumerate(atomic_ids):
         _df = _load_svc_rows(csv_dir, _svc_id)
         if run_id is not None and not _df.empty and "run_id" in _df.columns:
@@ -73,7 +86,7 @@ def observed_nodes_from_run(*,
         _L = _lam * _R
         _rho = _compute_rho(_lam, _c, _mu)
         _rows.append({
-            "node": _i,
+            "node": _start_idx + _i,
             "key": _svc_id,
             "name": kind_lt.get(_svc_id, ""),
             "type": "M/M/c/K",
@@ -89,6 +102,56 @@ def observed_nodes_from_run(*,
             "F": _F,
         })
     return pd.DataFrame(_rows)
+
+
+def _composite_row(*,
+                   composite_id: str,
+                   composite_op: dict[str, Any],
+                   mesh_admission: dict[str, dict[str, Any]],
+                   kind_lt: dict[str, str],
+                   node_idx: int) -> dict[str, Any]:
+    """Synthesise a nodes-DataFrame row for the composite service from its operational block.
+
+    The composite writes flow JSONL rather than per-pid CSV, so the standard CSV aggregation does not see it. Pull `A` / `C` / `F` / `R_s` from `verdict.operational` and pull `c` / `K` / `mu` from `mesh_admission`.
+
+    Args:
+        composite_id (str): svc id used as the row's `key`.
+        composite_op (dict[str, Any]): `verdict.operational` block (`A`, `C`, `F`, `T_s`, `X_0_req_per_s`, `R_s`).
+        mesh_admission (dict[str, dict[str, Any]]): per-svc `{c, K, mu, eps}` block; the row pulls the composite's entry for `c` / `K` / `mu`.
+        kind_lt (dict[str, str]): per-svc kind map (the composite's kind, if known, lands in `name`).
+        node_idx (int): row index for the `node` column.
+
+    Returns:
+        dict[str, Any]: single nodes-DataFrame row for the composite.
+    """
+    _A = int(composite_op.get("A", 0))
+    _C = int(composite_op.get("C", 0))
+    _F = int(composite_op.get("F", 0))
+    _T_s = float(composite_op.get("T_s", 0.0))
+    _R = float(composite_op.get("R_s", 0.0))
+    _lam = _A / _T_s if _T_s > 0 else 0.0
+    _entry = mesh_admission.get(composite_id, {})
+    _c = _entry.get("c")
+    _K = _entry.get("K")
+    _mu = float(_entry.get("mu", 0.0))
+    _L = _lam * _R
+    _rho = _compute_rho(_lam, _c, _mu)
+    return {
+        "node": node_idx,
+        "key": composite_id,
+        "name": kind_lt.get(composite_id, "composite"),
+        "type": "M/M/c/K",
+        "lambda": _lam,
+        "mu": _mu,
+        "c": _c,
+        "K": _K,
+        "rho": _rho,
+        "L": _L,
+        "W": _R,
+        "A": _A,
+        "C": _C,
+        "F": _F,
+    }
 
 
 def _load_svc_rows(csv_dir: Path, svc_id: str) -> pd.DataFrame:
