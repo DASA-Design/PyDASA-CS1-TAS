@@ -20,22 +20,33 @@ from contextlib import asynccontextmanager, contextmanager
 
 import httpx
 from fastapi import FastAPI
+from flask import Flask
 
-from src.experimental.prototype.controller.app import build_controller_app
-from src.experimental.prototype.controller.poller import SamplePoller
+from src.experimental.prototype.controller.app import (
+    build_controller_fastapi_app,
+    build_controller_flask_app,
+)
+from src.experimental.prototype.controller.poller import (
+    SamplePoller,
+    SyncSamplePoller,
+)
 from src.experimental.prototype.controller.strategies import picker_name_for
-from src.experimental.prototype.runtime.server import make_server_adapter
+from src.experimental.prototype.runtime.ports import pick_free_port
+from src.experimental.prototype.runtime.server import (
+    Framework,
+    make_server_adapter,
+)
 
-DFLT_READY_TIMEOUT_S = 5.0
+DFLT_READY_TIMEOUT_S = 20.0
 
 
-def _build_app(*,
-               thresholds: dict[str, float],
-               window_size: int,
-               warmup_n: int,
-               target_url: str,
-               poll_interval_ms: int) -> FastAPI:
-    """Build the controller app with a lifespan that runs a `SamplePoller` against `target_url`.
+def _build_fastapi_app(*,
+                       thresholds: dict[str, float],
+                       window_size: int,
+                       warmup_n: int,
+                       target_url: str,
+                       poll_interval_ms: int) -> FastAPI:
+    """Build the FastAPI controller app with a lifespan that runs an async `SamplePoller` against `target_url`.
 
     Args:
         thresholds (dict[str, float]): `{r1_max, r2_max}`.
@@ -47,20 +58,13 @@ def _build_app(*,
     Returns:
         FastAPI: configured controller app whose lifespan starts and stops the poller.
     """
-    _app = build_controller_app(thresholds=thresholds,
-                                window_size=window_size,
-                                warmup_n=warmup_n)
+    _app = build_controller_fastapi_app(thresholds=thresholds,
+                                        window_size=window_size,
+                                        warmup_n=warmup_n)
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Start the `SamplePoller` on app startup; stop it on shutdown.
-
-        Args:
-            app (FastAPI): the controller app whose state the poller mutates.
-
-        Yields:
-            None: control returns to FastAPI while the app serves requests.
-        """
+        """Start the `SamplePoller` on app startup; stop it on shutdown."""
         _poller = SamplePoller(target_url=target_url,
                                poll_interval_ms=poll_interval_ms,
                                app=app)
@@ -71,6 +75,37 @@ def _build_app(*,
             await _poller.stop()
 
     _app.router.lifespan_context = _lifespan
+    return _app
+
+
+def _build_flask_app(*,
+                     thresholds: dict[str, float],
+                     window_size: int,
+                     warmup_n: int,
+                     target_url: str,
+                     poll_interval_ms: int) -> Flask:
+    """Build the Flask controller app and start a sync `SyncSamplePoller` daemon thread.
+
+    Waitress has no lifespan equivalent, so the poller is launched inline and bound to the app via a custom attribute (`_sync_poller`) for diagnostic inspection. The daemon flag means the poller dies with the worker process; that is the standard teardown path (the parent terminates the worker, no graceful stop required).
+
+    Args:
+        thresholds (dict[str, float]): `{r1_max, r2_max}`.
+        window_size (int): rolling-window size.
+        warmup_n (int): minimum samples before breach flags can flip.
+        target_url (str): TAS_1 base URL the poller will pull from.
+        poll_interval_ms (int): cadence in milliseconds.
+
+    Returns:
+        Flask: configured controller app whose poll-loop thread is already running.
+    """
+    _app = build_controller_flask_app(thresholds=thresholds,
+                                      window_size=window_size,
+                                      warmup_n=warmup_n)
+    _poller = SyncSamplePoller(target_url=target_url,
+                               poll_interval_ms=poll_interval_ms,
+                               app=_app)
+    _poller.start()
+    _app._sync_poller = _poller  # type: ignore[attr-defined]
     return _app
 
 
@@ -116,7 +151,8 @@ def bring_up_controller(*,
                         poll_interval_ms: int,
                         port: int,
                         host: str = "127.0.0.1",
-                        ready_timeout_s: float = DFLT_READY_TIMEOUT_S) -> Iterator[str]:
+                        ready_timeout_s: float = DFLT_READY_TIMEOUT_S,
+                        framework: Framework = "fastapi") -> Iterator[str]:
     """Spawn the controller, wait for it to be ready, fire the picker config, yield its URL.
 
     Args:
@@ -131,19 +167,29 @@ def bring_up_controller(*,
         port (int): TCP port the controller binds.
         host (str, optional): bind address. Defaults to `127.0.0.1`.
         ready_timeout_s (float, optional): max seconds to wait for `/healthz`. Defaults to `DFLT_READY_TIMEOUT_S`.
+        framework (Framework, optional): controller server stack. `"fastapi"` runs uvicorn + async `SamplePoller` via FastAPI's lifespan; `"flask"` runs waitress + `SyncSamplePoller` on a daemon thread. Defaults to `"fastapi"`.
 
     Yields:
         str: controller base URL the orchestrator polls.
     """
-    _adapter = make_server_adapter("fastapi", "waitress")
-    _factory = functools.partial(_build_app,
-                                 thresholds=thresholds,
-                                 window_size=window_size,
-                                 warmup_n=warmup_n,
-                                 target_url=target_url,
-                                 poll_interval_ms=poll_interval_ms)
-    _adapter.mount(_factory, port=port, host=host)
-    _url = f"http://{host}:{port}"
+    _bind_port = pick_free_port(host=host, start_port=port)
+    _adapter = make_server_adapter(framework, "waitress")
+    if framework == "flask":
+        _factory = functools.partial(_build_flask_app,
+                                     thresholds=thresholds,
+                                     window_size=window_size,
+                                     warmup_n=warmup_n,
+                                     target_url=target_url,
+                                     poll_interval_ms=poll_interval_ms)
+    else:
+        _factory = functools.partial(_build_fastapi_app,
+                                     thresholds=thresholds,
+                                     window_size=window_size,
+                                     warmup_n=warmup_n,
+                                     target_url=target_url,
+                                     poll_interval_ms=poll_interval_ms)
+    _adapter.mount(_factory, port=_bind_port, host=host)
+    _url = f"http://{host}:{_bind_port}"
     try:
         _adapter.wait_ready(timeout_s=ready_timeout_s)
         _wait_target_healthy(target_url=target_url, deadline_s=time.time() + ready_timeout_s)

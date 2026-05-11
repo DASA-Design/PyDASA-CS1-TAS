@@ -9,11 +9,15 @@ Submodules:
 - `app.py`: FastAPI app for the controller process (`/aggregates`, `/history`, `/healthz`).
 - `poller.py`: `SamplePoller` asyncio task that pulls `/samples` from TAS_1.
 - `process.py`: `bring_up_controller` context manager that spawns the controller and fires the one-shot `/config` to TAS_1.
+- `observed.py`: per-pid CSV aggregator that produces an analytic-shaped `nodes` DataFrame for the notebook plotters.
 """
 
 from src.experimental.prototype.controller.app import (
     build_controller_app,
     ingest_samples,
+)
+from src.experimental.prototype.controller.observed import (
+    observed_nodes_from_run,
 )
 from src.experimental.prototype.controller.poller import SamplePoller
 from src.experimental.prototype.controller.process import bring_up_controller
@@ -47,6 +51,7 @@ __all__ = [
     "extract_op_weights",
     "ingest_samples",
     "make_picker",
+    "observed_nodes_from_run",
     "picker_from_wire",
     "picker_name_for",
     "write_verdict_json",

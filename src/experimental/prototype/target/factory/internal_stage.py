@@ -1,4 +1,4 @@
-"""Build one FastAPI app per internal TAS stage (`TAS_{2..6}`), used in expanded mode.
+"""Build one app per internal TAS stage (`TAS_{2..6}`) — FastAPI and Flask variants. Used in expanded mode.
 
 Each internal stage represents one operation in the published TAS workflow:
 
@@ -8,9 +8,11 @@ Each internal stage represents one operation in the published TAS workflow:
 - `TAS_{5}` calls a `drug` service (`changeDrug`).
 - `TAS_{6}` calls a `drug` service (`changeDose`).
 
-Each stage runs in its own uvicorn worker with an admission gate (k, c, K), optional μ-sleep (gated by `inject_internal_stage_mu`), per-pid CSV side-effect, and `apply_inject_failure` dispatch. The handler picks a third-party of the configured kind via a first-of-kind picker and dispatches via the same `ServiceClient` TAS_1 uses.
+Each stage runs in its own worker with an admission gate (k, c, K), optional μ-sleep (gated by `inject_internal_stage_mu`), per-pid CSV side-effect, and `apply_inject_failure` dispatch. The handler picks a third-party of the configured kind via a first-of-kind picker and dispatches via the same `ServiceClient` TAS_1 uses.
 
 `invoke_operation` is overridden so a downstream transport error (status 0 from `ServiceClient`) surfaces as HTTP 502 to the outer caller, instead of being masked behind the inherited atomic's hardcoded 200.
+
+`build_internal_stage_fastapi_app` is the ASGI shape served by uvicorn; `build_internal_stage_flask_app` is the WSGI shape served by waitress. The Flask variant runs the async stage on an `AsyncLoopThread` so the dispatch client + K + c gate are shared across waitress worker threads.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import asyncio
 import os
 import random
 import time
+from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,18 +29,23 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from flask import Flask
+from flask import Response as FlaskResponse
+from flask import jsonify, request
 from starlette.responses import Response
 
 from src.experimental.common.io.csv import CsvWriter
 from src.experimental.common.registry.cache import ServiceCache
 from src.experimental.common.registry.description import ServiceDescription
 from src.experimental.common.registry.service import ServiceRegistry
+from src.experimental.prototype.target.factory.async_bridge import AsyncLoopThread
 from src.experimental.prototype.target.factory.failure import (
     DFLT_TIMEOUT_GRACE_S,
     apply_inject_failure,
 )
 from src.experimental.prototype.target.factory.healthz import add_healthz_route
 from src.experimental.prototype.target.factory.third_party import (
+    _drop_generator,
     _safe_filename,
     _status_for_failure,
 )
@@ -317,8 +325,156 @@ def build_internal_stage_fastapi_app(*,
     return _app
 
 
+class InternalStageRoutesBase(ABC):
+    """Framework-neutral state for the internal-stage routes; the FastAPI and Flask subclasses add the `post_root` handler appropriate for ASGI / WSGI. Abstract so `build_internal_stage_*_app` callers can't accidentally instantiate the base."""
+
+    def __init__(self,
+                 *,
+                 svc: TasInternalAtomic,
+                 csv_dir: Path | None,
+                 run_id: str | None,
+                 timeout_grace_s: float) -> None:
+        """Configure the shared state."""
+        self._svc = svc
+        self._csv_dir = csv_dir
+        self._run_id = run_id
+        self._timeout_grace_s = timeout_grace_s
+
+    @abstractmethod
+    def post_root(self, *args: Any, **kwargs: Any) -> Any:
+        """Framework-specific request handler bound to `POST /`. FastAPI variant: async + payload arg; Flask variant: sync, reads `flask.request`."""
+        ...
+
+
+class InternalStageFlaskRoutes(InternalStageRoutesBase):
+    """Flask / WSGI binding: drive `svc.invoke_operation` through the shared `AsyncLoopThread`."""
+
+    def __init__(self,
+                 *,
+                 svc: TasInternalAtomic,
+                 loop: AsyncLoopThread,
+                 csv_dir: Path | None,
+                 run_id: str | None,
+                 timeout_grace_s: float) -> None:
+        """Configure the routes; identical contract to the FastAPI handler plus the shared loop."""
+        super().__init__(svc=svc,
+                         csv_dir=csv_dir,
+                         run_id=run_id,
+                         timeout_grace_s=timeout_grace_s)
+        self._loop = loop
+
+    def post_root(self) -> FlaskResponse:
+        """POST `/`: failure dispatch first, then admission + downstream call on the shared loop, then per-pid CSV."""
+        _payload: dict[str, Any] = request.get_json(force=True, silent=True) or {}
+        _maybe_failure = _sync_apply_inject_failure(_payload,
+                                                    timeout_grace_s=self._timeout_grace_s)
+        if _maybe_failure is not None:
+            _flag = _payload.get("inject_failure")
+            _log_csv_row(self._svc, self._csv_dir, self._run_id, _payload,
+                         status=_status_for_failure(_flag),
+                         body=None)
+            return _maybe_failure
+        _body, _status = self._loop.submit(self._svc.invoke_operation(_payload))
+        _log_csv_row(self._svc, self._csv_dir, self._run_id, _payload,
+                     status=_status, body=_body)
+        _resp = jsonify(_body)
+        _resp.status_code = _status
+        return _resp
+
+
+def _sync_apply_inject_failure(payload: dict[str, Any],
+                               *,
+                               timeout_grace_s: float) -> FlaskResponse | None:
+    """Sync (WSGI) mirror of `failure.apply_inject_failure` for the internal-stage path.
+
+    Args:
+        payload (dict[str, Any]): inbound request body; `inject_failure` decides the branch.
+        timeout_grace_s (float): blocking sleep for the `timeout` mechanism.
+
+    Returns:
+        FlaskResponse | None: 502 for `5xx`, drop-streaming response for `drop`, None for `timeout` (after blocking sleep) or when the flag is absent.
+
+    Raises:
+        ValueError: when the flag is set but not in `{"timeout", "drop", "5xx"}`.
+    """
+    _flag_raw = payload.get("inject_failure")
+    if _flag_raw is None:
+        return None
+    if _flag_raw == "timeout":
+        time.sleep(timeout_grace_s)
+        return None
+    if _flag_raw == "drop":
+        return FlaskResponse(_drop_generator(), mimetype="application/json")
+    if _flag_raw == "5xx":
+        _resp = jsonify({"error": "synthetic_5xx"})
+        _resp.status_code = 502
+        return _resp
+    _msg = (f"unknown inject_failure flag {_flag_raw!r}; "
+            "expected None, 'timeout', 'drop', or '5xx'")
+    raise ValueError(_msg)
+
+
+def build_internal_stage_flask_app(*,
+                                   svc_name: str,
+                                   calls_kind: str,
+                                   operation: str,
+                                   mu: float,
+                                   atomic_endpoint_lt: dict[str, str],
+                                   catalogue_version: str | None = None,
+                                   k: int | None = None,
+                                   c: int | None = None,
+                                   csv_dir: str | None = None,
+                                   run_id: str | None = None,
+                                   request_timeout_s: float = DFLT_TIMEOUT_S,
+                                   timeout_grace_s: float = DFLT_TIMEOUT_GRACE_S) -> Flask:
+    """Flask twin of `build_internal_stage_fastapi_app`. Same contract, same on-disk schema.
+
+    Args mirror the FastAPI factory; the Flask body runs the async `TasInternalAtomic` + `ServiceClient` pair on a dedicated `AsyncLoopThread` so the K + c admission gate plus the dispatch client share one loop across waitress worker threads.
+    """
+    _registry = ServiceRegistry()
+    for _svc_id, _endpoint in atomic_endpoint_lt.items():
+        _registry.register_service(ServiceDescription(_id=_svc_id,
+                                                      name=_svc_id,
+                                                      endpoint=_endpoint))
+    _cache = ServiceCache(_registry)
+    if csv_dir is None:
+        _csv_path: Path | None = None
+    else:
+        _csv_path = Path(csv_dir)
+    _loop = AsyncLoopThread()
+
+    async def _open_svc() -> TasInternalAtomic:
+        _client = ServiceClient(client_id=svc_name,
+                                cache=_cache,
+                                timeout_s=request_timeout_s)
+        await _client.__aenter__()
+        return TasInternalAtomic(service_name=svc_name,
+                                 kind=calls_kind,
+                                 operation=operation,
+                                 mu=mu,
+                                 client=_client,
+                                 cache=_cache,
+                                 catalogue_version=catalogue_version,
+                                 k=k,
+                                 c=c)
+
+    _svc = _loop.submit(_open_svc())
+    _routes = InternalStageFlaskRoutes(svc=_svc,
+                                       loop=_loop,
+                                       csv_dir=_csv_path,
+                                       run_id=run_id,
+                                       timeout_grace_s=timeout_grace_s)
+    _app = Flask(__name__)
+    _app.add_url_rule("/", view_func=_routes.post_root, methods=["POST"])
+    _app.add_url_rule("/healthz", view_func=lambda: ({"status": "ok"}, 200), methods=["GET"])
+    return _app
+
+
 __all__ = [
     "INTERNAL_CSV_COLUMNS",
+    "InternalStageFlaskRoutes",
+    "InternalStageRoutesBase",
     "TasInternalAtomic",
     "build_internal_stage_fastapi_app",
+    "build_internal_stage_flask_app",
 ]

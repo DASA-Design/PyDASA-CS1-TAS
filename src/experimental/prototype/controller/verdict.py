@@ -61,7 +61,8 @@ def compute_verdict(*,
                     stop_reason: str,
                     n_planned: int,
                     thresholds: dict[str, float],
-                    client_n_requests: int | None = None) -> dict[str, Any]:
+                    client_n_requests: int | None = None,
+                    mesh_admission: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """Walk the flow JSONL and emit the operational-analysis verdict dict.
 
     Args:
@@ -72,9 +73,10 @@ def compute_verdict(*,
         n_planned (int): the run's `target.json::trial.n_requests`.
         thresholds (dict[str, float]): `{"r1_max": ..., "r2_max": ...}` from `data/reference/baseline.json`.
         client_n_requests (int | None, optional): client-side A; if supplied, the flow-balance residual is `(client_n_requests - A_server) / max(client_n_requests, 1)`. Defaults to None.
+        mesh_admission (dict | None, optional): `{svc_id: {c, K, mu, eps}}` actually applied at mesh bring-up. When set, gets echoed into the verdict under `mesh` so stage 9 can verify the four methods used identical QN parameters. Defaults to None.
 
     Returns:
-        dict[str, Any]: verdict dict carrying `adp`, `run_id`, `thresholds`, `operational` (A, C, F, T_s, X_0_req_per_s, R_s), `r1`, `r2`, `stop_reason`, `n_planned`, `n_completed`, `flow_balance_residual`.
+        dict[str, Any]: verdict dict carrying `adp`, `run_id`, `thresholds`, `operational` (A, C, F, T_s, X_0_req_per_s, R_s), `r1`, `r2`, `stop_reason`, `n_planned`, `n_completed`, `flow_balance_residual`, and (when supplied) `mesh`.
     """
     _records = _walk_flows(flows_path)
     _A = len(_records)
@@ -144,6 +146,8 @@ def compute_verdict(*,
         "n_completed": _A,
         "flow_balance_residual": _residual,
     }
+    if mesh_admission is not None:
+        _ans["mesh"] = mesh_admission
     return _ans
 
 

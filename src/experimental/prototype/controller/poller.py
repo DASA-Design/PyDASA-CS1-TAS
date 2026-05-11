@@ -1,12 +1,16 @@
-"""SamplePoller: asyncio task that pulls samples from TAS_1's `/samples` endpoint.
+"""SamplePoller variants that pull samples from TAS_1's `/samples` endpoint.
 
-Spawned at controller startup; runs until cancelled. Every `poll_interval_ms`, calls `GET <target_url>/samples?since=<last_offset>` and feeds the new records to `controller.app.ingest_samples`. Transient HTTP errors are swallowed so a brief TAS_1 outage doesn't crash the controller; the next poll picks up wherever it left off.
+- `SamplePoller` (asyncio) runs inside FastAPI's lifespan; spawned at controller startup, cancelled on shutdown.
+- `SyncSamplePoller` (threading) runs inside a daemon thread for the Flask / waitress controller (which has no lifespan equivalent).
+
+Both call `GET <target_url>/samples?since=<last_offset>` every `poll_interval_ms` and feed the new records to `controller.app.ingest_samples`. Transient HTTP errors are swallowed; the next poll picks up wherever it left off.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from typing import Any
 
 import httpx
@@ -103,6 +107,92 @@ class SamplePoller:
             self._task = None
 
 
+class SyncSamplePoller:
+    """Threading-based sample poller for the Flask / waitress controller.
+
+    Waitress has no lifespan equivalent, so the Flask controller factory starts this on a daemon thread when the app is built. Idempotent `start` / `stop`; the daemon flag means a stuck poller dies with the worker process.
+
+    Attributes:
+        target_url (str): TAS_1 base URL.
+        poll_interval_s (float): seconds between polls.
+        app (Any): controller app exposing `app.state` with `window` / `history` / `last_offset` etc.
+    """
+
+    def __init__(self,
+                 *,
+                 target_url: str,
+                 poll_interval_ms: int,
+                 app: Any,
+                 http_timeout_s: float = 2.0) -> None:
+        """Configure the poller.
+
+        Args:
+            target_url (str): TAS_1 base URL.
+            poll_interval_ms (int): poll cadence in milliseconds.
+            app (Any): controller app whose state receives the ingested samples.
+            http_timeout_s (float, optional): per-poll HTTP timeout. Defaults to 2.0.
+        """
+        self.target_url = target_url.rstrip("/")
+        self.poll_interval_s = poll_interval_ms / 1000.0
+        self.app = app
+        self._http_timeout_s = http_timeout_s
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _poll_loop(self) -> None:
+        """Sync mirror of `SamplePoller._poll_loop` using a blocking `httpx.Client`."""
+        with httpx.Client(timeout=self._http_timeout_s) as _http:
+            while not self._stop_event.is_set():
+                self._poll_once(_http)
+                self._stop_event.wait(self.poll_interval_s)
+
+    def _poll_once(self, http: httpx.Client) -> None:
+        """Run one `GET /samples?since=<last_offset>` and merge any new records.
+
+        Transport errors, non-200 responses, and malformed JSON are all swallowed; the next poll retries from the same offset.
+
+        Args:
+            http (httpx.Client): shared sync client for the poll loop.
+        """
+        _records: list[dict[str, Any]] = []
+        _since = self.app.state.last_offset
+        _url = f"{self.target_url}/samples"
+        try:
+            _resp = http.get(_url, params={"since": _since})
+            if _resp.status_code == 200:
+                try:
+                    _body: dict[str, Any] = _resp.json()
+                except ValueError:
+                    _body = {}
+                _raw_records = _body.get("records", [])
+                if isinstance(_raw_records, list):
+                    _records = _raw_records
+        except httpx.RequestError:
+            pass
+        if _records:
+            ingest_samples(self.app, _records)
+
+    def start(self) -> None:
+        """Spawn the daemon poll-loop thread. Idempotent: a second call with the thread still alive is a no-op."""
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self, join_timeout_s: float = 2.0) -> None:
+        """Signal the poll loop to stop and join the daemon thread.
+
+        Args:
+            join_timeout_s (float, optional): max seconds to wait for the thread to exit. Defaults to 2.0.
+        """
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=join_timeout_s)
+            self._thread = None
+
+
 __all__ = [
     "SamplePoller",
+    "SyncSamplePoller",
 ]

@@ -240,7 +240,9 @@ class WorkflowEngine:
             _status_out = _last_status
         return _last_body, _status_out
 
-    def _lookup_or_synth(self, svc_id: str, kind: str) -> ServiceCatalogueEntry:
+    def _lookup_or_synth(self,
+                         svc_id: str,
+                         kind: str) -> ServiceCatalogueEntry:
         """Return the catalogue entry for `svc_id`, or synthesise one when it isn't in the catalogue.
 
         Internal-stage atomics (`TAS_{2..6}`) are not in the third-party catalogue but the engine still needs a `ServiceCatalogueEntry` to thread through `_dispatch`.

@@ -66,13 +66,19 @@ from src.experimental.prototype.controller import (
     write_verdict_json,
     write_window_parquet,
 )
+from src.experimental.prototype.runtime.async_loop import run_async_safe
 from src.experimental.prototype.target.config import load_target_cfg
 from src.experimental.prototype.target.factory.internal_stage import (
     build_internal_stage_fastapi_app,
+    build_internal_stage_flask_app,
 )
-from src.experimental.prototype.target.factory.tas import build_tas_fastapi_app
+from src.experimental.prototype.target.factory.tas import (
+    build_tas_fastapi_app,
+    build_tas_flask_app,
+)
 from src.experimental.prototype.target.factory.third_party import (
     build_atomic_fastapi_app,
+    build_atomic_flask_app,
 )
 from src.experimental.prototype.target.service.catalogue import (
     load_catalogue,
@@ -310,7 +316,9 @@ def _build_mesh_specs(*,
                       target_granularity: str = "collapsed",
                       inject_internal_stage_mu: bool = False,
                       stage_routes: dict[str, dict[str, str]] | None = None,
-                      ) -> tuple[list[MeshSpec], list[str]]:
+                      admission_lt: dict[str, dict[str, int]] | None = None,
+                      framework: Framework = "fastapi",
+                      ) -> tuple[list[MeshSpec], list[str], list[str]]:
     """Lay out the TAS mesh.
 
     Collapsed mode (default): TAS_1 composite + 7 third-party atomics on consecutive ports.
@@ -321,7 +329,7 @@ def _build_mesh_specs(*,
         workflow_name (str): workflow stem to load. `tas` for collapsed, `tas_expanded` for expanded.
         host (str): bind address shared by every spawner.
         base_port (int): port for the composite TAS app.
-        atomic_admission (dict[str, Any]): admission caps applied to every atomic (`{"k": ..., "c": ...}`).
+        atomic_admission (dict[str, Any]): admission caps applied as the global default when `admission_lt` is None or missing a key (`{"k": ..., "c": ...}`).
         flows_path (Path): per-request JSONL output path.
         csv_dir (Path): per-pid CSV output directory.
         run_id (str): identifier written into every record.
@@ -330,9 +338,10 @@ def _build_mesh_specs(*,
         target_granularity (str, optional): `collapsed` (default) or `expanded`.
         inject_internal_stage_mu (bool, optional): when True (and expanded mode), TAS_{2..6} sleep on their published mu. Defaults to False.
         stage_routes (dict | None, optional): per-stage `calls_kind` + `operation` map (used in expanded mode). Required when `target_granularity="expanded"`.
+        admission_lt (dict | None, optional): `{svc_id: {"c": int, "k": int}}` from `profile.specs`. When set, each atomic gets its per-svc cap; falls through to `atomic_admission` per-key when the profile is silent. Defaults to None (use the global `atomic_admission` for every atomic).
 
     Returns:
-        tuple[list[MeshSpec], list[str]]: spec list + sorted third-party atomic ids.
+        tuple[list[MeshSpec], list[str], list[str]]: spec list + sorted third-party atomic ids + sorted internal-stage ids (empty list in collapsed mode).
 
     Raises:
         KeyError: when the profile does not declare a mu for some catalogue service.
@@ -367,8 +376,16 @@ def _build_mesh_specs(*,
         for _idx, _stage_id in enumerate(_INTERNAL_STAGE_IDS):
             _internal_endpoint_lt[_stage_id] = f"http://{host}:{_internal_first_port + _idx}"
 
+    if framework == "flask":
+        _build_tas = build_tas_flask_app
+        _build_atomic = build_atomic_flask_app
+        _build_internal = build_internal_stage_flask_app
+    else:
+        _build_tas = build_tas_fastapi_app
+        _build_atomic = build_atomic_fastapi_app
+        _build_internal = build_internal_stage_fastapi_app
     _tas_factory = functools.partial(
-        build_tas_fastapi_app,
+        _build_tas,
         endpoint_lt=_atomic_endpoint_lt,
         catalogue_version=catalogue_version,
         workflow_name=workflow_name,
@@ -379,8 +396,8 @@ def _build_mesh_specs(*,
     )
     _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS", app_factory=_tas_factory)]
 
-    _k = atomic_admission.get("k")
-    _c = atomic_admission.get("c")
+    _dflt_k = atomic_admission.get("k")
+    _dflt_c = atomic_admission.get("c")
 
     if _is_expanded:
         # Internal stages (TAS_{2..6}) come right after TAS_1 on consecutive ports.
@@ -394,16 +411,17 @@ def _build_mesh_specs(*,
                 _msg = f"stage_routes missing entry for {_stage_id!r}"
                 raise ValueError(_msg)
             _stage_mu = mu_lt[_stage_id] if inject_internal_stage_mu else 0.0
+            _stage_k, _stage_c = _resolve_admission(_stage_id, admission_lt, _dflt_k, _dflt_c)
             _stage_factory = functools.partial(
-                build_internal_stage_fastapi_app,
+                _build_internal,
                 svc_name=_stage_id,
                 calls_kind=_route["calls_kind"],
                 operation=_route["operation"],
                 mu=_stage_mu,
                 atomic_endpoint_lt=_atomic_endpoint_lt,
                 catalogue_version=catalogue_version,
-                k=_k,
-                c=_c,
+                k=_stage_k,
+                c=_stage_c,
                 csv_dir=str(csv_dir),
                 run_id=run_id,
                 request_timeout_s=request_timeout_s,
@@ -420,20 +438,58 @@ def _build_mesh_specs(*,
             _failure_mix = None
         else:
             _failure_mix = dict(failure_modes_cfg.mix_for(_svc_id))
+        _svc_k, _svc_c = _resolve_admission(_svc_id, admission_lt, _dflt_k, _dflt_c)
         _atomic_factory = functools.partial(
-            build_atomic_fastapi_app,
+            _build_atomic,
             svc_name=_svc_id,
             kind=_entry.kind,
             mu=mu_lt[_svc_id],
-            k=_k,
-            c=_c,
+            k=_svc_k,
+            c=_svc_c,
             csv_dir=str(csv_dir),
             run_id=run_id,
             eps=_eps,
             failure_mix=_failure_mix,
         )
         _specs.append(MeshSpec(svc_id=_svc_id, app_factory=_atomic_factory))
-    return _specs, _atomic_ids
+    if _is_expanded:
+        _internal_stage_ids = list(_INTERNAL_STAGE_IDS)
+    else:
+        _internal_stage_ids = []
+    return _specs, _atomic_ids, _internal_stage_ids
+
+
+def _resolve_admission(svc_id: str,
+                       admission_lt: dict[str, dict[str, int]] | None,
+                       dflt_k: Any,
+                       dflt_c: Any) -> tuple[int | None, int | None]:
+    """Look up `(k, c)` for one svc; fall through to the global default.
+
+    Args:
+        svc_id (str): artifact id to resolve.
+        admission_lt (dict | None): per-svc admission map from `profile.specs`.
+        dflt_k (Any): `atomic_admission["k"]` from `target.json`.
+        dflt_c (Any): `atomic_admission["c"]` from `target.json`.
+
+    Returns:
+        tuple[int | None, int | None]: `(k, c)` for this svc.
+    """
+    _k: int | None
+    _c: int | None
+    if admission_lt is not None and svc_id in admission_lt:
+        _entry = admission_lt[svc_id]
+        _k = int(_entry["k"])
+        _c = int(_entry["c"])
+    else:
+        if dflt_k is None:
+            _k = None
+        else:
+            _k = int(dflt_k)
+        if dflt_c is None:
+            _c = None
+        else:
+            _c = int(dflt_c)
+    return _k, _c
 
 
 def _thresholds_from_reference() -> dict[str, float]:
@@ -556,6 +612,117 @@ def _mu_lt_from_profile(adp: str) -> dict[str, float]:
     _ans: dict[str, float] = {}
     for _artifact in _net.artifacts:
         _ans[_artifact.key] = float(_artifact.mu)
+    return _ans
+
+
+def _resolve_granularity_for_paths(target_cfg: dict[str, Any],
+                                   override: str | None) -> str:
+    """Resolve the effective granularity for path / variant decisions.
+
+    Args:
+        target_cfg (dict[str, Any]): the on-disk `target.json` block.
+        override (str | None): caller-supplied granularity override.
+
+    Returns:
+        str: `collapsed` or `expanded`.
+    """
+    if override is not None:
+        return override
+    return str(target_cfg.get("target_granularity", "collapsed"))
+
+
+def _variant_suffix_for(*,
+                        framework: Framework,
+                        granularity: str) -> str | None:
+    """Return the variant suffix for a `(framework, granularity)` pair.
+
+    The canonical `fastapi` + `collapsed` pair is the headline; everything else gets a suffix so it doesn't overwrite the headline results.
+
+    Args:
+        framework (Framework): server stack.
+        granularity (str): resolved granularity (`collapsed` or `expanded`).
+
+    Returns:
+        str | None: `<framework>__<granularity>` for variant runs; None for the canonical headline pair.
+    """
+    if framework == "fastapi" and granularity == "collapsed":
+        return None
+    return f"{framework}__{granularity}"
+
+
+def _build_mesh_admission(*,
+                          atomic_ids: list[str],
+                          admission_lt: dict[str, dict[str, int]],
+                          mu_lt: dict[str, float],
+                          eps_lt: dict[str, float],
+                          atomic_admission: dict[str, Any],
+                          internal_stage_ids: list[str] | None = None,
+                          include_composite: bool = True) -> dict[str, dict[str, Any]]:
+    """Build the `{svc_id: {c, K, mu, eps}}` block echoed into `verdict.json::mesh`.
+
+    Stage 9 (the yoly chart) reads this to verify the four methods used identical M/M/c/K parameters. Per-svc values come from `admission_lt`; the global `atomic_admission` fills in for ids the profile is silent on.
+
+    Args:
+        atomic_ids (list[str]): third-party atomic ids actually spawned.
+        admission_lt (dict): per-svc `{c, k}` from `profile.specs`.
+        mu_lt (dict): per-svc `mu` from `profile.specs`.
+        eps_lt (dict): per-svc `epsilon` from `profile.specs`.
+        atomic_admission (dict): global default `{k, c}` from `target.json`.
+        internal_stage_ids (list[str] | None, optional): internal-stage ids spawned in expanded mode (`TAS_{2..6}`). Each gets its own row. Defaults to None.
+        include_composite (bool, optional): when True, prepend a `TAS_{1}` row with the composite's `(c, K, mu, eps)` from `profile.specs`. Defaults to True.
+
+    Returns:
+        dict[str, dict[str, Any]]: rows for the composite (when included), every internal stage, and every third-party atomic. Keys preserve the natural mesh order: TAS_{1}, TAS_{2..6}, atomics sorted.
+    """
+    _dflt_k = atomic_admission.get("k")
+    _dflt_c = atomic_admission.get("c")
+    _ans: dict[str, dict[str, Any]] = {}
+    _composite_id = "TAS_{1}"
+    if include_composite and _composite_id in mu_lt:
+        _k, _c = _resolve_admission(_composite_id, admission_lt, _dflt_k, _dflt_c)
+        _ans[_composite_id] = {
+            "c": _c,
+            "K": _k,
+            "mu": float(mu_lt.get(_composite_id, 0.0)),
+            "eps": float(eps_lt.get(_composite_id, 0.0)),
+        }
+    if internal_stage_ids:
+        for _stage_id in internal_stage_ids:
+            if _stage_id not in mu_lt:
+                continue
+            _k, _c = _resolve_admission(_stage_id, admission_lt, _dflt_k, _dflt_c)
+            _ans[_stage_id] = {
+                "c": _c,
+                "K": _k,
+                "mu": float(mu_lt.get(_stage_id, 0.0)),
+                "eps": float(eps_lt.get(_stage_id, 0.0)),
+            }
+    for _svc_id in atomic_ids:
+        _k, _c = _resolve_admission(_svc_id, admission_lt, _dflt_k, _dflt_c)
+        _ans[_svc_id] = {
+            "c": _c,
+            "K": _k,
+            "mu": float(mu_lt.get(_svc_id, 0.0)),
+            "eps": float(eps_lt.get(_svc_id, 0.0)),
+        }
+    return _ans
+
+
+def _admission_lt_from_profile(adp: str) -> dict[str, dict[str, int]]:
+    """Read per-service (c, K) from the active profile's specs layer.
+
+    Parallels `_mu_lt_from_profile` / `_eps_lt_from_profile`. Stage 9 (the yoly chart) needs every method to compute over the same M/M/c/K parameters; this lift surfaces them so the experimental mesh runs over the same `(c, K)` analytic / dim / stoch use.
+
+    Args:
+        adp (str): adaptation key (selects which profile + scenario to load).
+
+    Returns:
+        dict[str, dict[str, int]]: `{svc_id: {"c": <int>, "k": <int>}}` per artifact id.
+    """
+    _net = load_profile(adaptation=adp, source="specs")
+    _ans: dict[str, dict[str, int]] = {}
+    for _artifact in _net.artifacts:
+        _ans[_artifact.key] = {"c": int(_artifact.c), "k": int(_artifact.K)}
     return _ans
 
 
@@ -699,7 +866,12 @@ def run_experiment(*,
     else:
         _run_id = run_id
 
-    _paths = make_run_paths(adp=adp, run_id=_run_id)
+    _resolved_granularity = _resolve_granularity_for_paths(_cfg, target_granularity)
+    _variant_suffix = _variant_suffix_for(framework=framework,
+                                          granularity=_resolved_granularity)
+    _paths = make_run_paths(adp=adp,
+                            run_id=_run_id,
+                            variant_suffix=_variant_suffix)
     _paths.ensure()
 
     _bounds_report = _maybe_check_bounds(dpl=dpl,
@@ -710,13 +882,10 @@ def run_experiment(*,
 
     _mu_lt = _mu_lt_from_profile(adp)
     _eps_lt = _eps_lt_from_profile(adp)
+    _admission_lt = _admission_lt_from_profile(adp)
     _failure_modes_cfg = load_failure_modes()
 
-    # Resolve mode: CLI override (function arg) wins over JSON; default to collapsed.
-    if target_granularity is not None:
-        _granularity = target_granularity
-    else:
-        _granularity = str(_cfg.get("target_granularity", "collapsed"))
+    _granularity = _resolved_granularity
     if inject_internal_stage_mu is not None:
         _inject_mu = inject_internal_stage_mu
     else:
@@ -732,7 +901,7 @@ def run_experiment(*,
 
     _stage_routes = _cfg.get("stage_routes") if _granularity == "expanded" else None
 
-    _specs, _atomic_ids = _build_mesh_specs(
+    _specs, _atomic_ids, _internal_stage_ids = _build_mesh_specs(
         catalogue_version=_cfg.get("catalogue_version"),
         workflow_name=_workflow_name,
         host=_cfg["host"],
@@ -748,7 +917,16 @@ def run_experiment(*,
         target_granularity=_granularity,
         inject_internal_stage_mu=_inject_mu,
         stage_routes=_stage_routes,
+        admission_lt=_admission_lt,
+        framework=framework,
     )
+    _mesh_admission = _build_mesh_admission(atomic_ids=_atomic_ids,
+                                            admission_lt=_admission_lt,
+                                            mu_lt=_mu_lt,
+                                            eps_lt=_eps_lt,
+                                            atomic_admission=_cfg["atomic_admission"],
+                                            internal_stage_ids=_internal_stage_ids,
+                                            include_composite=True)
 
     _trial = _cfg["trial"]
     _kind_p = _trial["kind_probability"]
@@ -791,8 +969,9 @@ def run_experiment(*,
                                  poll_interval_ms=_poll_interval_ms,
                                  port=_ctrl_port,
                                  host=_cfg["host"],
-                                 ready_timeout_s=_ctrl_ready_timeout_s) as _ctrl_url:
-            _summaries, _stop_reason = asyncio.run(_drive_trial(
+                                 ready_timeout_s=_ctrl_ready_timeout_s,
+                                 framework=framework) as _ctrl_url:
+            _summaries, _stop_reason = run_async_safe(lambda: _drive_trial(
                 tas_url=_tas_url,
                 n_requests=int(_trial["n_requests"]),
                 request_rate_per_s=float(_trial["request_rate_per_s"]),
@@ -813,7 +992,8 @@ def run_experiment(*,
                                stop_reason=_stop_reason,
                                n_planned=int(_trial["n_requests"]),
                                thresholds=_thresholds,
-                               client_n_requests=len(_summaries))
+                               client_n_requests=len(_summaries),
+                               mesh_admission=_mesh_admission)
     if write:
         write_verdict_json(_verdict, _paths.verdict_json)
         if _history:
@@ -848,6 +1028,8 @@ def run_experiment(*,
         "n_requests": len(_summaries),
         "outcome_counts": _outcome_counts,
         "atomic_ids": _atomic_ids,
+        "internal_stage_ids": _internal_stage_ids,
+        "observable_svc_ids": ["TAS_{1}"] + _internal_stage_ids + _atomic_ids,
         "paths": {
             "flows": str(_paths.flows),
             "csv_dir": str(_paths.csv_dir),

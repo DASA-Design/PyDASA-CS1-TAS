@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from src.experimental.prototype.runtime.ports import pick_free_port
 from src.experimental.prototype.runtime.server import (
     ServerAdapter,
     make_server_adapter,
@@ -159,11 +160,14 @@ def bring_up_mesh(specs: list[MeshSpec],
     if not specs:
         _msg = "bring_up_mesh requires at least one MeshSpec"
         raise ValueError(_msg)
+    _effective_base = _find_contiguous_block(host=host,
+                                             start_port=base_port,
+                                             n_ports=len(specs))
     _spawners: list[ServerAdapter] = []
     _urls: dict[str, str] = {}
     try:
         for _idx, _spec in enumerate(specs):
-            _port = base_port + _idx
+            _port = _effective_base + _idx
             if adapter_factory is None:
                 _adp = make_server_adapter(framework, wsgi_server)
             else:
@@ -177,6 +181,42 @@ def bring_up_mesh(specs: list[MeshSpec],
     finally:
         for _adp in reversed(_spawners):
             _adp.shutdown()
+
+
+def _find_contiguous_block(*,
+                           host: str,
+                           start_port: int,
+                           n_ports: int,
+                           max_blocks: int = 8) -> int:
+    """Pick the first start port whose `[start, start + n_ports)` window is fully bindable.
+
+    Used to relocate the whole mesh in one shift when the canonical block is held (TIME_WAIT after a prior iteration, an orphan, etc.). Probes each candidate block by walking it; the first port that fails to bind disqualifies that block.
+
+    Args:
+        host (str): bind address.
+        start_port (int): preferred first port.
+        n_ports (int): block size.
+        max_blocks (int, optional): how many `n_ports`-aligned blocks to try (canonical, then shifted up by `n_ports` each step). Defaults to 8.
+
+    Returns:
+        int: a `start` such that ports `start..start+n_ports-1` are all bindable.
+
+    Raises:
+        RuntimeError: when no clean block is found after `max_blocks` attempts.
+    """
+    for _block in range(max_blocks):
+        _candidate_base = start_port + _block * n_ports
+        try:
+            for _offset in range(n_ports):
+                pick_free_port(host=host,
+                               start_port=_candidate_base + _offset,
+                               max_skip=1)
+        except RuntimeError:
+            continue
+        return _candidate_base
+    _msg = (f"no contiguous {n_ports}-port block found starting at {host}:{start_port} "
+            f"after {max_blocks} attempts; orphaned processes may be hoarding the range.")
+    raise RuntimeError(_msg)
 
 
 __all__ = [
