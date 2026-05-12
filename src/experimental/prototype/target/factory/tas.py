@@ -7,7 +7,7 @@ The composite app exposes:
 - `POST /config`: accepts `{picker_name, op_weights, max_attempts, window_size}` and installs the corresponding strategy picker on the live workflow engine.
 - `GET /healthz`: readiness probe.
 
-The `ServiceCache` is built at app construction time from the `endpoint_lt` mapping (`svc_id -> base URL`). The FastAPI variant uses `lifespan` to own the `ServiceClient`; the Flask variant runs everything on a dedicated `AsyncLoopThread` so the engine, picker, and httpx client share one event loop across waitress worker threads.
+The `ServiceCache` is built at app construction time from the `url_lt` mapping (`svc_id -> base URL`). The FastAPI variant uses `lifespan` to own the `ServiceClient`; the Flask variant runs everything on a dedicated `AsyncLoopThread` so the engine, picker, and httpx client share one event loop across waitress worker threads.
 
 Both factories are top-level and `functools.partial`-bindable so they pickle across `multiprocessing.spawn` on Windows.
 """
@@ -19,7 +19,7 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -55,40 +55,50 @@ DFLT_SAMPLES_BUFFER_SIZE = 1024
 
 
 def _filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
-                              endpoint_lt: dict[str, str]) -> ServiceCatalogue:
+                              url_lt: dict[str, str | list[str]]) -> ServiceCatalogue:
     """Return a new catalogue restricted to entries the active mesh actually spawned.
 
     The on-disk catalogue layer (e.g. `weyns_iftikhar_2016`) lists every service across all adp scenarios. The active mesh only spawns the services declared in the active profile (e.g. baseline gets DS_{3}; s2 gets DS_{1}). Without this filter, `catalogue.by_kind` would happily return services the cache can't reach and the picker would hand them to `ServiceClient.invoke_operation` which then raises `UnknownServiceError`.
 
     Args:
         catalogue (ServiceCatalogue): full on-disk catalogue.
-        endpoint_lt (dict[str, str]): `svc_id -> URL` map of the active third-party mesh.
+        url_lt (dict[str, str]): `svc_id -> URL` map of the active third-party mesh.
 
     Returns:
-        ServiceCatalogue: same `name` / `source`, but `entries` filtered to ids in `endpoint_lt`.
+        ServiceCatalogue: same `name` / `source`, but `entries` filtered to ids in `url_lt`.
     """
     _filtered = {_id: _entry for _id, _entry in catalogue.entries.items()
-                 if _id in endpoint_lt}
+                 if _id in url_lt}
     _ans = ServiceCatalogue(name=catalogue.name,
                             source=catalogue.source,
                             entries=_filtered)
     return _ans
 
 
-def _build_registry(endpoint_lt: dict[str, str]) -> ServiceRegistry:
-    """Build a `ServiceRegistry` from a `svc_id -> endpoint URL` mapping.
+def _build_registry(url_lt: dict[str, str | list[str]]) -> ServiceRegistry:
+    """Build a `ServiceRegistry` from a `svc_id -> URL(s)` mapping.
+
+    Accepts either a single URL (single-worker svc; legacy shape) or a list of URLs (one per worker). The registry's `ServiceDescription` stores both forms so `ServiceClient` can round-robin across `urls` while legacy `desc.endpoint` readers still see the first URL.
 
     Args:
-        endpoint_lt (dict[str, str]): each entry registers one atomic.
+        url_lt (dict[str, str | list[str]]): each entry registers one service.
 
     Returns:
         ServiceRegistry: populated registry.
     """
     _reg = ServiceRegistry()
-    for _svc_id, _endpoint in endpoint_lt.items():
+    for _svc_id, _value in url_lt.items():
+        if isinstance(_value, str):
+            _urls: tuple[str, ...] = (_value,)
+        else:
+            _urls = tuple(_value)
+        if not _urls:
+            _msg = f"url_lt[{_svc_id!r}] is empty; need at least one URL"
+            raise ValueError(_msg)
         _reg.register_service(ServiceDescription(_id=_svc_id,
                                                  name=_svc_id,
-                                                 endpoint=_endpoint))
+                                                 endpoint=_urls[0],
+                                                 urls=_urls))
     return _reg
 
 
@@ -330,35 +340,35 @@ async def _tas_lifespan_factory(app: FastAPI,
 
 
 def build_tas_fastapi_app(*,
-                          endpoint_lt: dict[str, str],
+                          url_lt: dict[str, str | list[str]],
                           catalogue_version: str | None = None,
                           workflow_name: str = DFLT_WORKFLOW_NAME,
                           flows_path: str | None = None,
                           run_id: str | None = None,
                           timeout_s: float = DFLT_TIMEOUT_S,
-                          internal_endpoint_lt: dict[str, str] | None = None,
+                          internal_url_lt: dict[str, str | list[str]] | None = None,
                           samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE) -> FastAPI:
     """Build the composite TAS FastAPI app over a fixed atomic-endpoint mesh.
 
     Args:
-        endpoint_lt (dict[str, str]): mapping `svc_id -> base URL` for the third-party atomics.
+        url_lt (dict[str, str]): mapping `svc_id -> base URL` for the third-party atomics.
         catalogue_version (str | None, optional): version layer of `external_services.json` to load. Defaults to None (reads `_setpoint`).
         workflow_name (str, optional): workflow stem to load. Defaults to `tas` (collapsed); pass `tas_expanded` for expanded mode.
         flows_path (str | None, optional): JSONL path for per-request flow records (string for picklability). Defaults to None.
         run_id (str | None, optional): run identifier written into every flow record. Defaults to None.
         timeout_s (float, optional): per-dispatch HTTP timeout. Defaults to `DFLT_TIMEOUT_S`.
-        internal_endpoint_lt (dict[str, str] | None, optional): mapping `svc_id -> base URL` for the internal-stage atomics (`TAS_{2..6}`); None in collapsed mode. When set, the `ServiceCache` carries both maps so the engine can dispatch by either step-form.
+        internal_url_lt (dict[str, str] | None, optional): mapping `svc_id -> base URL` for the internal-stage atomics (`TAS_{2..6}`); None in collapsed mode. When set, the `ServiceCache` carries both maps so the engine can dispatch by either step-form.
         samples_buffer_size (int, optional): max records retained in `app.state.recent_samples`. The controller pulls them via `GET /samples`. Defaults to `DFLT_SAMPLES_BUFFER_SIZE` (1024).
 
     Returns:
         FastAPI: configured composite app with `POST /`, `GET /samples`, `POST /config`, and `GET /healthz`.
     """
-    _all_endpoints: dict[str, str] = dict(endpoint_lt)
-    if internal_endpoint_lt is not None:
-        _all_endpoints.update(internal_endpoint_lt)
-    _registry = _build_registry(_all_endpoints)
+    _all_urls: dict[str, str | list[str]] = dict(url_lt)
+    if internal_url_lt is not None:
+        _all_urls.update(internal_url_lt)
+    _registry = _build_registry(_all_urls)
     _cache = ServiceCache(_registry)
-    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), endpoint_lt)
+    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), url_lt)
     _workflow_spec = load_workflow(workflow_name)
     _engine = WorkflowEngine(spec=_workflow_spec, catalogue=_catalogue)
     if flows_path is None:
@@ -366,14 +376,16 @@ def build_tas_fastapi_app(*,
     else:
         _flows_writer = JsonlWriter(Path(flows_path))
 
-    def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """_lifespan _summary_
+    def _lifespan(app: FastAPI) -> AbstractAsyncContextManager[None]:
+        """FastAPI lifespan adapter.
+
+        `_tas_lifespan_factory` is decorated with `@asynccontextmanager`, so calling it returns an `AbstractAsyncContextManager[None]` (not a bare `AsyncIterator`). FastAPI's `lifespan=` parameter wants exactly that contract.
 
         Args:
-            app (FastAPI): _description_
+            app (FastAPI): the app whose lifespan is being managed.
 
         Returns:
-            AsyncIterator[None]: _description_
+            AbstractAsyncContextManager[None]: live context manager bound to this app.
         """
         return _tas_lifespan_factory(app,
                                      cache=_cache,
@@ -473,24 +485,24 @@ class TasFlaskRoutes(TasRoutesBase):
 
 
 def build_tas_flask_app(*,
-                        endpoint_lt: dict[str, str],
+                        url_lt: dict[str, str | list[str]],
                         catalogue_version: str | None = None,
                         workflow_name: str = DFLT_WORKFLOW_NAME,
                         flows_path: str | None = None,
                         run_id: str | None = None,
                         timeout_s: float = DFLT_TIMEOUT_S,
-                        internal_endpoint_lt: dict[str, str] | None = None,
+                        internal_url_lt: dict[str, str | list[str]] | None = None,
                         samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE) -> Flask:
     """Flask twin of `build_tas_fastapi_app`. Same routes, same on-disk schema (`flows/*.jsonl`).
 
     Args mirror the FastAPI factory. The Flask body runs the composite (engine + httpx client) on a dedicated `AsyncLoopThread` so engine state and the dispatch client live on one event loop across waitress worker threads.
     """
-    _all_endpoints: dict[str, str] = dict(endpoint_lt)
-    if internal_endpoint_lt is not None:
-        _all_endpoints.update(internal_endpoint_lt)
-    _registry = _build_registry(_all_endpoints)
+    _all_urls: dict[str, str | list[str]] = dict(url_lt)
+    if internal_url_lt is not None:
+        _all_urls.update(internal_url_lt)
+    _registry = _build_registry(_all_urls)
     _cache = ServiceCache(_registry)
-    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), endpoint_lt)
+    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), url_lt)
     _workflow_spec = load_workflow(workflow_name)
     _engine = WorkflowEngine(spec=_workflow_spec, catalogue=_catalogue)
     if flows_path is None:
@@ -512,10 +524,19 @@ def build_tas_flask_app(*,
                          flows_writer=_flows_writer)
     _routes = TasFlaskRoutes(handle=_handle, loop=_loop)
     _app = Flask(__name__)
-    _app.add_url_rule("/", view_func=_routes.post_root, methods=["POST"])
-    _app.add_url_rule("/samples", view_func=_routes.get_samples, methods=["GET"])
-    _app.add_url_rule("/config", view_func=_routes.post_config, methods=["POST"])
-    _app.add_url_rule("/healthz", view_func=lambda: ({"status": "ok"}, 200), methods=["GET"])
+    _app.add_url_rule("/",
+                      view_func=_routes.post_root,
+                      methods=["POST"])
+    _app.add_url_rule("/samples",
+                      view_func=_routes.get_samples,
+                      methods=["GET"])
+    _app.add_url_rule("/config",
+                      view_func=_routes.post_config,
+                      methods=["POST"])
+    _app.add_url_rule("/healthz",
+                      view_func=lambda:
+                          ({"status": "ok"}, 200),
+                          methods=["GET"])
     return _app
 
 

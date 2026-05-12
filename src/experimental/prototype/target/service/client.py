@@ -44,6 +44,8 @@ class ServiceClient:
         self._timeout_s = timeout_s
         self._transport = transport
         self._http: httpx.AsyncClient | None = None
+        # Per-svc round-robin counter so multi-worker services share load across workers.
+        self._rr_counters: dict[str, int] = {}
 
     async def __aenter__(self) -> Self:
         """Open the underlying HTTPX client."""
@@ -83,12 +85,32 @@ class ServiceClient:
             _msg = "ServiceClient must be used inside an async-with block (httpx client not open)"
             raise RuntimeError(_msg)
         _desc = self.cache.lookup(svc_name)
+        _url = self._pick_url(svc_name, _desc.iter_urls())
         _body_out: dict[str, Any] = dict(payload)
         _body_out["operation"] = operation
         _body_out["client_id"] = self.client_id
-        _ans_body, _ans_status = await self._post(endpoint=_desc.endpoint,
+        _ans_body, _ans_status = await self._post(endpoint=_url,
                                                   payload=_body_out)
         return _ans_body, _ans_status
+
+    def _pick_url(self, svc_name: str,
+                  urls: tuple[str, ...]) -> str:
+        """Round-robin one URL out of `urls` (the workers behind `svc_name`).
+
+        Per-svc counter lives on the client so each `ServiceClient` instance distributes its own outbound load across the service's workers independently. Single-worker services short-circuit to the only URL without incrementing the counter.
+
+        Args:
+            svc_name (str): service name; used as the counter key.
+            urls (tuple[str, ...]): URLs returned by `ServiceDescription.iter_urls`.
+
+        Returns:
+            str: one URL from `urls`.
+        """
+        if len(urls) == 1:
+            return urls[0]
+        _idx = self._rr_counters.get(svc_name, 0)
+        self._rr_counters[svc_name] = (_idx + 1) % len(urls)
+        return urls[_idx % len(urls)]
 
     async def _post(self,
                     endpoint: str,

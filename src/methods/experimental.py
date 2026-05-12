@@ -318,11 +318,12 @@ def _build_mesh_specs(*,
                       stage_routes: dict[str, dict[str, str]] | None = None,
                       admission_lt: dict[str, dict[str, int]] | None = None,
                       framework: Framework = "fastapi",
+                      workers_lt: dict[str, int] | None = None,
                       ) -> tuple[list[MeshSpec], list[str], list[str]]:
     """Lay out the TAS mesh.
 
     Collapsed mode (default): TAS_1 composite + 7 third-party atomics on consecutive ports.
-    Expanded mode: TAS_1 + 5 internal-stage atomics (TAS_{2..6}) + 7 third-party atomics. Internal stages slot between TAS_1 and the third-parties; the orchestrator threads `internal_endpoint_lt` into the TAS_1 factory so its workflow engine can dispatch to them.
+    Expanded mode: TAS_1 + 5 internal-stage atomics (TAS_{2..6}) + 7 third-party atomics. Internal stages slot between TAS_1 and the third-parties; the orchestrator threads `internal_url_lt` into the TAS_1 factory so its workflow engine can dispatch to them.
 
     Args:
         catalogue_version (str | None): version layer to load (None reads `_setpoint`).
@@ -357,24 +358,43 @@ def _build_mesh_specs(*,
         _msg = "stage_routes is required when target_granularity='expanded'"
         raise ValueError(_msg)
 
-    # Port layout: TAS at base_port; in expanded mode TAS_{2..6} occupy
-    # base_port+1..base_port+5; third-party atomics start at the next port.
+    # Port layout: each service consumes `workers` consecutive ports. TAS_{1} first,
+    # then internal stages (expanded only), then third-party atomics. `workers_lt`
+    # defaults each entry to 1 when unset.
+    def _workers_for(svc_id: str) -> int:
+        if workers_lt is None:
+            return 1
+        return max(1, int(workers_lt.get(svc_id, 1)))
+
+    _composite_id = "TAS_{1}"
+    _composite_workers = _workers_for(_composite_id)
+    _tas_first_port = base_port
+
     if _is_expanded:
-        _internal_first_port = base_port + 1
-        _atomic_first_port = base_port + 1 + len(_INTERNAL_STAGE_IDS)
+        _internal_first_port = _tas_first_port + _composite_workers
+        _internal_total_workers = sum(_workers_for(_sid) for _sid in _INTERNAL_STAGE_IDS)
+        _atomic_first_port = _internal_first_port + _internal_total_workers
     else:
-        _internal_first_port = base_port + 1  # unused in collapsed
-        _atomic_first_port = base_port + 1
+        _internal_first_port = _tas_first_port + _composite_workers  # unused in collapsed
+        _atomic_first_port = _tas_first_port + _composite_workers
 
-    _atomic_endpoint_lt: dict[str, str] = {}
-    for _idx, _svc_id in enumerate(_atomic_ids):
-        _atomic_endpoint_lt[_svc_id] = f"http://{host}:{_atomic_first_port + _idx}"
+    _atomic_url_lt: dict[str, list[str]] = {}
+    _offset = 0
+    for _svc_id in _atomic_ids:
+        _w = _workers_for(_svc_id)
+        _atomic_url_lt[_svc_id] = [f"http://{host}:{_atomic_first_port + _offset + _wi}"
+                                        for _wi in range(_w)]
+        _offset += _w
 
-    _internal_endpoint_lt: dict[str, str] | None = None
+    _internal_url_lt: dict[str, list[str]] | None = None
     if _is_expanded:
-        _internal_endpoint_lt = {}
-        for _idx, _stage_id in enumerate(_INTERNAL_STAGE_IDS):
-            _internal_endpoint_lt[_stage_id] = f"http://{host}:{_internal_first_port + _idx}"
+        _internal_url_lt = {}
+        _offset = 0
+        for _stage_id in _INTERNAL_STAGE_IDS:
+            _w = _workers_for(_stage_id)
+            _internal_url_lt[_stage_id] = [f"http://{host}:{_internal_first_port + _offset + _wi}"
+                                                for _wi in range(_w)]
+            _offset += _w
 
     if framework == "flask":
         _build_tas = build_tas_flask_app
@@ -386,15 +406,17 @@ def _build_mesh_specs(*,
         _build_internal = build_internal_stage_fastapi_app
     _tas_factory = functools.partial(
         _build_tas,
-        endpoint_lt=_atomic_endpoint_lt,
+        url_lt=_atomic_url_lt,
         catalogue_version=catalogue_version,
         workflow_name=workflow_name,
         flows_path=str(flows_path),
         run_id=run_id,
         timeout_s=request_timeout_s,
-        internal_endpoint_lt=_internal_endpoint_lt,
+        internal_url_lt=_internal_url_lt,
     )
-    _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS", app_factory=_tas_factory)]
+    _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS",
+                                       app_factory=_tas_factory,
+                                       workers=_composite_workers)]
 
     _dflt_k = atomic_admission.get("k")
     _dflt_c = atomic_admission.get("c")
@@ -418,7 +440,7 @@ def _build_mesh_specs(*,
                 calls_kind=_route["calls_kind"],
                 operation=_route["operation"],
                 mu=_stage_mu,
-                atomic_endpoint_lt=_atomic_endpoint_lt,
+                atomic_url_lt=_atomic_url_lt,
                 catalogue_version=catalogue_version,
                 k=_stage_k,
                 c=_stage_c,
@@ -426,7 +448,9 @@ def _build_mesh_specs(*,
                 run_id=run_id,
                 request_timeout_s=request_timeout_s,
             )
-            _specs.append(MeshSpec(svc_id=_stage_id, app_factory=_stage_factory))
+            _specs.append(MeshSpec(svc_id=_stage_id,
+                                   app_factory=_stage_factory,
+                                   workers=_workers_for(_stage_id)))
 
     for _svc_id in _atomic_ids:
         _entry = _catalogue.lookup(_svc_id)
@@ -451,7 +475,9 @@ def _build_mesh_specs(*,
             eps=_eps,
             failure_mix=_failure_mix,
         )
-        _specs.append(MeshSpec(svc_id=_svc_id, app_factory=_atomic_factory))
+        _specs.append(MeshSpec(svc_id=_svc_id,
+                               app_factory=_atomic_factory,
+                               workers=_workers_for(_svc_id)))
     if _is_expanded:
         _internal_stage_ids = list(_INTERNAL_STAGE_IDS)
     else:
@@ -708,6 +734,25 @@ def _build_mesh_admission(*,
     return _ans
 
 
+def _workers_lt_from_profile(adp: str) -> dict[str, int]:
+    """Read per-service worker counts (`w`) from the active profile's specs layer.
+
+    Args:
+        adp (str): adaptation key (selects which profile + scenario to load).
+
+    Returns:
+        dict[str, int]: worker count per artifact id. Defaults to 1 when the spec is silent.
+    """
+    _net = load_profile(adaptation=adp, source="specs")
+    _ans: dict[str, int] = {}
+    for _artifact in _net.artifacts:
+        try:
+            _ans[_artifact.key] = max(1, int(_artifact.w))
+        except KeyError:
+            _ans[_artifact.key] = 1
+    return _ans
+
+
 def _admission_lt_from_profile(adp: str) -> dict[str, dict[str, int]]:
     """Read per-service (c, K) from the active profile's specs layer.
 
@@ -727,7 +772,7 @@ def _admission_lt_from_profile(adp: str) -> dict[str, dict[str, int]]:
 
 
 async def _drive_trial(*,
-                       tas_url: str,
+                       tas_urls: list[str],
                        n_requests: int,
                        request_rate_per_s: float,
                        p_alarm: float,
@@ -738,63 +783,124 @@ async def _drive_trial(*,
                        poll_every_n: int = 0) -> tuple[list[dict[str, Any]], str]:
     """Drive up to `n_requests` against the composite TAS; halt early on a breach.
 
-    When `controller_url` is set and `poll_every_n > 0`, the loop polls the controller's `/aggregates` every `poll_every_n` requests and applies the strategy-specific stop predicate. The trial halts on the first breach, or after `n_requests` if no breach fires.
+    When `tas_urls` has more than one entry (multi-worker TAS_{1}), the trial spawns one `User` per URL. Each user runs `n_requests / N` requests at `request_rate_per_s / N` pacing so the aggregate rate matches the configured value while load distributes across the workers. A single shared breach-flag stops every user as soon as the first one observes a breach.
 
     Args:
-        tas_url (str): composite TAS base URL.
-        n_requests (int): max number of requests to send.
-        request_rate_per_s (float): pacing rate (0 = no pacing).
+        tas_urls (list[str]): one or more TAS_{1} base URLs (one per worker).
+        n_requests (int): aggregate request budget across all users.
+        request_rate_per_s (float): aggregate pacing rate (0 = no pacing). Split evenly across users.
         p_alarm (float): probability the next request is an alarm.
         request_timeout_s (float): per-request timeout.
-        seed (int | None): RNG seed for kind selection.
+        seed (int | None): RNG seed for kind selection (offset per user so each draws a distinct stream).
         controller_url (str | None, optional): controller base URL. None disables the breach poll. Defaults to None.
         adp (str, optional): adaptation key (drives the stop predicate). Defaults to `"baseline"`.
-        poll_every_n (int, optional): poll the controller every N completed requests. 0 disables. Defaults to 0.
+        poll_every_n (int, optional): aggregate request count between breach polls (0 disables). Defaults to 0.
 
     Returns:
         tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"` / `"r1_and_r2_breach"`).
     """
+    if not tas_urls:
+        _msg = "_drive_trial requires at least one TAS URL"
+        raise ValueError(_msg)
+    _n_users = len(tas_urls)
+    _per_user_n = max(1, n_requests // _n_users)
     if request_rate_per_s > 0:
-        _gap_s = 1.0 / request_rate_per_s
+        _per_user_rate = request_rate_per_s / _n_users
     else:
-        _gap_s = 0.0
+        _per_user_rate = 0.0
     _summaries: list[dict[str, Any]] = []
-    _stop_reason = "n_reached"
+    _summaries_lock = asyncio.Lock()
+    _stop_event = asyncio.Event()
+    _stop_reason_box: list[str] = ["n_reached"]
     import httpx
     _http: httpx.AsyncClient | None = None
     if controller_url is not None and poll_every_n > 0:
         _http = httpx.AsyncClient(timeout=2.0)
+    _per_user_poll = max(1, poll_every_n // _n_users) if poll_every_n > 0 else 0
     try:
-        async with User(client_id="trial-user-0",
-                        base_url=tas_url,
-                        endpoint_path="/",
-                        seed=seed,
-                        p_alarm=p_alarm,
-                        timeout_s=request_timeout_s,
-                        sequential_req_ids=True) as _user:
-            for _i in range(n_requests):
-                _record = await _user.run_one()
-                _summaries.append({
+        _tasks = []
+        for _ui, _url in enumerate(tas_urls):
+            _user_seed: int | None
+            if seed is None:
+                _user_seed = None
+            else:
+                _user_seed = seed + _ui
+            _tasks.append(_drive_one_user(client_id=f"trial-user-{_ui}",
+                                          base_url=_url,
+                                          n_requests=_per_user_n,
+                                          per_user_rate=_per_user_rate,
+                                          p_alarm=p_alarm,
+                                          request_timeout_s=request_timeout_s,
+                                          seed=_user_seed,
+                                          summaries=_summaries,
+                                          summaries_lock=_summaries_lock,
+                                          stop_event=_stop_event,
+                                          stop_reason_box=_stop_reason_box,
+                                          breach_http=_http,
+                                          controller_url=controller_url,
+                                          adp=adp,
+                                          per_user_poll=_per_user_poll))
+        await asyncio.gather(*_tasks)
+    finally:
+        if _http is not None:
+            await _http.aclose()
+    return _summaries, _stop_reason_box[0]
+
+
+async def _drive_one_user(*,
+                          client_id: str,
+                          base_url: str,
+                          n_requests: int,
+                          per_user_rate: float,
+                          p_alarm: float,
+                          request_timeout_s: float,
+                          seed: int | None,
+                          summaries: list[dict[str, Any]],
+                          summaries_lock: asyncio.Lock,
+                          stop_event: asyncio.Event,
+                          stop_reason_box: list[str],
+                          breach_http: "httpx.AsyncClient | None",
+                          controller_url: str | None,
+                          adp: str,
+                          per_user_poll: int) -> None:
+    """Drive one `User` against `base_url`; flush its records into a shared list under a lock.
+
+    Stops early when `stop_event` is set (a sibling user observed a breach) or when its own budget is exhausted.
+    """
+    if per_user_rate > 0:
+        _gap_s = 1.0 / per_user_rate
+    else:
+        _gap_s = 0.0
+    async with User(client_id=client_id,
+                    base_url=base_url,
+                    endpoint_path="/",
+                    seed=seed,
+                    p_alarm=p_alarm,
+                    timeout_s=request_timeout_s,
+                    sequential_req_ids=True) as _user:
+        for _i in range(n_requests):
+            if stop_event.is_set():
+                break
+            _record = await _user.run_one()
+            async with summaries_lock:
+                summaries.append({
                     "req_id": _record.req_id,
                     "kind": _record.kind,
                     "outcome": _record.outcome,
                     "status": _record.status_code,
                     "latency_s": _record.total_latency_s,
                 })
-                _done_count = _i + 1
-                if _http is not None and (_done_count % poll_every_n == 0):
-                    _stop, _reason = await _check_breach(_http,
-                                                         controller_url,
-                                                         adp)
-                    if _stop:
-                        _stop_reason = _reason
-                        break
-                if _gap_s > 0:
-                    await asyncio.sleep(_gap_s)
-    finally:
-        if _http is not None:
-            await _http.aclose()
-    return _summaries, _stop_reason
+            _done_count = _i + 1
+            if breach_http is not None and per_user_poll > 0 and (_done_count % per_user_poll == 0):
+                _stop, _reason = await _check_breach(breach_http,
+                                                     controller_url or "",
+                                                     adp)
+                if _stop:
+                    stop_reason_box[0] = _reason
+                    stop_event.set()
+                    break
+            if _gap_s > 0:
+                await asyncio.sleep(_gap_s)
 
 
 async def _check_breach(http: "httpx.AsyncClient",
@@ -883,6 +989,7 @@ def run_experiment(*,
     _mu_lt = _mu_lt_from_profile(adp)
     _eps_lt = _eps_lt_from_profile(adp)
     _admission_lt = _admission_lt_from_profile(adp)
+    _workers_lt = _workers_lt_from_profile(adp)
     _failure_modes_cfg = load_failure_modes()
 
     _granularity = _resolved_granularity
@@ -919,6 +1026,7 @@ def run_experiment(*,
         stage_routes=_stage_routes,
         admission_lt=_admission_lt,
         framework=framework,
+        workers_lt=_workers_lt,
     )
     _mesh_admission = _build_mesh_admission(atomic_ids=_atomic_ids,
                                             admission_lt=_admission_lt,
@@ -958,8 +1066,13 @@ def run_experiment(*,
                        host=_cfg["host"],
                        base_port=int(_cfg["tas_base_port"]),
                        ready_timeout_s=float(_cfg["ready_timeout_s"])) as _urls:
-        _tas_url = _urls["TAS"]
-        with bring_up_controller(target_url=_tas_url,
+        _tas_urls: list[str] = _urls["TAS"]
+        # Controller polls only the first TAS_{1} worker's /samples; each worker has its
+        # own buffer so cross-worker sample merging would need a shared store. The final
+        # verdict is computed from the shared flow JSONL (every worker appends), so the
+        # /samples gap only affects early-stop breach detection, not the verdict numbers.
+        _ctrl_target = _tas_urls[0]
+        with bring_up_controller(target_url=_ctrl_target,
                                  adp=adp,
                                  op_weights=_op_weights,
                                  thresholds=_thresholds,
@@ -972,7 +1085,7 @@ def run_experiment(*,
                                  ready_timeout_s=_ctrl_ready_timeout_s,
                                  framework=framework) as _ctrl_url:
             _summaries, _stop_reason = run_async_safe(lambda: _drive_trial(
-                tas_url=_tas_url,
+                tas_urls=_tas_urls,
                 n_requests=int(_trial["n_requests"]),
                 request_rate_per_s=float(_trial["request_rate_per_s"]),
                 p_alarm=float(_kind_p["alarm"]),

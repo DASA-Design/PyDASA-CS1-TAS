@@ -33,13 +33,17 @@ AdapterFactory = Callable[[], ServerAdapter]
 class MeshSpec:
     """One mesh entry: an id paired with the factory that builds its app.
 
+    `workers` defaults to 1 (one process per service); set higher to spawn multiple uvicorn / waitress workers on consecutive ports behind the same logical service id. `bring_up_mesh` yields a `dict[svc_id, list[str]]` of worker URLs; downstream registries / caches treat the list as the worker set the client should round-robin across.
+
     Attributes:
         svc_id (str): catalogue key (e.g. `MAS_{1}`, `TAS`).
         app_factory (AppFactory): zero-arg picklable callable returning the app.
+        workers (int): number of worker processes to spawn for this service. Defaults to 1.
     """
 
     svc_id: str
     app_factory: AppFactory
+    workers: int = 1
 
 # Runtime fallbacks for data/config/method/experimental.json::dpl.*.
 _DFLT_BASE_PORT = 8001
@@ -137,13 +141,13 @@ def bring_up_mesh(specs: list[MeshSpec],
                   host: str = "127.0.0.1",
                   base_port: int = _DFLT_BASE_PORT,
                   ready_timeout_s: float = _DFLT_READY_TIMEOUT_S,
-                  adapter_factory: AdapterFactory | None = None) -> Iterator[dict[str, str]]:
-    """Mount one spawner per spec on consecutive ports; yield a `svc_id -> URL` map.
+                  adapter_factory: AdapterFactory | None = None) -> Iterator[dict[str, list[str]]]:
+    """Mount each spec's app on `spec.workers` consecutive ports; yield a `svc_id -> [URL, ...]` map.
 
-    Specs mount on `base_port + i`. The helper waits for every spawner to pass its readiness probe before yielding; on exit, spawners shut down in reverse order. One process per spec; duplicate specs to run multiple workers per service.
+    Total port count = `sum(spec.workers for spec in specs)`. The helper picks a contiguous block large enough to hold every worker, then assigns each spec `workers` consecutive ports starting at the running offset. Waits for every spawner to pass its readiness probe before yielding; on exit, spawners shut down in reverse order.
 
     Args:
-        specs (list[MeshSpec]): mesh entries in mounting order.
+        specs (list[MeshSpec]): mesh entries in mounting order; each spec may carry `workers > 1`.
         framework (Framework, optional): server stack. Defaults to `"fastapi"`.
         wsgi_server (WsgiServer, optional): WSGI engine when `framework="flask"`. Defaults to `"waitress"`.
         host (str, optional): bind address. Defaults to `"127.0.0.1"`.
@@ -152,7 +156,7 @@ def bring_up_mesh(specs: list[MeshSpec],
         adapter_factory (AdapterFactory | None, optional): test seam.
 
     Yields:
-        dict[str, str]: `svc_id -> base URL` for every mounted spawner.
+        dict[str, list[str]]: `svc_id -> list of base URLs`. The list has one entry per worker; a single-worker spec yields a single-element list.
 
     Raises:
         ValueError: when `specs` is empty.
@@ -160,21 +164,28 @@ def bring_up_mesh(specs: list[MeshSpec],
     if not specs:
         _msg = "bring_up_mesh requires at least one MeshSpec"
         raise ValueError(_msg)
+    _total_workers = sum(max(1, _spec.workers) for _spec in specs)
     _effective_base = _find_contiguous_block(host=host,
                                              start_port=base_port,
-                                             n_ports=len(specs))
+                                             n_ports=_total_workers)
     _spawners: list[ServerAdapter] = []
-    _urls: dict[str, str] = {}
+    _urls: dict[str, list[str]] = {}
     try:
-        for _idx, _spec in enumerate(specs):
-            _port = _effective_base + _idx
-            if adapter_factory is None:
-                _adp = make_server_adapter(framework, wsgi_server)
-            else:
-                _adp = adapter_factory()
-            _adp.mount(_spec.app_factory, port=_port, host=host)
-            _spawners.append(_adp)
-            _urls[_spec.svc_id] = f"http://{host}:{_port}"
+        _offset = 0
+        for _spec in specs:
+            _n_workers = max(1, _spec.workers)
+            _spec_urls: list[str] = []
+            for _wi in range(_n_workers):
+                _port = _effective_base + _offset + _wi
+                if adapter_factory is None:
+                    _adp = make_server_adapter(framework, wsgi_server)
+                else:
+                    _adp = adapter_factory()
+                _adp.mount(_spec.app_factory, port=_port, host=host)
+                _spawners.append(_adp)
+                _spec_urls.append(f"http://{host}:{_port}")
+            _urls[_spec.svc_id] = _spec_urls
+            _offset += _n_workers
         for _adp in _spawners:
             _adp.wait_ready(timeout_s=ready_timeout_s)
         yield _urls

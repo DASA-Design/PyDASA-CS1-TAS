@@ -244,7 +244,7 @@ def build_internal_stage_fastapi_app(*,
                                      calls_kind: str,
                                      operation: str,
                                      mu: float,
-                                     atomic_endpoint_lt: dict[str, str],
+                                     atomic_url_lt: dict[str, str | list[str]],
                                      catalogue_version: str | None = None,
                                      k: int | None = None,
                                      c: int | None = None,
@@ -261,7 +261,7 @@ def build_internal_stage_fastapi_app(*,
         calls_kind (str): catalogue group this stage calls (`medical_analysis` / `alarm` / `drug`).
         operation (str): downstream operation name (e.g. `analyseData`).
         mu (float): service rate in req/s. <= 0 disables the sleep.
-        atomic_endpoint_lt (dict[str, str]): mapping `svc_id -> base URL` for the third-party atomics this stage may call.
+        atomic_url_lt (dict[str, str]): mapping `svc_id -> base URL` for the third-party atomics this stage may call.
         catalogue_version (str | None, optional): catalogue version layer to load for the picker (None reads `_setpoint`).
         k (int | None, optional): in-flight cap. Defaults to None.
         c (int | None, optional): parallel-worker cap. Defaults to None.
@@ -274,10 +274,18 @@ def build_internal_stage_fastapi_app(*,
         FastAPI: configured app with POST `/` + GET `/healthz`.
     """
     _registry = ServiceRegistry()
-    for _svc_id, _endpoint in atomic_endpoint_lt.items():
+    for _svc_id, _value in atomic_url_lt.items():
+        if isinstance(_value, str):
+            _urls: tuple[str, ...] = (_value,)
+        else:
+            _urls = tuple(_value)
+        if not _urls:
+            _msg = f"atomic_url_lt[{_svc_id!r}] is empty; need at least one URL"
+            raise ValueError(_msg)
         _registry.register_service(ServiceDescription(_id=_svc_id,
                                                       name=_svc_id,
-                                                      endpoint=_endpoint))
+                                                      endpoint=_urls[0],
+                                                      urls=_urls))
     _cache = ServiceCache(_registry)
     if csv_dir is None:
         _csv_path: Path | None = None
@@ -419,7 +427,7 @@ def build_internal_stage_flask_app(*,
                                    calls_kind: str,
                                    operation: str,
                                    mu: float,
-                                   atomic_endpoint_lt: dict[str, str],
+                                   atomic_url_lt: dict[str, str | list[str]],
                                    catalogue_version: str | None = None,
                                    k: int | None = None,
                                    c: int | None = None,
@@ -432,10 +440,18 @@ def build_internal_stage_flask_app(*,
     Args mirror the FastAPI factory; the Flask body runs the async `TasInternalAtomic` + `ServiceClient` pair on a dedicated `AsyncLoopThread` so the K + c admission gate plus the dispatch client share one loop across waitress worker threads.
     """
     _registry = ServiceRegistry()
-    for _svc_id, _endpoint in atomic_endpoint_lt.items():
+    for _svc_id, _value in atomic_url_lt.items():
+        if isinstance(_value, str):
+            _urls: tuple[str, ...] = (_value,)
+        else:
+            _urls = tuple(_value)
+        if not _urls:
+            _msg = f"atomic_url_lt[{_svc_id!r}] is empty; need at least one URL"
+            raise ValueError(_msg)
         _registry.register_service(ServiceDescription(_id=_svc_id,
                                                       name=_svc_id,
-                                                      endpoint=_endpoint))
+                                                      endpoint=_urls[0],
+                                                      urls=_urls))
     _cache = ServiceCache(_registry)
     if csv_dir is None:
         _csv_path: Path | None = None
