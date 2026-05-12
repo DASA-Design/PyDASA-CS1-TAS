@@ -1,18 +1,18 @@
 """Tests for `src.experimental.prototype.target.factory.tas`.
 
-**TestTasFactory**:
+**TestTasFactory**: composite `build_tas_fastapi_app` over an in-memory mesh of seven third-party ASGI apps.
 
-- `test_full_topology_round_trip`: build TAS over an in-memory mesh of 7 atomic ASGI apps; an end-to-end POST returns 200 with a populated `workflow.steps` audit trail; the JSONL flow record lands on disk.
-- `test_healthz`: GET `/healthz` returns 200 with `{"status": "ok"}`.
+- *test_round_trip()*: an `alarm` POST resolves through one atomic and writes one JSONL flow record.
+- *test_healthz()*: `GET /healthz` answers 200 / `{"status": "ok"}` regardless of mesh state.
+- *test_samples()*: `/samples?since=<offset>` returns the post-trial buffer; replaying with `next_offset` returns an empty list.
+- *test_config()*: `POST /config` installs the named picker on the live workflow engine.
 
-The mesh is in-process: each "atomic endpoint" is its own ASGI app wired through a per-endpoint `httpx.AsyncClient` mount inside the composite's `ServiceClient`. We do not boot uvicorn; the smoke spawn-process path is exercised by `tests/demo/composite.py`.
+The mesh is in-process via `MeshTransport`: each "atomic endpoint" is a sibling ASGI app dispatched by host:port; the composite's `ServiceClient` picks up the transport via the `patch_async_client` helper. We never boot uvicorn here; the spawn-process path is exercised by `tests/demo/composite.py`.
 """
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
@@ -22,49 +22,13 @@ from src.experimental.prototype.target.factory.tas import build_tas_fastapi_app
 from src.experimental.prototype.target.factory.third_party import (
     build_atomic_fastapi_app,
 )
+from tests.utils.exp.transports import MeshTransport, patch_async_client
 
-
-class _MeshTransport(httpx.AsyncBaseTransport):
-    """Route each request to the right per-host ASGI transport based on the request URL.
-
-    The composite holds endpoints like `http://127.0.0.1:8002`; we mount one ASGI transport per endpoint and dispatch by host:port. Used only for the in-process round-trip test.
-    """
-
-    def __init__(self, host_to_transport: dict[str, httpx.ASGITransport]) -> None:
-        self._lt = host_to_transport
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        _key = f"{request.url.host}:{request.url.port}"
-        _t = self._lt.get(_key)
-        if _t is None:
-            _msg = f"no transport for {_key!r}"
-            raise httpx.ConnectError(_msg)
-        return await _t.handle_async_request(request)
-
-
-def _build_mesh_transport(catalogue_ids: list[str]) -> tuple[
-    dict[str, str],
-    _MeshTransport,
-]:
-    """Build (`endpoint_lt`, transport) routing per-host requests to one ASGI app each.
-
-    Args:
-        catalogue_ids (list[str]): atomic ids to mount.
-
-    Returns:
-        tuple: (mapping `svc_id -> URL`, transport that dispatches by host:port).
-    """
-    _endpoints: dict[str, str] = {}
-    _routes: dict[str, httpx.ASGITransport] = {}
-    for _i, _svc_id in enumerate(catalogue_ids, start=1):
-        _host = f"127.0.0.1:{8000 + _i}"
-        _kind = _kind_from_svc_id(_svc_id)
-        _app = build_atomic_fastapi_app(svc_name=_svc_id,
-                                        kind=_kind,
-                                        mu=0.0)
-        _endpoints[_svc_id] = f"http://{_host}"
-        _routes[_host] = httpx.ASGITransport(app=_app)
-    return _endpoints, _MeshTransport(_routes)
+_ATOMIC_IDS: tuple[str, ...] = (
+    "AS_{1}", "AS_{2}", "AS_{3}",
+    "MAS_{1}", "MAS_{2}", "MAS_{3}",
+    "DS_{3}",
+)
 
 
 def _kind_from_svc_id(svc_id: str) -> str:
@@ -76,33 +40,41 @@ def _kind_from_svc_id(svc_id: str) -> str:
     return "drug"
 
 
+def _build_mesh_transport(catalogue_ids: tuple[str, ...] = _ATOMIC_IDS,
+                          base_port: int = 8001) -> tuple[dict[str, str], MeshTransport]:
+    """Build `(url_lt, transport)` routing per-host requests to one ASGI app each.
+
+    Args:
+        catalogue_ids (tuple[str, ...]): atomic ids to mount. Defaults to the canonical seven.
+        base_port (int, optional): first port; each id gets the next consecutive port.
+
+    Returns:
+        tuple: `(svc_id -> URL map, MeshTransport routing by host:port)`.
+    """
+    _urls: dict[str, str] = {}
+    _routes: dict[str, httpx.ASGITransport] = {}
+    for _i, _svc_id in enumerate(catalogue_ids):
+        _host = f"127.0.0.1:{base_port + _i}"
+        _app = build_atomic_fastapi_app(svc_name=_svc_id,
+                                        kind=_kind_from_svc_id(_svc_id),
+                                        mu=0.0)
+        _urls[_svc_id] = f"http://{_host}"
+        _routes[_host] = httpx.ASGITransport(app=_app)
+    return _urls, MeshTransport(_routes)
+
+
 class TestTasFactory:
-    """Composite factory over the mesh transport."""
+    """Composite factory wired through an in-memory mesh transport."""
 
     @pytest.mark.asyncio
-    async def test_full_topology_round_trip(self,
-                                            tmp_path: Path,
-                                            monkeypatch: pytest.MonkeyPatch) -> None:
-        """*test_full_topology_round_trip()* POSTing a `kind='alarm'` request to TAS dispatches to one alarm atomic and writes one JSONL flow record."""
-        _ids = ["AS_{1}", "AS_{2}", "AS_{3}",
-                "MAS_{1}", "MAS_{2}", "MAS_{3}",
-                "DS_{3}"]
-        _endpoint_lt, _mesh_transport = _build_mesh_transport(_ids)
-
-        # Patch httpx.AsyncClient so the composite's ServiceClient picks up the mesh transport.
-        _orig_async_client = httpx.AsyncClient
-
-        class _PatchedAsyncClient(_orig_async_client):
-            def __init__(_self, *args: Any, **kwargs: Any) -> None:  # noqa: N805
-                if kwargs.get("transport") is None:
-                    kwargs["transport"] = _mesh_transport
-                super().__init__(*args, **kwargs)
-
-        monkeypatch.setattr("src.experimental.prototype.target.service.client.httpx.AsyncClient",
-                            _PatchedAsyncClient)
-
+    async def test_round_trip(self,
+                              tmp_path: Path,
+                              monkeypatch: pytest.MonkeyPatch) -> None:
+        """*test_round_trip()* POSTing a `kind='alarm'` request to TAS dispatches to one alarm atomic and writes one JSONL flow record."""
+        _url_lt, _mesh_transport = _build_mesh_transport()
+        patch_async_client(monkeypatch, _mesh_transport)
         _flows_path = tmp_path / "flows.jsonl"
-        _app = build_tas_fastapi_app(endpoint_lt=_endpoint_lt,
+        _app = build_tas_fastapi_app(url_lt=_url_lt,
                                      flows_path=str(_flows_path),
                                      run_id="rid-test")
         _tas_transport = make_test_transport(_app, "fastapi")
@@ -125,10 +97,57 @@ class TestTasFactory:
     @pytest.mark.asyncio
     async def test_healthz(self) -> None:
         """*test_healthz()* `GET /healthz` returns 200 with `{"status": "ok"}` regardless of the mesh state."""
-        _app = build_tas_fastapi_app(endpoint_lt={})
+        _app = build_tas_fastapi_app(url_lt={})
         _transport = make_test_transport(_app, "fastapi")
         async with httpx.AsyncClient(transport=_transport,
                                      base_url="http://tas") as _http:
             _resp = await _http.get("/healthz")
         assert _resp.status_code == 200
         assert _resp.json() == {"status": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_samples(self,
+                           tmp_path: Path,
+                           monkeypatch: pytest.MonkeyPatch) -> None:
+        """*test_samples()* after one POST, `/samples?since=0` returns one record; replaying with the returned `next_offset` returns an empty list."""
+        _url_lt, _mesh_transport = _build_mesh_transport()
+        patch_async_client(monkeypatch, _mesh_transport)
+        _app = build_tas_fastapi_app(url_lt=_url_lt, run_id="rid")
+        _transport = make_test_transport(_app, "fastapi")
+        async with _app.router.lifespan_context(_app):
+            async with httpx.AsyncClient(transport=_transport,
+                                         base_url="http://tas") as _http:
+                await _http.post("/", json={"req_id": "r0",
+                                            "kind": "alarm",
+                                            "client_id": "u",
+                                            "submitted_ts": 0.0})
+                _first = await _http.get("/samples", params={"since": 0})
+                assert _first.status_code == 200
+                _first_body = _first.json()
+                assert len(_first_body["records"]) == 1
+                assert _first_body["records"][0]["req_id"] == "r0"
+                _next_offset = _first_body["next_offset"]
+                _second = await _http.get("/samples", params={"since": _next_offset})
+                assert _second.json()["records"] == []
+
+    @pytest.mark.asyncio
+    async def test_config(self) -> None:
+        """*test_config()* `POST /config` installs the named picker on the live workflow engine."""
+        _url_lt = {"AS_{1}": "http://127.0.0.1:8001",
+                   "MAS_{1}": "http://127.0.0.1:8002",
+                   "DS_{3}": "http://127.0.0.1:8003"}
+        _app = build_tas_fastapi_app(url_lt=_url_lt)
+        _transport = make_test_transport(_app, "fastapi")
+        async with _app.router.lifespan_context(_app):
+            async with httpx.AsyncClient(transport=_transport,
+                                         base_url="http://tas") as _http:
+                _resp = await _http.post("/config", json={
+                    "picker_name": "retry_on_failure",
+                    "op_weights": {"triggerAlarm": {"AS_{1}": 1.0}},
+                    "max_attempts": 3,
+                    "window_size": 100,
+                })
+        assert _resp.status_code == 200
+        assert _resp.json() == {"applied": True, "picker_name": "retry_on_failure"}
+        from src.experimental.prototype.controller.strategies import RetryOnFailurePicker
+        assert isinstance(_app.state.composite.workflow.picker, RetryOnFailurePicker)

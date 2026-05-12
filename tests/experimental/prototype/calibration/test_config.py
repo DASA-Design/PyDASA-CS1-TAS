@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from src.experimental.prototype.calibration.config import (
-    DFLT_CALIBRATION_CFG_PATH,
+    DFLT_CALIB_CFG_PATH,
     load_calibration_cfg,
 )
 
@@ -40,5 +40,5 @@ class TestCalibrationConfig:
 
     def test_dflt_path(self) -> None:
         """The default path constant points at the on-disk JSON file."""
-        assert DFLT_CALIBRATION_CFG_PATH.name == "calibration.json"
-        assert DFLT_CALIBRATION_CFG_PATH.is_file()
+        assert DFLT_CALIB_CFG_PATH.name == "calibration.json"
+        assert DFLT_CALIB_CFG_PATH.is_file()

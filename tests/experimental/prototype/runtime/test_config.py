@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from src.experimental.prototype.runtime.config import (
-    DFLT_EXPERIMENTAL_CFG_PATH,
+    DFLT_EXP_CFG_PATH,
     load_experimental_cfg,
     load_server_cfg,
 )
@@ -88,5 +88,5 @@ class TestConfig:
 
     def test_dflt_path(self) -> None:
         """The exported default path points at `data/config/method/experimental.json` and exists on disk."""
-        assert DFLT_EXPERIMENTAL_CFG_PATH.name == "experimental.json"
-        assert DFLT_EXPERIMENTAL_CFG_PATH.is_file()
+        assert DFLT_EXP_CFG_PATH.name == "experimental.json"
+        assert DFLT_EXP_CFG_PATH.is_file()

@@ -22,7 +22,7 @@ import os
 import random
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -244,7 +244,7 @@ def build_internal_stage_fastapi_app(*,
                                      calls_kind: str,
                                      operation: str,
                                      mu: float,
-                                     atomic_url_lt: dict[str, str | list[str]],
+                                     atomic_url_lt: Mapping[str, str | list[str]],
                                      catalogue_version: str | None = None,
                                      k: int | None = None,
                                      c: int | None = None,
@@ -427,7 +427,7 @@ def build_internal_stage_flask_app(*,
                                    calls_kind: str,
                                    operation: str,
                                    mu: float,
-                                   atomic_url_lt: dict[str, str | list[str]],
+                                   atomic_url_lt: Mapping[str, str | list[str]],
                                    catalogue_version: str | None = None,
                                    k: int | None = None,
                                    c: int | None = None,

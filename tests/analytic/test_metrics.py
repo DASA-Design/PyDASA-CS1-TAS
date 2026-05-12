@@ -113,12 +113,12 @@ class TestCheckRequirements:
         assert _req["R3"]["pass"] is False
 
     def test_r1_fail_from_epsilon_column(self) -> None:
-        """*test_r1_fail_from_epsilon_column()* per-node `epsilon` mean of 0.01 (1 percent, far above the 0.03 percent threshold) -> `R1.pass is False`, `R3.pass is False`."""
+        """*test_r1_fail_from_epsilon_column()* per-node `epsilon` mean of 0.05 (5 percent, above the 1 percent Weyns 2015 R1 threshold) -> `R1.pass is False`, `R3.pass is False`."""
         _nodes = _make_nodes([
             {"lambda": 10.0, "W": 0.001},
             {"lambda": 10.0, "W": 0.001},
         ])
-        _nodes["epsilon"] = [0.01, 0.01]
+        _nodes["epsilon"] = [0.05, 0.05]
         _req = check_reqs(_nodes)
         assert _req["R1"]["pass"] is False
         assert _req["R2"]["pass"] is True

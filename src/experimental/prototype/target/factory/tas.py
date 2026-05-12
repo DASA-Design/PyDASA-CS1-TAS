@@ -18,7 +18,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -55,7 +55,7 @@ DFLT_SAMPLES_BUFFER_SIZE = 1024
 
 
 def _filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
-                              url_lt: dict[str, str | list[str]]) -> ServiceCatalogue:
+                              url_lt: Mapping[str, str | list[str]]) -> ServiceCatalogue:
     """Return a new catalogue restricted to entries the active mesh actually spawned.
 
     The on-disk catalogue layer (e.g. `weyns_iftikhar_2016`) lists every service across all adp scenarios. The active mesh only spawns the services declared in the active profile (e.g. baseline gets DS_{3}; s2 gets DS_{1}). Without this filter, `catalogue.by_kind` would happily return services the cache can't reach and the picker would hand them to `ServiceClient.invoke_operation` which then raises `UnknownServiceError`.
@@ -75,13 +75,13 @@ def _filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
     return _ans
 
 
-def _build_registry(url_lt: dict[str, str | list[str]]) -> ServiceRegistry:
+def _build_registry(url_lt: Mapping[str, str | list[str]]) -> ServiceRegistry:
     """Build a `ServiceRegistry` from a `svc_id -> URL(s)` mapping.
 
     Accepts either a single URL (single-worker svc; legacy shape) or a list of URLs (one per worker). The registry's `ServiceDescription` stores both forms so `ServiceClient` can round-robin across `urls` while legacy `desc.endpoint` readers still see the first URL.
 
     Args:
-        url_lt (dict[str, str | list[str]]): each entry registers one service.
+        url_lt (Mapping[str, str | list[str]]): each entry registers one service.
 
     Returns:
         ServiceRegistry: populated registry.
@@ -340,13 +340,13 @@ async def _tas_lifespan_factory(app: FastAPI,
 
 
 def build_tas_fastapi_app(*,
-                          url_lt: dict[str, str | list[str]],
+                          url_lt: Mapping[str, str | list[str]],
                           catalogue_version: str | None = None,
                           workflow_name: str = DFLT_WORKFLOW_NAME,
                           flows_path: str | None = None,
                           run_id: str | None = None,
                           timeout_s: float = DFLT_TIMEOUT_S,
-                          internal_url_lt: dict[str, str | list[str]] | None = None,
+                          internal_url_lt: Mapping[str, str | list[str]] | None = None,
                           samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE) -> FastAPI:
     """Build the composite TAS FastAPI app over a fixed atomic-endpoint mesh.
 
@@ -485,13 +485,13 @@ class TasFlaskRoutes(TasRoutesBase):
 
 
 def build_tas_flask_app(*,
-                        url_lt: dict[str, str | list[str]],
+                        url_lt: Mapping[str, str | list[str]],
                         catalogue_version: str | None = None,
                         workflow_name: str = DFLT_WORKFLOW_NAME,
                         flows_path: str | None = None,
                         run_id: str | None = None,
                         timeout_s: float = DFLT_TIMEOUT_S,
-                        internal_url_lt: dict[str, str | list[str]] | None = None,
+                        internal_url_lt: Mapping[str, str | list[str]] | None = None,
                         samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE) -> Flask:
     """Flask twin of `build_tas_fastapi_app`. Same routes, same on-disk schema (`flows/*.jsonl`).
 
