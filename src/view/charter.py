@@ -24,7 +24,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 # scientific stack
 import numpy as np
-import matplotlib.colors as mcolors
 from matplotlib.figure import Figure
 
 # shared view helpers (every helper + constant lives in common; this module only orchestrates)
@@ -506,38 +505,74 @@ def plot_yoly_space(coeff_data: Dict[str, Any],
 
 
 # Dim-grey dashed trajectory line connecting baseline -> s1 -> s2 -> aggregate; X
-# marker style for each operating point. Marker colour stays in sync with the
-# swept cloud's per-scenario colour (both come from `_generate_color_map` keyed
-# by index) but is darkened by `_OP_POINT_DARKEN` so the markers read as a
-# committed point against their cloud rather than blending in.
+# marker style for each operating point. Marker colour matches the swept cloud's
+# per-scenario colour (both come from `_generate_color_map` keyed by index) so the
+# X reads as "the operating point of THIS cloud" at a glance. The annotation text
+# uses a dark contrasting colour (deep forest green) so the adp tag stays
+# legible against any cloud or marker colour.
 _OP_POINT_LINE_COLOR = "#888888"
 _OP_POINT_LINE_WIDTH = 1.0
 _OP_POINT_LINE_STYLE = "--"
 _OP_POINT_LINE_ZORDER = 2.0
 _OP_POINT_MARKER = "X"
-_OP_POINT_SIZE = 204
+_OP_POINT_SIZE = 180
 _OP_POINT_EDGE = "black"
 _OP_POINT_EDGEWIDTH = 0.8
 _OP_POINT_ZORDER = 3.0
 _OP_POINT_LABEL_OFFSET = (6, 4)
-_OP_POINT_LABEL_FONTSIZE = 8
-_OP_POINT_DARKEN = 0.6
+_OP_POINT_LABEL_FONTSIZE = 9
+_OP_POINT_LABEL_COLOR = "#1B5E20"
+_OP_POINT_LABEL_BG = "white"
+_OP_POINT_LABEL_BG_ALPHA = 0.6
+_OP_POINT_LABEL_PAD = 1.5
+_OP_POINT_LEGEND_SUFFIX = " (op)"
 
 
-def _darken_color(color: Any, factor: float = _OP_POINT_DARKEN) -> Tuple[float, float, float]:
-    """*_darken_color()* multiply an RGB-like colour's channels by `factor` (in `[0, 1]`).
+def _op_point_label_bbox() -> Dict[str, Any]:
+    """*_op_point_label_bbox()* matplotlib bbox dict for the op-point annotation background.
 
-    Used to derive operating-point marker colours from the swept cloud's per-scenario palette so the marker reads as the same scenario, just darker (= committed point vs. swept cloud).
-
-    Args:
-        color (Any): any matplotlib-accepted colour (hex string, name, or RGB-like tuple).
-        factor (float): multiplier in `[0, 1]`. Defaults to `_OP_POINT_DARKEN` (`0.6`).
+    White semi-transparent (60 % opaque) so the adp tag stays legible when it lands on top of a dense sweep cloud or directly over a marker.
 
     Returns:
-        Tuple[float, float, float]: darkened RGB triple in `[0, 1]`, ready to pass back as a matplotlib colour.
+        Dict[str, Any]: kwargs for `ax.annotate(..., bbox=...)` / `ax.text(..., bbox=...)`.
     """
-    _rgb = mcolors.to_rgb(color)
-    return (_rgb[0] * factor, _rgb[1] * factor, _rgb[2] * factor)
+    return {
+        "facecolor": _OP_POINT_LABEL_BG,
+        "alpha": _OP_POINT_LABEL_BG_ALPHA,
+        "edgecolor": "none",
+        "pad": _OP_POINT_LABEL_PAD,
+    }
+
+
+def _resolve_op_point_colors(adps: List[str],
+                             scenarios: Optional[Dict[str, str]],
+                             paths: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    """*_resolve_op_point_colors()* mirror the sweep plotter's sort-based palette so op-point markers match their swept cloud's colour 1:1.
+
+    The yoly sweep painter assigns colours by `sorted(scenarios.keys())`, not by insertion order, so a naive `_generate_color_map(op_points.keys())` puts the wrong colour under each marker. This helper rebuilds the same `display_name -> color` mapping the sweep used, then pairs op-point entries to the scenarios by insertion order (the natural way the notebook constructs both dicts from the same `for adp in adps` loop).
+
+    When no `scenarios=` / `paths=` is provided (single-mode plotting), falls back to a plain `_generate_color_map(adps)` per insertion order.
+
+    Args:
+        adps (List[str]): op-point keys in caller-provided order (the trajectory direction).
+        scenarios (Optional[Dict[str, str]]): TAS-idiom grouping `{display_name: tag}`.
+        paths (Optional[Dict[str, str]]): PACS-idiom grouping (alias of `scenarios`).
+
+    Returns:
+        Dict[str, Any]: `{adp: matplotlib_color}` aligned with the swept cloud's colours.
+    """
+    _group_map = scenarios or paths
+    if _group_map and len(_group_map) == len(adps):
+        _sorted_displays = sorted(_group_map.keys())
+        _palette = _generate_color_map(_sorted_displays)
+        _display_to_color = dict(zip(_sorted_displays, _palette))
+        # Pair op-point keys to scenario keys by insertion order. The notebook
+        # convention builds both dicts from the same `for a in adps` loop, so
+        # `op_points["s1"]` lines up with `scenarios[DISPLAY["s1"]]`.
+        return {_adp: _display_to_color[_display]
+                for _adp, _display in zip(adps, _group_map.keys())}
+    _palette = _generate_color_map(adps)
+    return {_a: _palette[_i] for _i, _a in enumerate(adps)}
 
 
 def _is_3d_axis(ax: Any) -> bool:
@@ -601,12 +636,14 @@ def _overlay_op_points_chart(axes: List[Any],
                         edgecolor=_OP_POINT_EDGE,
                         linewidth=_OP_POINT_EDGEWIDTH,
                         zorder=_OP_POINT_ZORDER)
-            _ax.annotate(_adp,
+            _ax.annotate(_adp.capitalize(),
                          xy=(_x, _y),
                          xytext=_OP_POINT_LABEL_OFFSET,
                          textcoords="offset points",
                          fontsize=_OP_POINT_LABEL_FONTSIZE,
-                         color=_TEXT_BLACK)
+                         color=_OP_POINT_LABEL_COLOR,
+                         fontweight="bold",
+                         bbox=_op_point_label_bbox())
 
 
 def _overlay_op_points_space(ax: Any,
@@ -637,9 +674,63 @@ def _overlay_op_points_space(ax: Any,
                    linewidth=_OP_POINT_EDGEWIDTH,
                    zorder=_OP_POINT_ZORDER)
         # 3D axes: text() instead of annotate(); place tag slightly offset along x.
-        ax.text(_x, _y, _z, f"  {_adp}",
+        ax.text(_x, _y, _z, f"  {_adp.capitalize()}",
                 fontsize=_OP_POINT_LABEL_FONTSIZE,
-                color=_TEXT_BLACK)
+                color=_OP_POINT_LABEL_COLOR,
+                fontweight="bold",
+                bbox=_op_point_label_bbox())
+
+
+def _append_op_points_to_footer_legend(fig: Figure,
+                                       adps: List[str],
+                                       colors: Dict[str, Any],
+                                       legend_ncol_cap: int) -> None:
+    """*_append_op_points_to_footer_legend()* extend the footer legend with one op-point entry per adaptation.
+
+    The base yoly plotters lift the body axis's swept-cloud legend onto a dedicated footer axis. After the overlay paints X markers on top, append a `Line2D` proxy per adaptation to that footer legend so the marker's meaning is explicit (matched colour-and-tag with the per-adaptation cloud entry).
+
+    No-op when the figure has no footer legend (e.g. single-mode plotting without `scenarios=`).
+
+    Args:
+        fig (Figure): the matplotlib figure produced by the base plotter (already has its footer legend).
+        adps (List[str]): adaptation labels in iteration order; matches the colour assignment in the overlay.
+        colors (Dict[str, Any]): `{adp: matplotlib_color}` used for the X markers; reused here for the legend proxies so the colour story stays consistent.
+        legend_ncol_cap (int): max column count; same value the base plotter used so the augmented legend wraps cleanly.
+    """
+    from matplotlib.lines import Line2D
+
+    _footer_ax = None
+    for _ax in reversed(fig.axes):
+        if _ax.get_legend() is not None:
+            _footer_ax = _ax
+            break
+    if _footer_ax is None:
+        return
+
+    _existing = _footer_ax.get_legend()
+    _handles: List[Any] = list(_existing.legend_handles)
+    _labels: List[str] = [_t.get_text() for _t in _existing.get_texts()]
+    _title = _existing.get_title().get_text() or None
+
+    for _adp in adps:
+        _proxy = Line2D([0], [0],
+                        marker=_OP_POINT_MARKER,
+                        linestyle="None",
+                        markerfacecolor=colors[_adp],
+                        markeredgecolor=_OP_POINT_EDGE,
+                        markeredgewidth=_OP_POINT_EDGEWIDTH,
+                        markersize=11)
+        _handles.append(_proxy)
+        _labels.append(f"{_adp.capitalize()}{_OP_POINT_LEGEND_SUFFIX}")
+
+    _existing.remove()
+    _footer_ax.legend(_handles, _labels,
+                      loc="center",
+                      ncol=min(len(_labels), legend_ncol_cap),
+                      fontsize=12,
+                      framealpha=0.9,
+                      title=_title,
+                      title_fontsize=13)
 
 
 def plot_yoly_with_op_points(coeff_data: Dict[str, Any],
@@ -702,15 +793,21 @@ def plot_yoly_with_op_points(coeff_data: Dict[str, Any],
                                **kwargs)
 
     _adps = list(op_points.keys())
-    _palette = _generate_color_map(_adps)
-    _colors: Dict[str, Any] = {_a: _darken_color(_palette[_i])
-                               for _i, _a in enumerate(_adps)}
+    _colors = _resolve_op_point_colors(adps=_adps,
+                                       scenarios=kwargs.get("scenarios"),
+                                       paths=kwargs.get("paths"))
 
     _body = _yoly_body_axes(_fig, kind=kind)
     if kind == "chart":
         _overlay_op_points_chart(_body, op_points, _colors)
     else:
         _overlay_op_points_space(_body[0], op_points, _colors)
+
+    # Augment the existing footer legend with one X-marker proxy per adaptation
+    # so the marker's meaning is explicit and the colour-cloud / colour-marker
+    # mapping reads from the same legend.
+    _legend_ncol_cap = int(kwargs.get("legend_ncol_cap", 4 if kind == "chart" else 6))
+    _append_op_points_to_footer_legend(_fig, _adps, _colors, _legend_ncol_cap)
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
     return _fig
@@ -1031,8 +1128,7 @@ def plot_yoly_arts_with_op_points(coeff_data: Dict[str, Dict[str, Any]],
 
     _adps = list(op_points_per_node.keys())
     _palette = _generate_color_map(_adps)
-    _colors: Dict[str, Any] = {_a: _darken_color(_palette[_i])
-                               for _i, _a in enumerate(_adps)}
+    _colors: Dict[str, Any] = {_a: _palette[_i] for _i, _a in enumerate(_adps)}
 
     _cells = [_ax for _ax in _fig.axes if _is_3d_axis(_ax)]
     _node_keys = list(coeff_data.keys())
@@ -1072,9 +1168,11 @@ def plot_yoly_arts_with_op_points(coeff_data: Dict[str, Dict[str, Any]],
                         edgecolor=_OP_POINT_EDGE,
                         linewidth=_OP_POINT_EDGEWIDTH,
                         zorder=_OP_POINT_ZORDER)
-            _ax.text(_xs[_i], _ys[_i], _zs[_i], f"  {_adp}",
+            _ax.text(_xs[_i], _ys[_i], _zs[_i], f"  {_adp.capitalize()}",
                      fontsize=_OP_POINT_LABEL_FONTSIZE,
-                     color=_TEXT_BLACK)
+                     color=_OP_POINT_LABEL_COLOR,
+                     fontweight="bold",
+                     bbox=_op_point_label_bbox())
             _i += 1
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
