@@ -7,7 +7,7 @@ End-to-end sanity checks for the stochastic-method orchestrator in `src.methods.
 
 Tests use `_QUICK_CFG` (2 reps x 300 invocations, warmup 30) instead of production fidelity (10 reps x 10 000 invocations). This keeps each per-adaptation run under ~1 s with wider CIs; rho / W agreement tolerances are loosened to match. To re-run at full fidelity, swap `method_cfg=_QUICK_CFG` for `method_cfg=None` in the call.
 
-    - **TestStochasticEndToEnd**: each adaptation solves end-to-end via SimPy DES, produces 13 stable nodes and a full R1 / R2 / R3 verdict with the expected schema; `_std` columns are present for every stochastic metric.
+    - **TestStochasticEndToEnd**: each adaptation solves end-to-end via SimPy DES, produces 13 stable nodes and a full R1 / R2 verdict with the expected schema; `_std` columns are present for every stochastic metric.
     - **TestAnalyticAgreement**: the DES baseline agrees with the closed-form analytic baseline on the network-wide averages (avg_rho, W_net) within Monte-Carlo tolerance, making the two methods mutually validating.
 """
 # data types
@@ -53,7 +53,7 @@ def _analytic_baseline() -> Dict[str, Any]:  # pyright: ignore[reportUnusedFunct
 
 
 class TestStochasticEndToEnd:
-    """**TestStochasticEndToEnd** the DES pipeline solves end-to-end across `baseline` / `s1`, produces 13 stable nodes, exposes the full R1 / R2 / R3 verdict, and attaches `_std` columns for every stochastic metric. Two adaptations are enough to cover both profiles (`dflt` / `opti`)."""
+    """**TestStochasticEndToEnd** the DES pipeline solves end-to-end across `baseline` / `s1`, produces 13 stable nodes, exposes the full R1 / R2 verdict, and attaches `_std` columns for every stochastic metric. Two adaptations are enough to cover both profiles (`dflt` / `opti`)."""
 
     @pytest.fixture(params=["baseline", "s1"])
     def _result(self,
@@ -73,10 +73,10 @@ class TestStochasticEndToEnd:
         assert _max_rho < 1.0, f"max rho={_max_rho:.4f}"
 
     def test_reqs_shape(self, _result: Dict[str, Any]) -> None:
-        """*test_reqs_shape()* `set(_req.keys()) == {"R1", "R2", "R3"}` and each entry carries `pass` / `value` / `metric` fields."""
+        """*test_reqs_shape()* `set(_req.keys()) == {"R1", "R2"}` and each entry carries `pass` / `value` / `metric` fields."""
         _req = _result["requirements"]
-        assert set(_req.keys()) == {"R1", "R2", "R3"}
-        for _k in ("R1", "R2", "R3"):
+        assert set(_req.keys()) == {"R1", "R2"}
+        for _k in ("R1", "R2"):
             assert "pass" in _req[_k]
             assert "value" in _req[_k]
             assert "metric" in _req[_k]

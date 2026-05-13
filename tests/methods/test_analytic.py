@@ -5,7 +5,7 @@ Module test_analytic.py
 
 End-to-end sanity checks for the analytic-method orchestrator in `src.methods.analytic`, exercised across all four adaptations (`baseline`, `s1`, `s2`, `aggregate`).
 
-    - **TestAnalyticEndToEnd** every adaptation produces 13 stable nodes and a full R1 / R2 / R3 verdict with the expected schema, and R2 passes at the nominal arrival rate.
+    - **TestAnalyticEndToEnd** every adaptation produces 13 stable nodes and a full R1 / R2 verdict with the expected schema, and R2 passes at the nominal arrival rate.
     - **TestAggregateBestCase** the `aggregate` adaptation (opti routing + opti services) is no worse than `baseline` on the network-wide response time.
 """
 # testing framework
@@ -20,7 +20,7 @@ from src.methods.analytic import run
     ["baseline", "s1", "s2", "aggregate"],
 )
 class TestAnalyticEndToEnd:
-    """**TestAnalyticEndToEnd** every adaptation solves end-to-end, produces 13 stable nodes, exposes a full R1 / R2 / R3 verdict, and passes R2 at the nominal 345 req/s arrival rate."""
+    """**TestAnalyticEndToEnd** every adaptation solves end-to-end, produces 13 stable nodes, exposes a full R1 / R2 verdict, and passes R2 at the nominal 345 req/s arrival rate."""
 
     def test_runs_and_stable(self, adp: str) -> None:
         """*test_runs_and_stable()* `len(nodes) == 13` and `nodes["rho"].max() < 1.0` for every adaptation."""
@@ -31,11 +31,11 @@ class TestAnalyticEndToEnd:
         assert _max_rho < 1.0, f"{adp}: max rho={_max_rho:.4f}"
 
     def test_requirements_shape(self, adp: str) -> None:
-        """*test_requirements_shape()* `set(req.keys()) == {"R1", "R2", "R3"}` and every verdict carries `pass`, `value`, `metric`."""
+        """*test_requirements_shape()* `set(req.keys()) == {"R1", "R2"}` and every verdict carries `pass`, `value`, `metric`."""
         _result = run(adp=adp, wrt=False)
         _req = _result["requirements"]
-        assert set(_req.keys()) == {"R1", "R2", "R3"}
-        for _k in ("R1", "R2", "R3"):
+        assert set(_req.keys()) == {"R1", "R2"}
+        for _k in ("R1", "R2"):
             assert "pass" in _req[_k]
             assert "value" in _req[_k]
             assert "metric" in _req[_k]

@@ -3,10 +3,10 @@
 Module test_metrics.py
 ======================
 
-Sanity checks for the network-wide aggregator and the R1 / R2 / R3 verdict logic in `src.analytic.metrics`.
+Sanity checks for the network-wide aggregator and the R1 / R2 verdict logic in `src.analytic.metrics`.
 
     - **TestAggregateNetwork** the aggregation math on small, hand-computable per-node frames (throughput, weighted means, sums, zero-lambda guard).
-    - **TestCheckRequirements** R1 / R2 / R3 verdicts against the Camara 2023 thresholds, including override kwargs and the per-node `epsilon` fallback path.
+    - **TestCheckRequirements** R1 / R2 verdicts against the Camara 2023 thresholds, including override kwargs and the per-node `epsilon` fallback path.
     - **TestThresholdsFromReference** the verdict's threshold / operator / units come from `data/reference/baseline.json` (single source of truth).
 """
 # data types
@@ -91,10 +91,10 @@ class TestAggregateNetwork:
 
 
 class TestCheckRequirements:
-    """**TestCheckRequirements** verifies the R1 / R2 / R3 verdicts under the Camara 2023 thresholds (R1 < 0.03 percent failure rate, R2 < 26 ms response time)."""
+    """**TestCheckRequirements** verifies the R1 / R2 verdicts under the Camara 2023 thresholds (R1 < 0.03 percent failure rate, R2 < 26 ms response time)."""
 
     def test_all_pass_under_threshold(self) -> None:
-        """*test_all_pass_under_threshold()* zero failures + sub-26 ms response on every node -> `R1.pass`, `R2.pass`, `R3.pass` all True."""
+        """*test_all_pass_under_threshold()* zero failures + sub-26 ms response on every node -> `R1.pass` and `R2.pass` both True."""
         _nodes = _make_nodes([
             {"lambda": 10.0, "W": 0.005},
             {"lambda": 20.0, "W": 0.010},
@@ -102,18 +102,16 @@ class TestCheckRequirements:
         _req = check_reqs(_nodes)
         assert _req["R1"]["pass"] is True
         assert _req["R2"]["pass"] is True
-        assert _req["R3"]["pass"] is True
 
-    def test_r2_fail_triggers_r3_fail(self) -> None:
-        """*test_r2_fail_triggers_r3_fail()* W=50 ms (above the 26 ms threshold) -> `R2.pass is False` and `R3.pass is False` (R3 is the conjunction of R1 and R2)."""
+    def test_r2_fail_under_high_w(self) -> None:
+        """*test_r2_fail_under_high_w()* W=50 ms (above the 26 ms threshold) -> `R2.pass is False`."""
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.050}])
         _req = check_reqs(_nodes)
         assert _req["R1"]["pass"] is True
         assert _req["R2"]["pass"] is False
-        assert _req["R3"]["pass"] is False
 
     def test_r1_fail_from_epsilon_column(self) -> None:
-        """*test_r1_fail_from_epsilon_column()* per-node `epsilon` mean of 0.05 (5 percent, above the 1 percent Weyns 2015 R1 threshold) -> `R1.pass is False`, `R3.pass is False`."""
+        """*test_r1_fail_from_epsilon_column()* per-node `epsilon` mean of 0.05 (5 percent, above the 1 percent Weyns 2015 R1 threshold) -> `R1.pass is False`."""
         _nodes = _make_nodes([
             {"lambda": 10.0, "W": 0.001},
             {"lambda": 10.0, "W": 0.001},
@@ -122,7 +120,6 @@ class TestCheckRequirements:
         _req = check_reqs(_nodes)
         assert _req["R1"]["pass"] is False
         assert _req["R2"]["pass"] is True
-        assert _req["R3"]["pass"] is False
 
     def test_override_kwargs_win(self) -> None:
         """*test_override_kwargs_win()* explicit `failure_rate=0.05` and `response_time=0.100` override the frame-derived defaults; both verdicts fail."""
@@ -136,14 +133,6 @@ class TestCheckRequirements:
         assert _req["R2"]["value"] == pytest.approx(0.100)
         assert _req["R2"]["pass"] is False
 
-    def test_cost_recorded_but_not_thresholded(self) -> None:
-        """*test_cost_recorded_but_not_thresholded()* `R3.value == 42.0` (caller-supplied cost), `R3.threshold is None`, `R3.pass is True` (R1 and R2 hold)."""
-        _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
-        _req = check_reqs(_nodes, cost=42.0)
-        assert _req["R3"]["value"] == pytest.approx(42.0)
-        assert _req["R3"]["threshold"] is None
-        assert _req["R3"]["pass"] is True
-
     def test_verdict_schema(self) -> None:
         """*test_verdict_schema()* every verdict's keys are exactly `{metric, value, threshold, operator, units, pass, notes}`; `operator` + `units` come from the reference JSON and flow through unchanged."""
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
@@ -152,7 +141,7 @@ class TestCheckRequirements:
             "metric", "value", "threshold",
             "operator", "units", "pass", "notes",
         }
-        for _k in ("R1", "R2", "R3"):
+        for _k in ("R1", "R2"):
             assert set(_req[_k].keys()) == _expected_keys
 
 
@@ -178,10 +167,10 @@ class TestThresholdsFromReference:
         assert _req["R2"]["operator"] == _ref["R2"]["operator"]
         assert _req["R2"]["units"] == _ref["R2"]["units"]
 
-    def test_r3_threshold_is_null_in_reference(self) -> None:
-        """*test_r3_threshold_is_null_in_reference()* `_ref["R3"]["threshold"] is None` AND `_req["R3"]["threshold"] is None` (R3 is a ranking concern, not a gate)."""
+    def test_reference_has_only_r1_r2(self) -> None:
+        """*test_reference_has_only_r1_r2()* the reference JSON exposes exactly `{R1, R2}` (R3 was retired); `check_reqs` returns verdicts for that same set."""
         _ref = load_reference("baseline")["requirements"]
-        assert _ref["R3"]["threshold"] is None
+        assert set(_ref.keys()) == {"R1", "R2"}
         _nodes = _make_nodes([{"lambda": 10.0, "W": 0.001}])
         _req = check_reqs(_nodes)
-        assert _req["R3"]["threshold"] is None
+        assert set(_req.keys()) == {"R1", "R2"}

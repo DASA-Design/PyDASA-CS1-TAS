@@ -1,7 +1,7 @@
 {
     "source": "Weyns & Calinescu 2015 (SEAMS) for R1; Camara 2023 for R2.",
     "case_study": "TAS (Tele Assistance System)",
-    "notes": "R1 / R2 / R3 validation targets. Edit values here, not in code.",
+    "notes": "R1 / R2 validation targets. Edit values here, not in code.",
     "requirements": {
         "R1": {
             "metric": "fail_rate",
@@ -16,13 +16,6 @@
             "operator": "<=",
             "units": "seconds",
             "notes": "Response time <= 26 ms (Camara 2023)"
-        },
-        "R3": {
-            "metric": "cost",
-            "threshold": null,
-            "operator": "minimise",
-            "units": "currency",
-            "notes": "Minimise cost when R1 and R2 hold"
         }
     }
 }
