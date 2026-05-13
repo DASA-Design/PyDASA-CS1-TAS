@@ -233,7 +233,7 @@ class TestExperimental:
         async def _fake_check_breach(_http_arg: Any, _url: str, _adp: str) -> tuple[bool, str]:
             return True, "r1_breach"
 
-        with patch.object(experimental, "_check_breach", _fake_check_breach):
+        with patch("src.experimental.procedure.experiment._check_breach", _fake_check_breach):
             await experimental._dispatch_at_rate(
                 queue=_queue,
                 n_requests=100,
@@ -252,7 +252,7 @@ class TestExperimental:
     async def test_consumer_sentinel_exits_cleanly(self,
                                                    monkeypatch: pytest.MonkeyPatch) -> None:
         """*test_consumer_sentinel_exits_cleanly()* a `None` tick on the queue exits the consumer immediately without invoking `run_one`."""
-        monkeypatch.setattr(experimental, "User", _FakeUser)
+        monkeypatch.setattr("src.experimental.procedure.experiment.User", _FakeUser)
         _queue: asyncio.Queue[int | None] = asyncio.Queue()
         await _queue.put(None)
         _summaries: list[dict[str, Any]] = []
@@ -273,7 +273,7 @@ class TestExperimental:
     async def test_consumer_records_into_summaries(self,
                                                    monkeypatch: pytest.MonkeyPatch) -> None:
         """*test_consumer_records_into_summaries()* each non-sentinel tick produces one entry in the shared summaries list with the expected schema."""
-        monkeypatch.setattr(experimental, "User", _FakeUser)
+        monkeypatch.setattr("src.experimental.procedure.experiment.User", _FakeUser)
         _queue: asyncio.Queue[int | None] = asyncio.Queue()
         for _i in range(3):
             await _queue.put(_i)
@@ -298,7 +298,7 @@ class TestExperimental:
     async def test_drive_trial_drain_timeout_cancels_hanging_consumer(self,
                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
         """*test_drive_trial_drain_timeout_cancels_hanging_consumer()* a consumer whose `run_one` never resolves is cancelled after `drain_timeout_s`; `_drive_trial` returns instead of hanging."""
-        monkeypatch.setattr(experimental, "User", _HangingUser)
+        monkeypatch.setattr("src.experimental.procedure.experiment.User", _HangingUser)
         _t0 = time.perf_counter()
         _summaries, _reason = await experimental._drive_trial(
             tas_urls=["http://x"],

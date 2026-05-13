@@ -18,12 +18,17 @@ In `coefs_to_nodes` / `coefs_to_net` / `compute_coefs_delta` coefficient names d
 # native python modules
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 # data types
 from typing import Any, Dict, List
 
 # scientific stack
 import numpy as np
 import pandas as pd
+
+DFLT_DIM_RESULTS_BASE = Path("data/results/dimensional")
 
 
 # short coefficient column names emitted by the per-node / per-net reshapers
@@ -378,3 +383,91 @@ def compute_net_delta(net_dflt: pd.DataFrame,
             _row[_m] = _o - _d
 
     return pd.DataFrame([_row])
+
+
+def _profile_for_adp(adaptation: str) -> str:
+    """*_profile_for_adp()* map an adaptation key to its profile stem.
+
+    `baseline` reads the `dflt` profile; every other adaptation reads `opti`.
+
+    Args:
+        adaptation (str): adaptation key (`baseline`, `s1`, `s2`, `aggregate`).
+
+    Returns:
+        str: profile stem to look up under `data/results/dimensional/<adp>/<profile>.json`.
+    """
+    _ans = "opti"
+    if adaptation == "baseline":
+        _ans = "dflt"
+    return _ans
+
+
+def load_dim_op_points(adaptations: List[str],
+                       *,
+                       base: Path = DFLT_DIM_RESULTS_BASE,
+                       ) -> Dict[str, Dict[str, float]]:
+    """*load_dim_op_points()* load saved dimensional results and aggregate each to a single 4-tuple.
+
+    For every adaptation reads `<base>/<adp>/<profile>.json` (where `<profile>` is `dflt` for `baseline` and `opti` for any other adaptation), then collapses the per-artifact coefficients to an architecture-level 4-tuple via `coefs_to_net` (mean reducer). The same value is what `03-dimensional.ipynb` displays in its network summary table, so the yoly overlay anchors stay consistent with the source notebook.
+
+    Args:
+        adaptations (List[str]): ordered list of adaptation keys (e.g. `["baseline", "s1", "s2", "aggregate"]`). Insertion order is preserved in the returned dict so callers can render trajectories in adaptation order.
+        base (Path): results root. Defaults to `data/results/dimensional`.
+
+    Raises:
+        FileNotFoundError: when an expected per-adaptation JSON is missing.
+
+    Returns:
+        Dict[str, Dict[str, float]]: `{adp: {"theta": float, "sigma": float, "eta": float, "phi": float}}`.
+    """
+    _ans: Dict[str, Dict[str, float]] = {}
+    for _adp in adaptations:
+        _profile = _profile_for_adp(_adp)
+        _path = base / _adp / f"{_profile}.json"
+        if not _path.exists():
+            _msg = f"dimensional result not found: {_path}"
+            raise FileNotFoundError(_msg)
+        with _path.open() as _f:
+            _result = json.load(_f)
+        _net = coefs_to_net(_result)
+        _row = _net.iloc[0]
+        _ans[_adp] = {_c: float(_row[_c]) if _c in _net.columns else 0.0
+                      for _c in _COEF_NAMES}
+    return _ans
+
+
+def load_dim_op_points_per_node(adaptations: List[str],
+                                *,
+                                base: Path = DFLT_DIM_RESULTS_BASE,
+                                ) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """*load_dim_op_points_per_node()* load per-node coefficient setpoints per adaptation.
+
+    Parallels `load_dim_op_points` but returns the per-artifact 4-tuples instead of the network aggregate. Used by the per-node yoly overlay (`plot_yoly_arts_with_op_points`) so each node's cell gets the corresponding artifact's operating point per adaptation rather than the architecture-wide value.
+
+    Args:
+        adaptations (List[str]): ordered list of adaptation keys.
+        base (Path): results root. Defaults to `data/results/dimensional`.
+
+    Raises:
+        FileNotFoundError: when an expected per-adaptation JSON is missing.
+
+    Returns:
+        Dict[str, Dict[str, Dict[str, float]]]: `{adp: {node_key: {"theta", "sigma", "eta", "phi"}}}`.
+    """
+    _ans: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for _adp in adaptations:
+        _profile = _profile_for_adp(_adp)
+        _path = base / _adp / f"{_profile}.json"
+        if not _path.exists():
+            _msg = f"dimensional result not found: {_path}"
+            raise FileNotFoundError(_msg)
+        with _path.open() as _f:
+            _result = json.load(_f)
+        _nodes = coefs_to_nodes(_result)
+        _per_node: Dict[str, Dict[str, float]] = {}
+        for _, _row in _nodes.iterrows():
+            _key = str(_row["key"])
+            _per_node[_key] = {_c: float(_row[_c]) if _c in _nodes.columns else 0.0
+                               for _c in _COEF_NAMES}
+        _ans[_adp] = _per_node
+    return _ans

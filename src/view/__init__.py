@@ -38,8 +38,10 @@ from src.view.charter import (
     plot_yoly_arts_behaviour,
     plot_yoly_arts_charts,
     plot_yoly_arts_hist,
+    plot_yoly_arts_with_op_points,
     plot_yoly_chart,
     plot_yoly_space,
+    plot_yoly_with_op_points,
 )
 # topology + heatmap + bars + CI family
 from src.view.diagrams import (
@@ -84,6 +86,8 @@ __all__ = [
     "plot_yoly_arts_behaviour",
     "plot_yoly_arts_charts",
     "plot_yoly_arts_hist",
+    "plot_yoly_arts_with_op_points",
     "plot_yoly_chart",
     "plot_yoly_space",
+    "plot_yoly_with_op_points",
 ]

@@ -20,10 +20,11 @@ Five plotters, all conform to the design contract (title strip / body grid / foo
 # native python modules
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 # scientific stack
 import numpy as np
+import matplotlib.colors as mcolors
 from matplotlib.figure import Figure
 
 # shared view helpers (every helper + constant lives in common; this module only orchestrates)
@@ -312,6 +313,7 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
                     title: Optional[str] = None,
                     file_path: Optional[str] = None,
                     fname: Optional[str] = None,
+                    legend_ncol_cap: int = 4,
                     verbose: bool = False) -> Figure:
     """*plot_yoly_chart()* single-queue 2D yoly chart: 2x2 grid of coefficient planes.
 
@@ -350,10 +352,9 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
     """
     _groups, _legend_title, _lbl_map = _resolve_yoly_inputs(labels, paths, scenarios)
 
-    # legend strip auto-sizes to the row count: 4-col cap means N entries -> ceil(N/4) rows; rough budget is 0.018 figure-fraction per row + 0.04 padding/title. Floor at 0.18 keeps the small-legend look unchanged; grows when scenarios > 24 so the legend never overlaps the body.
-    _ncol_cap = 4
+    # legend strip auto-sizes to the row count: `legend_ncol_cap`-col cap means N entries -> ceil(N/cap) rows; rough budget is 0.018 figure-fraction per row + 0.04 padding/title. Floor at 0.18 keeps the small-legend look unchanged; grows so the legend never overlaps the body even with verbose multi-scenario labels.
     _n_legend_entries = len(_groups) if _groups else _estimate_single_mode_count(coeff_data)
-    _rows_needed = max(1, (_n_legend_entries + _ncol_cap - 1) // _ncol_cap)
+    _rows_needed = max(1, (_n_legend_entries + legend_ncol_cap - 1) // legend_ncol_cap)
     _footer_h = max(0.18, 0.04 + _rows_needed * 0.018)
 
     # narrower + taller. title_h and footer_h trimmed so each strip wraps its text content tightly: the title strip ends just below the suptitle, and the footer strip ends just below the legend. outer_hspace near zero closes the inter-region gap. Footer legend uses mode="expand" (in render_footer_legend) to clip to body width.
@@ -391,11 +392,11 @@ def plot_yoly_chart(coeff_data: Dict[str, Any],
                                _panel_title,
                                logscale)
 
-    # cap at 4 columns so 30+ scenario combos fold into many rows (taller, not wider)
+    # cap columns at `legend_ncol_cap` so verbose labels (e.g. multi-adp scenarios) wrap rather than overflow.
     _lift_legend_to_footer(_legend_axes,
                            _regions["footer_ax"],
                            _legend_title,
-                           ncol_cap=4)
+                           ncol_cap=legend_ncol_cap)
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
     return _fig
@@ -412,6 +413,7 @@ def plot_yoly_space(coeff_data: Dict[str, Any],
                     subtitle: Optional[str] = None,
                     file_path: Optional[str] = None,
                     fname: Optional[str] = None,
+                    legend_ncol_cap: int = 6,
                     verbose: bool = False) -> Figure:
     """*plot_yoly_space()* single 3D yoly cloud (theta x sigma x eta) for one artifact / system.
 
@@ -497,7 +499,218 @@ def plot_yoly_space(coeff_data: Dict[str, Any],
         _lift_legend_to_footer(_ax,
                                _regions["footer_ax"],
                                _legend_title,
-                               ncol_cap=6)
+                               ncol_cap=legend_ncol_cap)
+
+    _save_figure(_fig, file_path, fname, verbose=verbose)
+    return _fig
+
+
+# Dim-grey dashed trajectory line connecting baseline -> s1 -> s2 -> aggregate; X
+# marker style for each operating point. Marker colour stays in sync with the
+# swept cloud's per-scenario colour (both come from `_generate_color_map` keyed
+# by index) but is darkened by `_OP_POINT_DARKEN` so the markers read as a
+# committed point against their cloud rather than blending in.
+_OP_POINT_LINE_COLOR = "#888888"
+_OP_POINT_LINE_WIDTH = 1.0
+_OP_POINT_LINE_STYLE = "--"
+_OP_POINT_LINE_ZORDER = 2.0
+_OP_POINT_MARKER = "X"
+_OP_POINT_SIZE = 204
+_OP_POINT_EDGE = "black"
+_OP_POINT_EDGEWIDTH = 0.8
+_OP_POINT_ZORDER = 3.0
+_OP_POINT_LABEL_OFFSET = (6, 4)
+_OP_POINT_LABEL_FONTSIZE = 8
+_OP_POINT_DARKEN = 0.6
+
+
+def _darken_color(color: Any, factor: float = _OP_POINT_DARKEN) -> Tuple[float, float, float]:
+    """*_darken_color()* multiply an RGB-like colour's channels by `factor` (in `[0, 1]`).
+
+    Used to derive operating-point marker colours from the swept cloud's per-scenario palette so the marker reads as the same scenario, just darker (= committed point vs. swept cloud).
+
+    Args:
+        color (Any): any matplotlib-accepted colour (hex string, name, or RGB-like tuple).
+        factor (float): multiplier in `[0, 1]`. Defaults to `_OP_POINT_DARKEN` (`0.6`).
+
+    Returns:
+        Tuple[float, float, float]: darkened RGB triple in `[0, 1]`, ready to pass back as a matplotlib colour.
+    """
+    _rgb = mcolors.to_rgb(color)
+    return (_rgb[0] * factor, _rgb[1] * factor, _rgb[2] * factor)
+
+
+def _is_3d_axis(ax: Any) -> bool:
+    """*_is_3d_axis()* True iff `ax` is a matplotlib 3D axes object."""
+    return getattr(ax, "name", "") == "3d"
+
+
+def _yoly_body_axes(fig: Figure, *, kind: str) -> List[Any]:
+    """*_yoly_body_axes()* find the body panels of a yoly figure for overlay.
+
+    `build_stacked_figure` prepends a title axis (`axis("off")`) and appends a footer axis (also `axis("off")`); the body panels live in between. For `kind="chart"` the four body axes are rectilinear 2x2 panels; for `kind="space"` the single body axis is a 3D projection.
+
+    Args:
+        fig (Figure): the figure returned by `plot_yoly_chart` or `plot_yoly_space`.
+        kind (str): `"chart"` (expects 4 rectilinear body axes) or `"space"` (expects one 3D body axis).
+
+    Returns:
+        List[Any]: body axes only. 4 entries for `"chart"`; 1 entry for `"space"`.
+
+    Raises:
+        RuntimeError: when the expected body-axis count is not present (defends against base-plotter layout drift).
+    """
+    if kind == "space":
+        _body = [_ax for _ax in fig.axes if _is_3d_axis(_ax)]
+        _expected = 1
+    else:
+        _body = [_ax for _ax in fig.axes
+                 if (not _is_3d_axis(_ax)) and getattr(_ax, "axison", False)]
+        _expected = 4
+    if len(_body) != _expected:
+        _msg = (f"plot_yoly_with_op_points expected {_expected} body axes "
+                f"for kind={kind!r}; found {len(_body)}")
+        raise RuntimeError(_msg)
+    return _body
+
+
+def _overlay_op_points_chart(axes: List[Any],
+                             op_points: Dict[str, Dict[str, float]],
+                             colors: Dict[str, Any]) -> None:
+    """*_overlay_op_points_chart()* scatter star markers + trajectory line + labels on the 4 yoly chart panels.
+
+    Args:
+        axes (List[Any]): the 4 body axes from `_yoly_body_axes(fig, kind="chart")`, in row-major order matching `_YOLY_PANELS`.
+        op_points (Dict[str, Dict[str, float]]): `{adp: {theta, sigma, eta, phi}}` in adaptation order.
+        colors (Dict[str, Any]): `{adp: matplotlib_color}` from `_generate_color_map`.
+    """
+    _adps = list(op_points.keys())
+    for _ax, (_title, _x_key, _y_key) in zip(axes, _YOLY_PANELS):
+        _xs = [op_points[_a][_x_key] for _a in _adps]
+        _ys = [op_points[_a][_y_key] for _a in _adps]
+        _ax.plot(_xs, _ys,
+                 color=_OP_POINT_LINE_COLOR,
+                 linewidth=_OP_POINT_LINE_WIDTH,
+                 linestyle=_OP_POINT_LINE_STYLE,
+                 zorder=_OP_POINT_LINE_ZORDER)
+        for _adp, _x, _y in zip(_adps, _xs, _ys):
+            _ax.scatter([_x], [_y],
+                        marker=_OP_POINT_MARKER,
+                        s=_OP_POINT_SIZE,
+                        color=colors[_adp],
+                        edgecolor=_OP_POINT_EDGE,
+                        linewidth=_OP_POINT_EDGEWIDTH,
+                        zorder=_OP_POINT_ZORDER)
+            _ax.annotate(_adp,
+                         xy=(_x, _y),
+                         xytext=_OP_POINT_LABEL_OFFSET,
+                         textcoords="offset points",
+                         fontsize=_OP_POINT_LABEL_FONTSIZE,
+                         color=_TEXT_BLACK)
+
+
+def _overlay_op_points_space(ax: Any,
+                             op_points: Dict[str, Dict[str, float]],
+                             colors: Dict[str, Any]) -> None:
+    """*_overlay_op_points_space()* scatter star markers + 3D trajectory line + labels on the yoly space (theta x sigma x eta).
+
+    Args:
+        ax (Any): the 3D body axis from `_yoly_body_axes(fig, kind="space")`.
+        op_points (Dict[str, Dict[str, float]]): `{adp: {theta, sigma, eta, phi}}`.
+        colors (Dict[str, Any]): `{adp: matplotlib_color}`.
+    """
+    _adps = list(op_points.keys())
+    _xs = [op_points[_a]["theta"] for _a in _adps]
+    _ys = [op_points[_a]["sigma"] for _a in _adps]
+    _zs = [op_points[_a]["eta"] for _a in _adps]
+    ax.plot(_xs, _ys, _zs,
+            color=_OP_POINT_LINE_COLOR,
+            linewidth=_OP_POINT_LINE_WIDTH,
+            linestyle=_OP_POINT_LINE_STYLE,
+            zorder=_OP_POINT_LINE_ZORDER)
+    for _adp, _x, _y, _z in zip(_adps, _xs, _ys, _zs):
+        ax.scatter([_x], [_y], [_z],
+                   marker=_OP_POINT_MARKER,
+                   s=_OP_POINT_SIZE,
+                   color=colors[_adp],
+                   edgecolor=_OP_POINT_EDGE,
+                   linewidth=_OP_POINT_EDGEWIDTH,
+                   zorder=_OP_POINT_ZORDER)
+        # 3D axes: text() instead of annotate(); place tag slightly offset along x.
+        ax.text(_x, _y, _z, f"  {_adp}",
+                fontsize=_OP_POINT_LABEL_FONTSIZE,
+                color=_TEXT_BLACK)
+
+
+def plot_yoly_with_op_points(coeff_data: Dict[str, Any],
+                             op_points: Dict[str, Dict[str, float]],
+                             *,
+                             kind: Literal["chart", "space"] = "chart",
+                             title: Optional[str] = None,
+                             file_path: Optional[str] = None,
+                             fname: Optional[str] = None,
+                             verbose: bool = False,
+                             **kwargs: Any) -> Figure:
+    """*plot_yoly_with_op_points()* yoly sweep + dimensional operating-point overlay.
+
+    Calls `plot_yoly_chart` (`kind="chart"`) or `plot_yoly_space` (`kind="space"`) with `coeff_data` (the swept design space), then scatters one star marker per adaptation at its `(theta, sigma, eta, phi)` operating point. A dim-grey trajectory line connects the adaptations in iteration order so the reader sees the adaptation path through coefficient space; each star is labelled with the adaptation tag.
+
+    For `kind="chart"` the overlay lands on every panel of the 2x2 layout: `(theta, sigma)`, `(theta, eta)`, `(sigma, eta)`, `(theta, phi)`. For `kind="space"` the overlay lands as N 3D scatter points on the single `(theta, sigma, eta)` axis.
+
+    Args:
+        coeff_data (Dict[str, Any]): same sweep dict the base plotter consumes.
+        op_points (Dict[str, Dict[str, float]]): `{adp_label: {"theta", "sigma", "eta", "phi"}}` from `src.dimensional.load_dim_op_points`. Insertion order drives both the legend order and the trajectory direction.
+        kind (Literal["chart", "space"]): which base plotter to wrap. Defaults to `"chart"`.
+        title (Optional[str]): figure title; forwarded to the base plotter.
+        file_path (Optional[str]): directory to save into; forwarded to the base plotter.
+        fname (Optional[str]): filename stem; both PNG and SVG written.
+        verbose (bool): if True, prints one save-path message per format.
+        **kwargs: any additional kwarg the base plotter accepts (labels, paths, scenarios, logscale, layout). `paths` / `scenarios` apply to the sweep cloud only; the op-point overlay is independent.
+
+    Raises:
+        ValueError: when `kind` is not `"chart"` or `"space"`.
+        RuntimeError: when the wrapped figure does not expose the expected body-axis count.
+
+    Returns:
+        Figure: the matplotlib figure produced by the base plotter, with the overlay added.
+
+    Example::
+
+        op = load_dim_op_points(["baseline", "s1", "s2", "aggregate"])
+        plot_yoly_with_op_points(base_arch, op, kind="chart",
+                                 file_path="data/img/dimensional/yoly/cmp",
+                                 fname="yc_with_op_points")
+    """
+    if kind not in ("chart", "space"):
+        _msg = f"kind must be 'chart' or 'space'; got {kind!r}"
+        raise ValueError(_msg)
+
+    # Defer the save until after the overlay so the persisted PNG / SVG capture the markers.
+    if kind == "chart":
+        _fig = plot_yoly_chart(coeff_data,
+                               title=title,
+                               file_path=None,
+                               fname=None,
+                               verbose=False,
+                               **kwargs)
+    else:
+        _fig = plot_yoly_space(coeff_data,
+                               title=title,
+                               file_path=None,
+                               fname=None,
+                               verbose=False,
+                               **kwargs)
+
+    _adps = list(op_points.keys())
+    _palette = _generate_color_map(_adps)
+    _colors: Dict[str, Any] = {_a: _darken_color(_palette[_i])
+                               for _i, _a in enumerate(_adps)}
+
+    _body = _yoly_body_axes(_fig, kind=kind)
+    if kind == "chart":
+        _overlay_op_points_chart(_body, op_points, _colors)
+    else:
+        _overlay_op_points_space(_body[0], op_points, _colors)
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
     return _fig
@@ -767,6 +980,102 @@ def plot_yoly_arts_behaviour(coeff_data: Dict[str, Dict[str, Any]],
                            _regions["footer_ax"],
                            _legend_title,
                            ncol_cap=6)
+
+    _save_figure(_fig, file_path, fname, verbose=verbose)
+    return _fig
+
+
+def plot_yoly_arts_with_op_points(coeff_data: Dict[str, Dict[str, Any]],
+                                  op_points_per_node: Dict[str, Dict[str, Dict[str, float]]],
+                                  *,
+                                  title: Optional[str] = None,
+                                  file_path: Optional[str] = None,
+                                  fname: Optional[str] = None,
+                                  verbose: bool = False,
+                                  **kwargs: Any) -> Figure:
+    """*plot_yoly_arts_with_op_points()* per-node 3D yoly clouds + per-node operating-point overlay.
+
+    Wraps `plot_yoly_arts_behaviour` (the 3 x ceil(N/3) per-node 3D grid) and drops one star marker per adaptation at every node cell's coordinates. Each cell sees `(theta, sigma, eta)` for that artifact alone, so the overlay anchors `baseline`, `s1`, `s2`, `aggregate` to the same node's swept cloud. A dim-grey trajectory line connects the per-adaptation points within each cell.
+
+    Args:
+        coeff_data (Dict[str, Dict[str, Any]]): nested `{node_key: {full_symbol: array}}`, same shape `plot_yoly_arts_behaviour` consumes.
+        op_points_per_node (Dict[str, Dict[str, Dict[str, float]]]): `{adp: {node_key: {"theta", "sigma", "eta", "phi"}}}` from `src.dimensional.load_dim_op_points_per_node`. Adaptation order drives the trajectory direction.
+        title (Optional[str]): figure title; forwarded.
+        file_path (Optional[str]): directory to save into; forwarded.
+        fname (Optional[str]): filename stem.
+        verbose (bool): forwarded to `_save_figure`.
+        **kwargs: any additional kwarg the base plotter accepts (`labels`, `names`, `paths`, `scenarios`, `logscale`, `layout`).
+
+    Raises:
+        RuntimeError: when the wrapped figure does not expose one 3D body axis per node.
+
+    Returns:
+        Figure: the matplotlib figure produced by the base plotter, with per-node overlays added.
+
+    Example::
+
+        op_per_node = load_dim_op_points_per_node(
+            ["baseline", "s1", "s2", "aggregate"])
+        plot_yoly_arts_with_op_points(
+            base_sweep, op_per_node,
+            title="Per-node 3D yoly + operating points",
+            file_path="data/img/dimensional/yoly/cmp",
+            fname="yab_per_node_with_op_points")
+    """
+    _fig = plot_yoly_arts_behaviour(coeff_data,
+                                    title=title,
+                                    file_path=None,
+                                    fname=None,
+                                    verbose=False,
+                                    **kwargs)
+
+    _adps = list(op_points_per_node.keys())
+    _palette = _generate_color_map(_adps)
+    _colors: Dict[str, Any] = {_a: _darken_color(_palette[_i])
+                               for _i, _a in enumerate(_adps)}
+
+    _cells = [_ax for _ax in _fig.axes if _is_3d_axis(_ax)]
+    _node_keys = list(coeff_data.keys())
+    if len(_cells) != len(_node_keys):
+        _msg = (f"plot_yoly_arts_with_op_points expected {len(_node_keys)} "
+                f"3D body cells; found {len(_cells)}")
+        raise RuntimeError(_msg)
+
+    for _ax, _node in zip(_cells, _node_keys):
+        _xs: List[float] = []
+        _ys: List[float] = []
+        _zs: List[float] = []
+        for _adp in _adps:
+            _node_op = op_points_per_node[_adp].get(_node)
+            if _node_op is None:
+                # Adaptation does not deploy this node (swap-slot mismatch); skip.
+                continue
+            _xs.append(_node_op["theta"])
+            _ys.append(_node_op["sigma"])
+            _zs.append(_node_op["eta"])
+        if not _xs:
+            continue
+        _ax.plot(_xs, _ys, _zs,
+                 color=_OP_POINT_LINE_COLOR,
+                 linewidth=_OP_POINT_LINE_WIDTH,
+                 linestyle=_OP_POINT_LINE_STYLE,
+                 zorder=_OP_POINT_LINE_ZORDER)
+        _i = 0
+        for _adp in _adps:
+            _node_op = op_points_per_node[_adp].get(_node)
+            if _node_op is None:
+                continue
+            _ax.scatter([_xs[_i]], [_ys[_i]], [_zs[_i]],
+                        marker=_OP_POINT_MARKER,
+                        s=_OP_POINT_SIZE,
+                        color=_colors[_adp],
+                        edgecolor=_OP_POINT_EDGE,
+                        linewidth=_OP_POINT_EDGEWIDTH,
+                        zorder=_OP_POINT_ZORDER)
+            _ax.text(_xs[_i], _ys[_i], _zs[_i], f"  {_adp}",
+                     fontsize=_OP_POINT_LABEL_FONTSIZE,
+                     color=_TEXT_BLACK)
+            _i += 1
 
     _save_figure(_fig, file_path, fname, verbose=verbose)
     return _fig

@@ -14,7 +14,9 @@ from src.dimensional.reshape import (aggregate_arch_coefs,
                                      compute_coefs_delta,
                                      coefs_to_net,
                                      coefs_to_nodes,
-                                     compute_net_delta)
+                                     compute_net_delta,
+                                     load_dim_op_points,
+                                     load_dim_op_points_per_node)
 from src.dimensional.schema import build_schema
 from src.dimensional.sensitivity import analyse_symbolic
 
@@ -29,6 +31,8 @@ __all__ = [
     "coefs_to_nodes",
     "derive_coefs",
     "compute_net_delta",
+    "load_dim_op_points",
+    "load_dim_op_points_per_node",
     "sweep_arch",
     "sweep_artifact",
     "sweep_artifacts",
