@@ -5,7 +5,7 @@ Module analytic.py
 
 Analytic method orchestrator for the CS-01 TAS case study.
 
-Loads a resolved `NetCfg`, solves the Jackson network in closed form via M/M/c/K at each node, emits node + network metrics as a single PyDASA-style JSON, and writes an R1 / R2 / R3 verdict alongside.
+Loads a resolved `NetCfg`, solves the Jackson network in closed form via M/M/c/K at each node, emits node + network metrics as a single PyDASA-style JSON, and writes an R1 / R2 verdict alongside.
 
 Public API:
     - `run(adp, prf, scn, wrt)` standard orchestrator contract.
@@ -112,7 +112,7 @@ def run(adp: Optional[str] = None,
             - `config` (NetCfg): resolved config (for display).
             - `nodes` (pd.DataFrame): per-node DataFrame.
             - `network` (pd.DataFrame): network aggregate (one row).
-            - `requirements` (Dict): R1 / R2 / R3 verdict dict.
+            - `requirements` (Dict): R1 / R2 verdict dict.
             - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
     # resolve the config then solve the network end-to-end
@@ -144,7 +144,7 @@ def _write_results(cfg: NetCfg,
         cfg (NetCfg): resolved network configuration.
         nds (pd.DataFrame): per-node metrics frame.
         net (pd.DataFrame): network aggregate frame (one row).
-        req (dict): R1 / R2 / R3 verdict dict.
+        req (dict): R1 / R2 verdict dict.
 
     Returns:
         Dict[str, str]: on-disk paths of the two written files, keyed by `profile` and `requirements`, relative to the repo root.
@@ -170,7 +170,7 @@ def _write_results(cfg: NetCfg,
     with _profile_path.open("w", encoding="utf-8") as _fh:
         json.dump(_doc, _fh, indent=4, ensure_ascii=False)
 
-    # write the R1 / R2 / R3 verdict (profile-agnostic, one per run)
+    # write the R1 / R2 verdict (profile-agnostic, one per run)
     _req_path = _out_dir / "requirements.json"
     with _req_path.open("w", encoding="utf-8") as _fh:
         json.dump(req, _fh, indent=4, ensure_ascii=False)

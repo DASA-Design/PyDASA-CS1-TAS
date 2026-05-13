@@ -2,7 +2,7 @@
 
 Typed bag of QoS hints carried alongside each catalogue entry. Adaptation strategies read these to pick reliable or fast alternatives; verdict computation reads R1 and R2 from the profile, not from here.
 
-Fig. 2 names a generic QoS slot; this module specialises it into `PerformanceQoS` (R2) and `AvailabilityQoS` (R1). `CostQoS` is intentionally omitted: cost (R3) is monetary, not a dimensional unit DASA reasons about.
+Fig. 2 names a generic QoS slot; this module specialises it into `PerformanceQoS` (R2) and `AvailabilityQoS` (R1). `CostQoS` is intentionally omitted: cost is monetary, not a dimensional unit DASA reasons about.
 """
 
 from __future__ import annotations

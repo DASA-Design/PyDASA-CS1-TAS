@@ -5,7 +5,7 @@ Module dimensional.py
 
 Dimensional method orchestrator for the CS-01 TAS case study. Walks the 13 (or 16) artifacts in a resolved `NetCfg`, builds a PyDASA `AnalysisEngine` per artifact, derives Pi-groups via Buckingham's theorem, applies the operationally meaningful coefficient specs (theta, sigma, eta, phi) from `data/config/method/dimensional.json`, runs a symbolic sensitivity pass at the variable means, and emits a PyDASA-style JSON.
 
-The dimensional method is static (no `requirements.json`); it characterises the design space, while R1 / R2 / R3 verdicts come from the analytic / stochastic methods and are aggregated by `comparison`.
+The dimensional method is static (no `requirements.json`); it characterises the design space, while R1 / R2 verdicts come from the analytic / stochastic methods and are aggregated by `comparison`.
 
 Public API:
     - `run(adp, prf, scn, wrt)` resolves the profile + method config, loops artifacts, and returns per-artifact `pi_groups`, `coefficients`, `sensitivity` blocks.

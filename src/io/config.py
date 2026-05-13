@@ -325,7 +325,7 @@ def load_method_cfg(name: str) -> Dict[str, Any]:
 def load_reference(name: str = "baseline") -> Dict[str, Any]:
     """*load_reference()* load `data/reference/<name>.json`.
 
-    These files hold case-study ground truth or validation targets that must not live inside Python (e.g. the Camara 2023 R1 / R2 / R3 thresholds in `baseline.json`). Consumed by `src.analytic.metrics` and any other module that needs an external reference value.
+    These files hold case-study ground truth or validation targets that must not live inside Python (e.g. the Camara 2023 R1 / R2 thresholds in `baseline.json`). Consumed by `src.analytic.metrics` and any other module that needs an external reference value.
 
     Args:
         name (str): reference file stem. Defaults to `"baseline"`.

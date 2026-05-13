@@ -43,7 +43,7 @@
     "trial": {
         "_note_rate": "request_rate_per_s = 345 matches `lambda_z` = TAS_{1}.lambda_z in `data/config/profile/dflt.json` (the case-study design point). The latest calibration on this host measured a per-worker saturation knee at ~328 req/s, so the envelopes under `data/results/calibration/<dpl>/` were manually bumped to `r_max_req_s = 350` to keep the bounds gate aligned with the case-study design rather than the host's hardware ceiling. The undershoot (real throughput < 345) lands in `verdict.operational.X_0_req_per_s` for stage 9 to see.",
         "_note_open_loop": "The trial driver is open-loop (producer/consumer over an asyncio.Queue): a dispatcher pushes ticks at request_rate_per_s regardless of how fast the server replies; consumer_pool_size consumers drain the queue, each running its own User + httpx pool. The in-flight ceiling equals consumer_pool_size (one in-flight per consumer at a time), so keep it below httpx's max_connections=100 default to avoid pool throttling. When the server saturates, the queue grows; on hitting max_queue_depth the dispatcher blocks at queue.put() so saturation surfaces as an offered-rate undershoot in verdict.operational.X_0_req_per_s. drain_timeout_s caps the wait for in-flight consumers at trial end.",
-        "n_requests": 10000,
+        "n_requests": 1000,
         "request_rate_per_s": 345,
         "consumer_pool_size": 64,
         "max_queue_depth": 1000,

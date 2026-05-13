@@ -8,7 +8,7 @@ Stochastic (SimPy DES) method orchestrator for the CS-01 TAS case study. Mirrors
 The engine runs in SimPy SECONDS while the method config declares horizon and warmup in INVOCATIONS; the conversion happens in `src.stochastic.simulation.solve_net`.
 
 Public API:
-    - `run(adp, prf, scn, wrt)` loads a resolved `NetCfg` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_net`), and returns per-node metrics + network aggregate + R1 / R2 / R3 verdict.
+    - `run(adp, prf, scn, wrt)` loads a resolved `NetCfg` (same `profile/*.json` as analytic) plus the stochastic method config (`data/config/method/stochastic.json`), runs the DES engine (`src.stochastic.solve_net`), and returns per-node metrics + network aggregate + R1 / R2 verdict.
 
 CLI::
 
@@ -62,7 +62,7 @@ def run(adp: Optional[str] = None,
             - `method_config` (Dict): stochastic method parameters.
             - `nodes` (pd.DataFrame): per-node frame (analytic schema plus `_std` columns).
             - `network` (pd.DataFrame): network aggregate (one row).
-            - `requirements` (Dict): R1 / R2 / R3 verdict dict.
+            - `requirements` (Dict): R1 / R2 verdict dict.
             - `paths` (Dict[str, str]): written file paths; empty when `wrt=False`.
     """
     _cfg = load_profile(adaptation=adp, profile=prf, scenario=scn)
@@ -99,7 +99,7 @@ def _write_results(cfg: NetCfg,
         method_cfg (Dict[str, Any]): stochastic method params; copied verbatim into the result envelope so the run is fully self-describing on disk.
         nds (pd.DataFrame): per-node metrics frame.
         net (pd.DataFrame): network aggregate (one row).
-        req (dict): R1 / R2 / R3 verdict dict.
+        req (dict): R1 / R2 verdict dict.
 
     Returns:
         Dict[str, str]: on-disk paths of the two written files, keyed by `profile` and `requirements`, relative to the repo root.
