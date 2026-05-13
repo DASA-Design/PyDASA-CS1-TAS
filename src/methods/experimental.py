@@ -579,7 +579,7 @@ def _fetch_controller_history(controller_url: str,
 
 
 _STOP_PREDICATES: dict[str, tuple[str, ...]] = {
-    "baseline": ("r1_and_r2_breach",),
+    "baseline": ("r1_breach", "r2_breach"),
     "s1": ("r1_breach",),
     "s2": ("r2_breach",),
     "aggregate": ("r1_breach", "r2_breach"),
@@ -589,20 +589,20 @@ _STOP_PREDICATES: dict[str, tuple[str, ...]] = {
 def _should_stop_from_aggregates(adp: str, agg: dict[str, Any]) -> tuple[bool, str]:
     """Apply the strategy-specific breach predicate to one `/aggregates` response.
 
+    Baseline + aggregate use OR semantics (either breach halts the trial — a single failed requirement is enough evidence). `s1` only watches R1 (its design objective is availability). `s2` only watches R2 (performance).
+
     Args:
         adp (str): adaptation key.
         agg (dict[str, Any]): payload returned by the controller's `GET /aggregates`.
 
     Returns:
-        tuple[bool, str]: `(stop, reason)` where `reason` is `""` when not stopping.
+        tuple[bool, str]: `(stop, reason)` where `reason` is `""` when not stopping. When both axes breach simultaneously, `reason` reports the first axis listed in the predicate.
     """
     _r1, _r2 = bool(agg.get("r1_breach", False)), bool(agg.get("r2_breach", False))
     _stop = False
     _reason = ""
     _checks = _STOP_PREDICATES.get(adp, ())
-    if "r1_and_r2_breach" in _checks and _r1 and _r2:
-        _stop, _reason = True, "r1_and_r2_breach"
-    elif "r1_breach" in _checks and _r1:
+    if "r1_breach" in _checks and _r1:
         _stop, _reason = True, "r1_breach"
     elif "r2_breach" in _checks and _r2:
         _stop, _reason = True, "r2_breach"
@@ -662,16 +662,16 @@ def _variant_suffix_for(*,
                         granularity: str) -> str:
     """Return the variant suffix for a `(framework, granularity)` pair.
 
-    Every combination, canonical or not, gets an explicit `<framework>__<granularity>` suffix so the on-disk layout makes the experimental knobs visible at a glance (`baseline__fastapi__collapsed/` instead of bare `baseline/`).
+    Every combination, canonical or not, gets an explicit `<framework>_<granularity>` suffix so the on-disk layout makes the experimental knobs visible at a glance (`baseline_fastapi_collapsed/` instead of bare `baseline/`).
 
     Args:
         framework (Framework): server stack.
         granularity (str): resolved granularity (`collapsed` or `expanded`).
 
     Returns:
-        str: `<framework>__<granularity>`.
+        str: `<framework>_<granularity>`.
     """
-    return f"{framework}__{granularity}"
+    return f"{framework}_{granularity}"
 
 
 def _build_mesh_admission(*,
@@ -803,7 +803,7 @@ async def _drive_trial(*,
         drain_timeout_s (float, optional): max seconds to wait for in-flight consumers to finish after the dispatcher exits. Defaults to 60.0.
 
     Returns:
-        tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"` / `"r1_and_r2_breach"`).
+        tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"`).
     """
     if not tas_urls:
         _msg = "_drive_trial requires at least one TAS URL"

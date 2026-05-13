@@ -77,7 +77,7 @@ def make_run_paths(adp: str,
         adp (str): adaptation key.
         run_id (str): run identifier (from `make_run_id`).
         base (Path, optional): results base. Defaults to `DFLT_RESULTS_BASE`.
-        variant_suffix (str | None, optional): variant-axis tag appended to the adp folder via a `__` separator (e.g. `fastapi__expanded`). When set, the run lands under `data/results/experimental/<adp>__<variant_suffix>/`. None keeps the canonical headline path. Defaults to None.
+        variant_suffix (str | None, optional): variant-axis tag appended to the adp folder via a `_` separator (e.g. `fastapi_expanded`). When set, the run lands under `data/results/experimental/<adp>_<variant_suffix>/`. None keeps the canonical headline path. Defaults to None.
 
     Returns:
         RunPaths: populated paths bundle. Caller must invoke `.ensure()` before writing.
@@ -85,7 +85,7 @@ def make_run_paths(adp: str,
     if variant_suffix is None:
         _folder = adp
     else:
-        _folder = f"{adp}__{variant_suffix}"
+        _folder = f"{adp}_{variant_suffix}"
     _root = base / "experimental" / _folder
     _paths = RunPaths(
         run_id=run_id,
