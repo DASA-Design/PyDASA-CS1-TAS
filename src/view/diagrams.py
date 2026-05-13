@@ -115,22 +115,20 @@ def _normalise_qn_lists(routs: Union[List[np.ndarray], np.ndarray],
     Returns:
         Tuple[List[np.ndarray], List[pd.DataFrame], List[str], Optional[List[pd.DataFrame]]]: `(routs_list, ndss_list, names_list, nets_list)`.
     """
-    if not isinstance(routs, list):
-        _routs_list: List[np.ndarray] = [routs]
-        _ndss_list: List[pd.DataFrame] = [ndss]  # type: ignore[list-item]
-        if nets is not None and not isinstance(nets, list):
-            _nets_list: Optional[List[pd.DataFrame]] = [nets]
-        elif nets is not None:
-            _nets_list = list(nets)
-        else:
-            _nets_list = None
+    if isinstance(routs, list):
+        _routs_list: List[np.ndarray] = list(routs)
     else:
-        _routs_list = list(routs)
-        _ndss_list = list(ndss)  # type: ignore[arg-type]
-        if nets is not None:
-            _nets_list = list(nets)
-        else:
-            _nets_list = None
+        _routs_list = [routs]
+    if isinstance(ndss, list):
+        _ndss_list: List[pd.DataFrame] = list(ndss)
+    else:
+        _ndss_list = [ndss]
+    if nets is None:
+        _nets_list: Optional[List[pd.DataFrame]] = None
+    elif isinstance(nets, list):
+        _nets_list = list(nets)
+    else:
+        _nets_list = [nets]
 
     if names is None:
         _names_list: List[str] = ["" for _ in _routs_list]
@@ -428,7 +426,6 @@ def plot_dim_topology(rout: np.ndarray,
 
 def plot_node_heatmap(ndss: List[pd.DataFrame],
                       names: List[str],
-                      nodes: List[str],
                       *,
                       metrics: Optional[List[str]] = None,
                       labels: Optional[List[str]] = None,
@@ -440,13 +437,14 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
                       verbose: bool = False) -> Figure:
     """*plot_node_heatmap()* per-node heatmap across N scenarios, one body row per scenario, with per-metric normalisation so scenarios compare visually.
 
+    Rows align by position: row `i` in every panel is `_df.iloc[i]`. When adaptations swap services at the same row position (baseline `MAS_{3}` vs s2 `MAS_{4}` at row 5), each panel's y-axis carries its own service key pulled from the `cname` column. Shorter panels are NaN-padded so heights stay equal across scenarios.
+
     Args:
-        ndss (List[pd.DataFrame]): per-scenario node frames.
+        ndss (List[pd.DataFrame]): per-scenario node frames. Row positions are the alignment axis; each frame's `cname` column drives that panel's y-axis labels.
         names (List[str]): per-scenario display names.
-        nodes (List[str]): node identifiers (rows of each heatmap).
         metrics (Optional[List[str]]): columns to include. Defaults to every numeric column in the first frame.
         labels (Optional[List[str]]): display labels for the metric columns.
-        cname (str): column holding the node identifier. Defaults to `"key"`.
+        cname (str): column holding the node identifier; drives per-panel y-axis labels. Defaults to `"key"`.
         layout (Optional[FigureLayout]): full layout override.
         title (Optional[str]): figure title.
         file_path (Optional[str]): directory to save into.
@@ -463,7 +461,6 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
 
         plot_node_heatmap([nds_baseline, nds_aggregate],
                           ["baseline", "aggregate"],
-                          nodes=["TAS_{1}", "MAS_{1}", "AS_{1}"],
                           metrics=["rho", "L", "W"],
                           file_path="data/img/analytic",
                           fname="heatmap_compare")
@@ -480,14 +477,20 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
         _metrics.remove("node")
     _labels = _resolve_labels(_metrics, labels)
 
+    # Number of rows = the tallest DataFrame; shorter ones get NaN-padded so panel heights stay equal across scenarios.
+    _n_rows = max(len(_df) for _df in ndss)
+
     # global per-metric min/max for shared normalisation
     _minmax: Dict[str, Tuple[float, float]] = {}
     for _m in _metrics:
         _vals: List[float] = []
         for _df in ndss:
-            _sub = _df[_df[cname].isin(nodes)]
-            _vals.extend(_sub[_m].dropna().tolist())
-        _minmax[_m] = (float(np.min(_vals)), float(np.max(_vals)))
+            if _m in _df.columns:
+                _vals.extend(_df[_m].dropna().tolist())
+        if _vals:
+            _minmax[_m] = (float(np.min(_vals)), float(np.max(_vals)))
+        else:
+            _minmax[_m] = (0.0, 0.0)
 
     _k = len(ndss)
     # 50 % less title->body spacing per request: 0.32 * 0.50 = 0.16; +10 % MORE inter-panel hspace inside the body: 0.36 * 1.10 = 0.40
@@ -507,28 +510,32 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
     _axes = _regions["body_axes"]
 
     for _df, _name, _ax in zip(ndss, names, _axes):
-        _filt = _df[_df[cname].isin(nodes)].copy()
-        if _filt.empty:
-            _ax.text(0.5, 0.5, f"No data for {_name}",
+        if _df.empty:
+            _ax.text(0.5, 0.5,
+                     f"No data for {_name}",
                      ha="center", fontsize=14)
             continue
 
-        _rows = []
-        for _node in nodes:
-            _row_df = _filt[_filt[cname] == _node]
-            if _row_df.empty:
-                continue
-            _row: Dict[str, Any] = {cname: _node}
-            for _m in _metrics:
-                if _m in _row_df.columns:
-                    _row[_m] = float(_row_df[_m].iloc[0])
-                else:
+        # Build a row per position; pull each panel's own `cname` value so swap-slot rows carry the panel's actual service key on the y-axis. Panels shorter than `_n_rows` get NaN-padded.
+        _rows: List[Dict[str, Any]] = []
+        _ylabels: List[str] = []
+        for _i in range(_n_rows):
+            if _i < len(_df):
+                _data_row = _df.iloc[_i]
+                _row_key = str(_data_row[cname]) if cname in _df.columns else f"row_{_i}"
+                _row: Dict[str, Any] = {cname: _row_key}
+                for _m in _metrics:
+                    if _m in _df.columns:
+                        _row[_m] = float(_data_row[_m])
+                    else:
+                        _row[_m] = np.nan
+            else:
+                _row_key = ""
+                _row = {cname: _row_key}
+                for _m in _metrics:
                     _row[_m] = np.nan
             _rows.append(_row)
-        if not _rows:
-            _ax.text(0.5, 0.5, f"No matching nodes for {_name}",
-                     ha="center", fontsize=14)
-            continue
+            _ylabels.append(_row_key)
 
         _plot_df = pd.DataFrame(_rows).set_index(cname)
         _norm = _plot_df.copy()
@@ -539,6 +546,8 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
             else:
                 _norm[_m] = 0.5
 
+        _mask = _plot_df.isna()
+
         sns.heatmap(_norm,
                     ax=_ax,
                     cmap=_HEATMAP_CMAP,
@@ -548,6 +557,7 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
                     annot=_plot_df,
                     fmt=".2e",
                     linewidths=0.5,
+                    mask=_mask,
                     cbar_kws={"shrink": 0.8})
 
         _ax.set_title(f"{_name} per-node metrics",
@@ -557,9 +567,9 @@ def plot_node_heatmap(ndss: List[pd.DataFrame],
                             ha="right",
                             fontweight="bold",
                             color=_TEXT_BLACK)
-        _ax.set_yticklabels(
-            [f"${_t.get_text()}$" for _t in _ax.get_yticklabels()],
-            color=_TEXT_BLACK)
+        _ax.set_yticklabels([f"${_lab}$" for _lab in _ylabels],
+                            color=_TEXT_BLACK)
+        _ax.set_ylabel("")
 
     _save_figure(_fig, file_path, fname or "heatmap", verbose=verbose)
     return _fig
@@ -571,6 +581,7 @@ def plot_node_diffmap(deltas: pd.DataFrame,
                       metrics: Optional[List[str]] = None,
                       labels: Optional[List[str]] = None,
                       cname: str = "key",
+                      y_labels: Optional[List[str]] = None,
                       layout: Optional[FigureLayout] = None,
                       title: Optional[str] = None,
                       file_path: Optional[str] = None,
@@ -584,6 +595,7 @@ def plot_node_diffmap(deltas: pd.DataFrame,
         metrics (Optional[List[str]]): columns to plot. Defaults to every numeric column.
         labels (Optional[List[str]]): display labels for the metric columns.
         cname (str): column holding the node identifier. Defaults to `"key"`.
+        y_labels (Optional[List[str]]): per-row y-axis tick labels (must have `len(nodes)` entries). Defaults to `nodes` (the row identifiers themselves). Useful when the comparison is between adaptations that swap services at the same row position and the y-axis should show the post-adaptation service key.
         layout (Optional[FigureLayout]): full layout override.
         title (Optional[str]): figure title.
         file_path (Optional[str]): directory to save into.
@@ -591,7 +603,7 @@ def plot_node_diffmap(deltas: pd.DataFrame,
         verbose (bool): if True, prints one save-path message per format.
 
     Raises:
-        ValueError: If `cname` or any of `metrics` is missing from `deltas`.
+        ValueError: If `cname` or any of `metrics` is missing from `deltas`, or if `y_labels` is set with the wrong length.
 
     Returns:
         Figure: the matplotlib figure.
@@ -606,6 +618,10 @@ def plot_node_diffmap(deltas: pd.DataFrame,
     """
     if cname not in deltas.columns:
         raise ValueError(f"Node-name column {cname!r} not found in deltas")
+    if y_labels is not None and len(y_labels) != len(nodes):
+        _msg = (f"y_labels length ({len(y_labels)}) must match nodes "
+                f"length ({len(nodes)})")
+        raise ValueError(_msg)
 
     _metrics = _resolve_metrics(deltas, metrics)
     if cname in _metrics:
@@ -691,7 +707,10 @@ def plot_node_diffmap(deltas: pd.DataFrame,
                         ha="right",
                         fontweight="bold",
                         color=_TEXT_BLACK)
-    _ax.set_yticklabels([f"${_n}$" for _n in _nd_names], color=_TEXT_BLACK)
+    if y_labels is not None:
+        _ax.set_yticklabels([f"${_k}$" for _k in y_labels], color=_TEXT_BLACK)
+    else:
+        _ax.set_yticklabels([f"${_n}$" for _n in _nd_names], color=_TEXT_BLACK)
     _ax.set_xticks(np.arange(-0.5, len(_metrics), 1), minor=True)
     _ax.set_yticks(np.arange(-0.5, len(_nd_names), 1), minor=True)
     _ax.grid(which="minor", color="white", linestyle="-", linewidth=1.5)
