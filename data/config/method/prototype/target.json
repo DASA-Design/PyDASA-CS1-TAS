@@ -33,7 +33,8 @@
     },
     "tas_base_port": 8001,
     "host": "127.0.0.1",
-    "ready_timeout_s": 20.0,
+    "_note_ready_timeout": "Bumped from 20s to 90s because each iteration of the experimental grid now spawns up to ~32 uvicorn / waitress worker processes (8 services x w=4 workers in collapsed, 13 x w=4 in expanded). The host CPU thrashes during the cold-start storm so individual workers can take 30s+ to pass /healthz under load.",
+    "ready_timeout_s": 90.0,
     "request_timeout_s": 5.0,
     "atomic_admission": {
         "k": null,
@@ -41,8 +42,12 @@
     },
     "trial": {
         "_note_rate": "request_rate_per_s = 345 matches `lambda_z` = TAS_{1}.lambda_z in `data/config/profile/dflt.json` (the case-study design point). The latest calibration on this host measured a per-worker saturation knee at ~328 req/s, so the envelopes under `data/results/calibration/<dpl>/` were manually bumped to `r_max_req_s = 350` to keep the bounds gate aligned with the case-study design rather than the host's hardware ceiling. The undershoot (real throughput < 345) lands in `verdict.operational.X_0_req_per_s` for stage 9 to see.",
+        "_note_open_loop": "The trial driver is open-loop (producer/consumer over an asyncio.Queue): a dispatcher pushes ticks at request_rate_per_s regardless of how fast the server replies; consumer_pool_size consumers drain the queue, each running its own User + httpx pool. The in-flight ceiling equals consumer_pool_size (one in-flight per consumer at a time), so keep it below httpx's max_connections=100 default to avoid pool throttling. When the server saturates, the queue grows; on hitting max_queue_depth the dispatcher blocks at queue.put() so saturation surfaces as an offered-rate undershoot in verdict.operational.X_0_req_per_s. drain_timeout_s caps the wait for in-flight consumers at trial end.",
         "n_requests": 10000,
         "request_rate_per_s": 345,
+        "consumer_pool_size": 64,
+        "max_queue_depth": 1000,
+        "drain_timeout_s": 60.0,
         "kind_probability": {
             "alarm": 0.25,
             "medical_analysis": 0.75

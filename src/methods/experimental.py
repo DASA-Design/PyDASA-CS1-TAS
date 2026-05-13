@@ -659,20 +659,18 @@ def _resolve_granularity_for_paths(target_cfg: dict[str, Any],
 
 def _variant_suffix_for(*,
                         framework: Framework,
-                        granularity: str) -> str | None:
+                        granularity: str) -> str:
     """Return the variant suffix for a `(framework, granularity)` pair.
 
-    The canonical `fastapi` + `collapsed` pair is the headline; everything else gets a suffix so it doesn't overwrite the headline results.
+    Every combination, canonical or not, gets an explicit `<framework>__<granularity>` suffix so the on-disk layout makes the experimental knobs visible at a glance (`baseline__fastapi__collapsed/` instead of bare `baseline/`).
 
     Args:
         framework (Framework): server stack.
         granularity (str): resolved granularity (`collapsed` or `expanded`).
 
     Returns:
-        str | None: `<framework>__<granularity>` for variant runs; None for the canonical headline pair.
+        str: `<framework>__<granularity>`.
     """
-    if framework == "fastapi" and granularity == "collapsed":
-        return None
     return f"{framework}__{granularity}"
 
 
@@ -780,21 +778,29 @@ async def _drive_trial(*,
                        seed: int | None,
                        controller_url: str | None = None,
                        adp: str = "baseline",
-                       poll_every_n: int = 0) -> tuple[list[dict[str, Any]], str]:
-    """Drive up to `n_requests` against the composite TAS; halt early on a breach.
+                       poll_every_n: int = 0,
+                       consumer_pool_size: int = 64,
+                       max_queue_depth: int = 1000,
+                       drain_timeout_s: float = 60.0) -> tuple[list[dict[str, Any]], str]:
+    """Drive `n_requests` against the composite TAS via an open-loop producer / consumer.
 
-    When `tas_urls` has more than one entry (multi-worker TAS_{1}), the trial spawns one `User` per URL. Each user runs `n_requests / N` requests at `request_rate_per_s / N` pacing so the aggregate rate matches the configured value while load distributes across the workers. A single shared breach-flag stops every user as soon as the first one observes a breach.
+    Decouples *offered load* from *consumed throughput*: one **dispatcher** coroutine pushes ticks onto an `asyncio.Queue` at the configured `request_rate_per_s` regardless of how fast the server replies, and `consumer_pool_size` **consumer** coroutines drain the queue, each running its own `User` instance + `httpx.AsyncClient` against one of the `tas_urls` (round-robin assignment). Each consumer handles at most one in-flight request at a time, so the in-flight ceiling is exactly `consumer_pool_size` — pick it below httpx's `max_connections = 100` default and the transport never throttles.
+
+    When the server saturates, the queue grows; once it hits `max_queue_depth` the dispatcher blocks at `queue.put()`, so the apparatus's offered-rate undershoot becomes visible in `verdict.operational.X_0_req_per_s` rather than being hidden by closed-loop self-pacing.
 
     Args:
         tas_urls (list[str]): one or more TAS_{1} base URLs (one per worker).
-        n_requests (int): aggregate request budget across all users.
-        request_rate_per_s (float): aggregate pacing rate (0 = no pacing). Split evenly across users.
+        n_requests (int): total dispatch budget.
+        request_rate_per_s (float): offered rate. 0 = no pacing (flood).
         p_alarm (float): probability the next request is an alarm.
         request_timeout_s (float): per-request timeout.
-        seed (int | None): RNG seed for kind selection (offset per user so each draws a distinct stream).
-        controller_url (str | None, optional): controller base URL. None disables the breach poll. Defaults to None.
+        seed (int | None): RNG seed for kind selection (offset per consumer so each draws a distinct stream).
+        controller_url (str | None, optional): controller base URL for breach polling. Defaults to None.
         adp (str, optional): adaptation key (drives the stop predicate). Defaults to `"baseline"`.
-        poll_every_n (int, optional): aggregate request count between breach polls (0 disables). Defaults to 0.
+        poll_every_n (int, optional): dispatch count between breach polls (0 disables). Defaults to 0.
+        consumer_pool_size (int, optional): number of concurrent consumer coroutines (= in-flight ceiling). Defaults to 64.
+        max_queue_depth (int, optional): bounded queue size; dispatcher blocks when full. Defaults to 1000.
+        drain_timeout_s (float, optional): max seconds to wait for in-flight consumers to finish after the dispatcher exits. Defaults to 60.0.
 
     Returns:
         tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"` / `"r1_and_r2_breach"`).
@@ -802,105 +808,144 @@ async def _drive_trial(*,
     if not tas_urls:
         _msg = "_drive_trial requires at least one TAS URL"
         raise ValueError(_msg)
-    _n_users = len(tas_urls)
-    _per_user_n = max(1, n_requests // _n_users)
-    if request_rate_per_s > 0:
-        _per_user_rate = request_rate_per_s / _n_users
-    else:
-        _per_user_rate = 0.0
+    _pool = max(1, consumer_pool_size)
+    _queue: asyncio.Queue[int | None] = asyncio.Queue(maxsize=max(1, max_queue_depth))
     _summaries: list[dict[str, Any]] = []
     _summaries_lock = asyncio.Lock()
     _stop_event = asyncio.Event()
     _stop_reason_box: list[str] = ["n_reached"]
     import httpx
-    _http: httpx.AsyncClient | None = None
+    _breach_http: httpx.AsyncClient | None = None
     if controller_url is not None and poll_every_n > 0:
-        _http = httpx.AsyncClient(timeout=2.0)
-    _per_user_poll = max(1, poll_every_n // _n_users) if poll_every_n > 0 else 0
+        _breach_http = httpx.AsyncClient(timeout=2.0)
     try:
-        _tasks = []
-        for _ui, _url in enumerate(tas_urls):
-            _user_seed: int | None
+        _consumers = []
+        for _ci in range(_pool):
+            _url = tas_urls[_ci % len(tas_urls)]
+            _consumer_seed: int | None
             if seed is None:
-                _user_seed = None
+                _consumer_seed = None
             else:
-                _user_seed = seed + _ui
-            _tasks.append(_drive_one_user(client_id=f"trial-user-{_ui}",
-                                          base_url=_url,
-                                          n_requests=_per_user_n,
-                                          per_user_rate=_per_user_rate,
-                                          p_alarm=p_alarm,
-                                          request_timeout_s=request_timeout_s,
-                                          seed=_user_seed,
-                                          summaries=_summaries,
-                                          summaries_lock=_summaries_lock,
-                                          stop_event=_stop_event,
-                                          stop_reason_box=_stop_reason_box,
-                                          breach_http=_http,
-                                          controller_url=controller_url,
-                                          adp=adp,
-                                          per_user_poll=_per_user_poll))
-        await asyncio.gather(*_tasks)
+                _consumer_seed = seed + _ci
+            _consumers.append(asyncio.create_task(_consume_payloads(
+                consumer_id=_ci,
+                base_url=_url,
+                queue=_queue,
+                summaries=_summaries,
+                summaries_lock=_summaries_lock,
+                stop_event=_stop_event,
+                p_alarm=p_alarm,
+                request_timeout_s=request_timeout_s,
+                seed=_consumer_seed,
+            )))
+        await _dispatch_at_rate(
+            queue=_queue,
+            n_requests=n_requests,
+            rate=request_rate_per_s,
+            stop_event=_stop_event,
+            stop_reason_box=_stop_reason_box,
+            breach_http=_breach_http,
+            controller_url=controller_url,
+            adp=adp,
+            poll_every_n=poll_every_n,
+        )
+        # Signal each consumer to exit (one sentinel per slot).
+        for _ in range(_pool):
+            await _queue.put(None)
+        try:
+            await asyncio.wait_for(asyncio.gather(*_consumers, return_exceptions=True),
+                                   timeout=drain_timeout_s)
+        except asyncio.TimeoutError:
+            for _c in _consumers:
+                if not _c.done():
+                    _c.cancel()
+            await asyncio.gather(*_consumers, return_exceptions=True)
     finally:
-        if _http is not None:
-            await _http.aclose()
+        if _breach_http is not None:
+            await _breach_http.aclose()
     return _summaries, _stop_reason_box[0]
 
 
-async def _drive_one_user(*,
-                          client_id: str,
-                          base_url: str,
-                          n_requests: int,
-                          per_user_rate: float,
-                          p_alarm: float,
-                          request_timeout_s: float,
-                          seed: int | None,
-                          summaries: list[dict[str, Any]],
-                          summaries_lock: asyncio.Lock,
-                          stop_event: asyncio.Event,
-                          stop_reason_box: list[str],
-                          breach_http: "httpx.AsyncClient | None",
-                          controller_url: str | None,
-                          adp: str,
-                          per_user_poll: int) -> None:
-    """Drive one `User` against `base_url`; flush its records into a shared list under a lock.
+async def _dispatch_at_rate(*,
+                            queue: "asyncio.Queue[int | None]",
+                            n_requests: int,
+                            rate: float,
+                            stop_event: asyncio.Event,
+                            stop_reason_box: list[str],
+                            breach_http: "httpx.AsyncClient | None",
+                            controller_url: str | None,
+                            adp: str,
+                            poll_every_n: int) -> None:
+    """Push `n_requests` ticks onto `queue` at fixed `rate` (drift-corrected pacing).
 
-    Stops early when `stop_event` is set (a sibling user observed a breach) or when its own budget is exhausted.
+    Each tick is a sequence number that the consumer pool drains and uses to fire one request. Pacing uses absolute targets (`start + i / rate`) rather than cumulative sleeps so Windows asyncio.sleep granularity (~15 ms) doesn't accumulate drift.
+
+    Stops early when `stop_event` is set (a breach poll signalled it) or when the budget is exhausted. The dispatcher itself blocks at `queue.put()` when the queue is full, which surfaces consumer-side back-pressure as an offered-rate undershoot.
     """
-    if per_user_rate > 0:
-        _gap_s = 1.0 / per_user_rate
+    if rate > 0:
+        _start = asyncio.get_event_loop().time()
     else:
-        _gap_s = 0.0
-    async with User(client_id=client_id,
+        _start = 0.0
+    for _i in range(n_requests):
+        if stop_event.is_set():
+            break
+        await queue.put(_i)
+        if rate > 0:
+            _target = _start + (_i + 1) / rate
+            _now = asyncio.get_event_loop().time()
+            if _target > _now:
+                await asyncio.sleep(_target - _now)
+        if breach_http is not None and poll_every_n > 0 and ((_i + 1) % poll_every_n == 0):
+            _stop, _reason = await _check_breach(breach_http,
+                                                 controller_url or "",
+                                                 adp)
+            if _stop:
+                stop_reason_box[0] = _reason
+                stop_event.set()
+                break
+
+
+async def _consume_payloads(*,
+                            consumer_id: int,
+                            base_url: str,
+                            queue: "asyncio.Queue[int | None]",
+                            summaries: list[dict[str, Any]],
+                            summaries_lock: asyncio.Lock,
+                            stop_event: asyncio.Event,
+                            p_alarm: float,
+                            request_timeout_s: float,
+                            seed: int | None) -> None:
+    """Drain `queue` and fire one request per tick; append the per-request summary under a lock.
+
+    Each consumer owns its own `User` + `httpx.AsyncClient` so the per-consumer pool is isolated; the consumer holds at most one in-flight request at a time, so the trial's in-flight ceiling equals `consumer_pool_size`. Exits on a `None` sentinel (clean shutdown) or when `stop_event` is set (breach early-stop).
+    """
+    async with User(client_id=f"trial-c{consumer_id}",
                     base_url=base_url,
                     endpoint_path="/",
                     seed=seed,
                     p_alarm=p_alarm,
                     timeout_s=request_timeout_s,
                     sequential_req_ids=True) as _user:
-        for _i in range(n_requests):
-            if stop_event.is_set():
-                break
-            _record = await _user.run_one()
-            async with summaries_lock:
-                summaries.append({
-                    "req_id": _record.req_id,
-                    "kind": _record.kind,
-                    "outcome": _record.outcome,
-                    "status": _record.status_code,
-                    "latency_s": _record.total_latency_s,
-                })
-            _done_count = _i + 1
-            if breach_http is not None and per_user_poll > 0 and (_done_count % per_user_poll == 0):
-                _stop, _reason = await _check_breach(breach_http,
-                                                     controller_url or "",
-                                                     adp)
-                if _stop:
-                    stop_reason_box[0] = _reason
-                    stop_event.set()
+        while True:
+            _tick = await queue.get()
+            try:
+                if _tick is None or stop_event.is_set():
                     break
-            if _gap_s > 0:
-                await asyncio.sleep(_gap_s)
+                try:
+                    _record = await _user.run_one()
+                except Exception:
+                    # Don't let one malformed request kill the consumer; the next tick proceeds.
+                    continue
+                async with summaries_lock:
+                    summaries.append({
+                        "req_id": _record.req_id,
+                        "kind": _record.kind,
+                        "outcome": _record.outcome,
+                        "status": _record.status_code,
+                        "latency_s": _record.total_latency_s,
+                    })
+            finally:
+                queue.task_done()
 
 
 async def _check_breach(http: "httpx.AsyncClient",
@@ -1094,6 +1139,9 @@ def run_experiment(*,
                 controller_url=_ctrl_url,
                 adp=adp,
                 poll_every_n=_poll_every_n,
+                consumer_pool_size=int(_trial.get("consumer_pool_size", 64)),
+                max_queue_depth=int(_trial.get("max_queue_depth", 1000)),
+                drain_timeout_s=float(_trial.get("drain_timeout_s", 60.0)),
             ))
             _history = _fetch_controller_history(_ctrl_url)
     _finished_ts = time.time()
