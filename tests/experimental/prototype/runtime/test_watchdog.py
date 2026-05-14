@@ -7,6 +7,7 @@
 - `test_orphan_calls_callback_then_exit`: when the parent disappears the callback fires once and `os._exit(0)` runs after the grace period.
 - `test_orphan_no_callback`: with `on_orphan=None` the watchdog skips straight to `os._exit(0)`; no exception when the graceful path is unwired.
 - `test_callback_exc_swallowed`: a callback that raises does not block the hard-exit fallback.
+- `test_stop_event`: setting the stop event halts the thread without invoking the callback or `os._exit`.
 """
 
 from __future__ import annotations
@@ -23,24 +24,33 @@ class TestWatchParent:
 
     def test_returns_daemon_thread(self) -> None:
         """*test_returns_daemon_thread()* returns a started daemon thread tagged with the parent PID."""
+        _stop = threading.Event()
         with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", return_value=True):
-            _t = watch_parent(99999, poll_interval_s=10.0, grace_s=10.0)
-        assert isinstance(_t, threading.Thread)
-        assert _t.daemon is True
-        assert _t.is_alive() is True
-        assert "99999" in _t.name
+            _t = watch_parent(99999, poll_interval_s=0.05, grace_s=0.0, stop_event=_stop)
+            try:
+                assert isinstance(_t, threading.Thread)
+                assert _t.daemon is True
+                assert _t.is_alive() is True
+                assert "99999" in _t.name
+            finally:
+                _stop.set()
+                _t.join(timeout=1.0)
 
     def test_parent_alive_no_exit(self) -> None:
         """*test_parent_alive_no_exit()* keeps polling while the parent is alive; callback and `os._exit` stay untouched."""
         _called: list[int] = []
         _exited: list[int] = []
+        _stop = threading.Event()
         with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", return_value=True), \
              patch("src.experimental.prototype.runtime.watchdog.os._exit", side_effect=lambda code: _exited.append(code)):
-            watch_parent(12345,
-                         on_orphan=lambda: _called.append(1),
-                         poll_interval_s=0.02,
-                         grace_s=0.0)
+            _t = watch_parent(12345,
+                              on_orphan=lambda: _called.append(1),
+                              poll_interval_s=0.02,
+                              grace_s=0.0,
+                              stop_event=_stop)
             time.sleep(0.1)
+            _stop.set()
+            _t.join(timeout=1.0)
         assert _called == []
         assert _exited == []
 
@@ -48,16 +58,13 @@ class TestWatchParent:
         """*test_orphan_calls_callback_then_exit()* fires the callback once and exits with code 0 after the grace period."""
         _called: list[int] = []
         _exited: list[int] = []
-
-        def _exists(_pid: int) -> bool:
-            return False
-        with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", side_effect=_exists), \
+        with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", return_value=False), \
              patch("src.experimental.prototype.runtime.watchdog.os._exit", side_effect=lambda code: _exited.append(code)):
-            watch_parent(12345,
-                         on_orphan=lambda: _called.append(1),
-                         poll_interval_s=0.01,
-                         grace_s=0.0)
-            time.sleep(0.2)
+            _t = watch_parent(12345,
+                              on_orphan=lambda: _called.append(1),
+                              poll_interval_s=0.01,
+                              grace_s=0.0)
+            _t.join(timeout=1.0)
         assert _called == [1]
         assert _exited == [0]
 
@@ -66,8 +73,8 @@ class TestWatchParent:
         _exited: list[int] = []
         with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", return_value=False), \
              patch("src.experimental.prototype.runtime.watchdog.os._exit", side_effect=lambda code: _exited.append(code)):
-            watch_parent(12345, poll_interval_s=0.01, grace_s=0.0)
-            time.sleep(0.2)
+            _t = watch_parent(12345, poll_interval_s=0.01, grace_s=0.0)
+            _t.join(timeout=1.0)
         assert _exited == [0]
 
     def test_callback_exc_swallowed(self) -> None:
@@ -79,9 +86,27 @@ class TestWatchParent:
             raise RuntimeError(_msg)
         with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", return_value=False), \
              patch("src.experimental.prototype.runtime.watchdog.os._exit", side_effect=lambda code: _exited.append(code)):
-            watch_parent(12345,
-                         on_orphan=_bad_cb,
-                         poll_interval_s=0.01,
-                         grace_s=0.0)
-            time.sleep(0.2)
+            _t = watch_parent(12345,
+                              on_orphan=_bad_cb,
+                              poll_interval_s=0.01,
+                              grace_s=0.0)
+            _t.join(timeout=1.0)
         assert _exited == [0]
+
+    def test_stop_event(self) -> None:
+        """*test_stop_event()* returns from the thread without invoking the callback or `os._exit` when set."""
+        _called: list[int] = []
+        _exited: list[int] = []
+        _stop = threading.Event()
+        with patch("src.experimental.prototype.runtime.watchdog.psutil.pid_exists", return_value=True), \
+             patch("src.experimental.prototype.runtime.watchdog.os._exit", side_effect=lambda code: _exited.append(code)):
+            _t = watch_parent(12345,
+                              on_orphan=lambda: _called.append(1),
+                              poll_interval_s=10.0,
+                              grace_s=10.0,
+                              stop_event=_stop)
+            _stop.set()
+            _t.join(timeout=1.0)
+        assert _t.is_alive() is False
+        assert _called == []
+        assert _exited == []

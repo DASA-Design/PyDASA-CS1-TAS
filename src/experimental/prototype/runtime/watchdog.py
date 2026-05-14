@@ -24,7 +24,8 @@ def watch_parent(parent_pid: int,
                  *,
                  on_orphan: Callable[[], None] | None = None,
                  poll_interval_s: float = _DFLT_POLL_INTERVAL_S,
-                 grace_s: float = _DFLT_GRACE_S) -> threading.Thread:
+                 grace_s: float = _DFLT_GRACE_S,
+                 stop_event: threading.Event | None = None) -> threading.Thread:
     """Start a daemon thread that force-exits this process when `parent_pid` dies.
 
     Polling cadence is deliberately slow (2 s default) so the watchdog adds negligible CPU load; the latency before a leaked worker dies is bounded by `poll_interval_s + grace_s`, typically under 10 s.
@@ -34,13 +35,21 @@ def watch_parent(parent_pid: int,
         on_orphan (Callable[[], None] | None, optional): graceful-shutdown callback invoked once when the parent is detected gone (e.g. `lambda: setattr(server, "should_exit", True)` for uvicorn). Defaults to None (skip straight to hard exit). Exceptions raised by the callback are swallowed so a faulty callback cannot block the hard-exit fallback.
         poll_interval_s (float, optional): seconds between `pid_exists` polls. Defaults to 2.0.
         grace_s (float, optional): seconds to wait between the graceful callback and `os._exit(0)`. Defaults to 5.0.
+        stop_event (threading.Event | None, optional): test-only cancellation flag; when set, the thread returns without calling the orphan callback or `os._exit`. Worker processes never pass this. Defaults to None.
 
     Returns:
         threading.Thread: the daemon watchdog thread, already started. Callers normally discard the handle; the thread exits the process on parent death.
     """
+    def _sleep_or_stop(secs: float) -> bool:
+        if stop_event is None:
+            time.sleep(secs)
+            return False
+        return stop_event.wait(secs)
+
     def _loop() -> None:
         while True:
-            time.sleep(poll_interval_s)
+            if _sleep_or_stop(poll_interval_s):
+                return
             if not psutil.pid_exists(parent_pid):
                 break
         if on_orphan is not None:
@@ -48,7 +57,8 @@ def watch_parent(parent_pid: int,
                 on_orphan()
             except Exception:
                 pass
-        time.sleep(grace_s)
+        if _sleep_or_stop(grace_s):
+            return
         os._exit(0)
     _thread = threading.Thread(target=_loop,
                                daemon=True,
