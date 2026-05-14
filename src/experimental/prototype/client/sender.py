@@ -107,6 +107,8 @@ class Sender:
     async def _dispatch(self, request: Request) -> tuple[Outcome, int]:
         """Issue the HTTP POST and map the result to a (outcome, status) pair.
 
+        Status 504 (Gateway Timeout) maps to `"timeout"` so the apparatus's `inject_failure="timeout"` server-side response surfaces as a timeout outcome without requiring an actual httpx timeout (which would tax every such request with `self._timeout_s` of consumer-block wait). The `httpx.TimeoutException` path is still honoured for genuine transport-level timeouts (server hang, network stall) so the outcome label survives both the simulated and the real cause.
+
         Args:
             request (Request): the payload to send.
 
@@ -121,6 +123,8 @@ class Sender:
             return "timeout", 0
         except httpx.RequestError:
             return "drop", 0
+        if _resp.status_code == 504:
+            return "timeout", _resp.status_code
         if _resp.status_code >= 500:
             return "5xx", _resp.status_code
         return "success", _resp.status_code

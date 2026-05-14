@@ -32,10 +32,7 @@ from starlette.responses import Response
 from src.experimental.common.io.csv import CsvWriter
 from src.experimental.common.payload.request import FailureMechanism
 from src.experimental.prototype.target.factory.async_bridge import AsyncLoopThread
-from src.experimental.prototype.target.factory.failure import (
-    DFLT_TIMEOUT_GRACE_S,
-    apply_inject_failure,
-)
+from src.experimental.prototype.target.factory.failure import apply_inject_failure
 from src.experimental.prototype.target.factory.healthz import add_healthz_route
 from src.experimental.prototype.target.service.atomic import AtomicService
 
@@ -217,7 +214,6 @@ class AtomicRoutesBase(ABC):
                  svc: TasAtomicService,
                  csv_dir: Path | None,
                  run_id: str | None,
-                 timeout_grace_s: float,
                  eps: float = 0.0,
                  failure_mix: dict[FailureMechanism, float] | None = None) -> None:
         """Configure the shared state.
@@ -226,14 +222,12 @@ class AtomicRoutesBase(ABC):
             svc (TasAtomicService): the atomic service this app wraps.
             csv_dir (Path | None): directory for per-pid CSV logs; None disables.
             run_id (str | None): run identifier written into every CSV row.
-            timeout_grace_s (float): sleep duration when the response carries `inject_failure="timeout"`.
             eps (float, optional): per-service failure rate. Defaults to 0.0 (no server-side injection).
             failure_mix (dict[FailureMechanism, float] | None, optional): per-mechanism weights for the ε draw. Defaults to `DFLT_FAILURE_MIX`.
         """
         self._svc = svc
         self._csv_dir = csv_dir
         self._run_id = run_id
-        self._timeout_grace_s = timeout_grace_s
         self._eps = eps
         if failure_mix is None:
             self._failure_mix = dict(DFLT_FAILURE_MIX)
@@ -315,8 +309,7 @@ class AtomicFastapiRoutes(AtomicRoutesBase):
             Response: failure response when ε / client injected a failure, otherwise a JSONResponse with the atomic's reply.
         """
         self._maybe_inject_failure(payload)
-        _maybe_failure = await apply_inject_failure(payload,
-                                                    timeout_grace_s=self._timeout_grace_s)
+        _maybe_failure = await apply_inject_failure(payload)
         if _maybe_failure is not None:
             _flag = payload.get("inject_failure")
             self._log_csv_row(payload,
@@ -336,7 +329,6 @@ def build_atomic_fastapi_app(*,
                              c: int | None = None,
                              csv_dir: str | None = None,
                              run_id: str | None = None,
-                             timeout_grace_s: float = DFLT_TIMEOUT_GRACE_S,
                              eps: float = 0.0,
                              failure_mix: dict[FailureMechanism, float] | None = None) -> FastAPI:
     """Build a FastAPI app for one atomic service.
@@ -351,7 +343,6 @@ def build_atomic_fastapi_app(*,
         c (int | None, optional): parallel-worker cap. Defaults to None.
         csv_dir (str | None, optional): directory for per-pid CSV logs (string for picklability). Defaults to None (no CSV side-effect).
         run_id (str | None, optional): run identifier; written into every CSV row. Defaults to None.
-        timeout_grace_s (float, optional): sleep duration when `inject_failure="timeout"`. Defaults to `DFLT_TIMEOUT_GRACE_S`.
         eps (float, optional): per-service failure rate. The route draws `random.random() < eps` per request and, when the draw lands, stamps `inject_failure` from `failure_mix`. Defaults to 0.0 (no server-side injection).
         failure_mix (dict[FailureMechanism, float] | None, optional): per-mechanism weights for the post-ε draw. Defaults to a near-uniform mix.
 
@@ -370,7 +361,6 @@ def build_atomic_fastapi_app(*,
     _routes = AtomicFastapiRoutes(svc=_svc,
                            csv_dir=_csv_path,
                            run_id=run_id,
-                           timeout_grace_s=timeout_grace_s,
                            eps=eps,
                            failure_mix=failure_mix)
     _app = FastAPI()
@@ -396,17 +386,16 @@ def _drop_generator() -> Any:
     raise RuntimeError(_msg)
 
 
-def _sync_apply_inject_failure(payload: dict[str, Any],
-                               *,
-                               timeout_grace_s: float) -> FlaskResponse | None:
+def _sync_apply_inject_failure(payload: dict[str, Any]) -> FlaskResponse | None:
     """Sync (WSGI) mirror of `failure.apply_inject_failure`.
+
+    All three mechanisms return immediately: 504 for `timeout`, drop-streaming response for `drop`, 502 for `5xx`. None sleeps; the apparatus's throughput is bounded by the queueing model under study, not by the failure simulation.
 
     Args:
         payload (dict[str, Any]): inbound request body; `inject_failure` decides the branch.
-        timeout_grace_s (float): blocking sleep for the `timeout` mechanism.
 
     Returns:
-        FlaskResponse | None: 502 for `5xx`, drop-streaming response for `drop`, None for `timeout` (after blocking sleep) or when the flag is absent.
+        FlaskResponse | None: planted failure response when the flag is set; None when absent and the route should fall through to the normal handler.
 
     Raises:
         ValueError: when the flag is set but not in `{"timeout", "drop", "5xx"}`.
@@ -415,8 +404,9 @@ def _sync_apply_inject_failure(payload: dict[str, Any],
     if _flag_raw is None:
         return None
     if _flag_raw == "timeout":
-        time.sleep(timeout_grace_s)
-        return None
+        _resp = jsonify({"error": "synthetic_timeout"})
+        _resp.status_code = 504
+        return _resp
     if _flag_raw == "drop":
         return FlaskResponse(_drop_generator(), mimetype="application/json")
     if _flag_raw == "5xx":
@@ -437,14 +427,12 @@ class AtomicFlaskRoutes(AtomicRoutesBase):
                  loop: AsyncLoopThread,
                  csv_dir: Path | None,
                  run_id: str | None,
-                 timeout_grace_s: float,
                  eps: float = 0.0,
                  failure_mix: dict[FailureMechanism, float] | None = None) -> None:
         """Configure the routes; identical contract to `AtomicFastapiRoutes` plus the shared loop."""
         super().__init__(svc=svc,
                          csv_dir=csv_dir,
                          run_id=run_id,
-                         timeout_grace_s=timeout_grace_s,
                          eps=eps,
                          failure_mix=failure_mix)
         self._loop = loop
@@ -457,8 +445,7 @@ class AtomicFlaskRoutes(AtomicRoutesBase):
         """
         _payload: dict[str, Any] = request.get_json(force=True, silent=True) or {}
         self._maybe_inject_failure(_payload)
-        _maybe_failure = _sync_apply_inject_failure(_payload,
-                                                    timeout_grace_s=self._timeout_grace_s)
+        _maybe_failure = _sync_apply_inject_failure(_payload)
         if _maybe_failure is not None:
             _flag = _payload.get("inject_failure")
             self._log_csv_row(_payload, status=_status_for_failure(_flag), body=None)
@@ -478,7 +465,6 @@ def build_atomic_flask_app(*,
                            c: int | None = None,
                            csv_dir: str | None = None,
                            run_id: str | None = None,
-                           timeout_grace_s: float = DFLT_TIMEOUT_GRACE_S,
                            eps: float = 0.0,
                            failure_mix: dict[FailureMechanism, float] | None = None) -> Flask:
     """Flask twin of `build_atomic_fastapi_app`. Same contract, same on-disk schema.
@@ -493,7 +479,6 @@ def build_atomic_flask_app(*,
         c (int | None, optional): parallel-worker cap. Defaults to None.
         csv_dir (str | None, optional): directory for per-pid CSV logs. Defaults to None.
         run_id (str | None, optional): run identifier. Defaults to None.
-        timeout_grace_s (float, optional): sleep when `inject_failure="timeout"`. Defaults to `DFLT_TIMEOUT_GRACE_S`.
         eps (float, optional): per-service failure rate. Defaults to 0.0.
         failure_mix (dict[FailureMechanism, float] | None, optional): per-mechanism weights for the ε draw. Defaults to a near-uniform mix.
 
@@ -510,7 +495,6 @@ def build_atomic_flask_app(*,
                                 loop=_loop,
                                 csv_dir=_csv_path,
                                 run_id=run_id,
-                                timeout_grace_s=timeout_grace_s,
                                 eps=eps,
                                 failure_mix=failure_mix)
     _app = Flask(__name__)

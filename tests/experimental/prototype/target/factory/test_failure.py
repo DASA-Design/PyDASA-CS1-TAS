@@ -5,7 +5,7 @@
 - `test_none`: a payload without `inject_failure` returns None.
 - `test_5xx`: a `'5xx'` flag returns a `JSONResponse` with status 502.
 - `test_drop_streams`: a `'drop'` flag returns a streaming response whose body raises mid-iteration.
-- `test_timeout`: a `'timeout'` flag sleeps for `timeout_grace_s`.
+- `test_timeout`: a `'timeout'` flag returns a `JSONResponse` with status 504 immediately.
 - `test_unknown_flag`: an unknown flag raises `ValueError`.
 
 **TestSyntheticDropFilter**:
@@ -60,20 +60,11 @@ class TestApplyInjectFailure:
             await anext(_iter)
 
     @pytest.mark.asyncio
-    async def test_timeout(self,
-                           monkeypatch: pytest.MonkeyPatch) -> None:
-        """*test_timeout()* a `'timeout'` flag awaits `asyncio.sleep(grace_s)`; the test patches `sleep` to assert the call."""
-        _calls: list[float] = []
-
-        async def _fake_sleep(_t: float) -> None:
-            _calls.append(_t)
-
-        monkeypatch.setattr("src.experimental.prototype.target.factory.failure.asyncio.sleep",
-                            _fake_sleep)
-        _ans = await apply_inject_failure({"inject_failure": "timeout"},
-                                          timeout_grace_s=0.5)
-        assert _ans is None
-        assert _calls == [0.5]
+    async def test_timeout(self) -> None:
+        """*test_timeout()* a `'timeout'` flag returns a `JSONResponse` with status 504 immediately."""
+        _ans = await apply_inject_failure({"inject_failure": "timeout"})
+        assert _ans is not None
+        assert _ans.status_code == 504
 
     @pytest.mark.asyncio
     async def test_unknown_flag(self) -> None:

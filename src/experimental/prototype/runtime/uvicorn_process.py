@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 import uvicorn
 
+from src.experimental.prototype.runtime.os_timer import windows_timer_resolution
 from src.experimental.prototype.runtime.watchdog import watch_parent
 
 # Runtime fallbacks for data/config/method/experimental.json::server.uvicorn.*.
@@ -60,7 +61,8 @@ def _worker_main(app_factory: AppFactory,
     _server = uvicorn.Server(_config)
     watch_parent(_parent_pid,
                  on_orphan=lambda: setattr(_server, "should_exit", True))
-    _server.run()
+    with windows_timer_resolution(1):
+        _server.run()
 
 
 class UvicornProcess:

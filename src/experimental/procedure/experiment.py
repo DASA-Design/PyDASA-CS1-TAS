@@ -37,6 +37,7 @@ from src.experimental.prototype.controller import (
     write_window_parquet,
 )
 from src.experimental.prototype.runtime.async_loop import run_async_safe
+from src.experimental.prototype.runtime.os_timer import windows_timer_resolution
 from src.experimental.prototype.target.config import load_target_cfg
 from src.experimental.prototype.target.factory.internal_stage import (
     build_internal_stage_fastapi_app,
@@ -124,43 +125,36 @@ def _build_mesh_specs(*,
         _msg = "stage_routes is required when target_granularity='expanded'"
         raise ValueError(_msg)
 
-    # Port layout: each service consumes `workers` consecutive ports. TAS_{1} first,
-    # then internal stages (expanded only), then third-party atomics. `workers_lt`
-    # defaults each entry to 1 when unset.
-    def _workers_for(svc_id: str) -> int:
+    # Single-process per atomic: each service gets exactly one worker process exposing
+    # an effective M/M/c=c_specs*w_proc/K=K_specs*w_proc queue (asyncio semaphore
+    # `effective_c`, queue depth `effective_K`). `w_proc` from `profile.specs` is kept
+    # as a multiplier on (c, K) so the deployed aggregate capacity matches what the
+    # old multi-worker apparatus delivered, without the per-worker isolation that
+    # broke pooled M/M/c/K semantics.
+    def _w_proc(svc_id: str) -> int:
         if workers_lt is None:
             return 1
         return max(1, int(workers_lt.get(svc_id, 1)))
 
     _composite_id = "TAS_{1}"
-    _composite_workers = _workers_for(_composite_id)
     _tas_first_port = base_port
 
     if _is_expanded:
-        _internal_first_port = _tas_first_port + _composite_workers
-        _internal_total_workers = sum(_workers_for(_sid) for _sid in _INTERNAL_STAGE_IDS)
-        _atomic_first_port = _internal_first_port + _internal_total_workers
+        _internal_first_port = _tas_first_port + 1
+        _atomic_first_port = _internal_first_port + len(_INTERNAL_STAGE_IDS)
     else:
-        _internal_first_port = _tas_first_port + _composite_workers  # unused in collapsed
-        _atomic_first_port = _tas_first_port + _composite_workers
+        _internal_first_port = _tas_first_port + 1  # unused in collapsed
+        _atomic_first_port = _tas_first_port + 1
 
     _atomic_url_lt: dict[str, list[str]] = {}
-    _offset = 0
-    for _svc_id in _atomic_ids:
-        _w = _workers_for(_svc_id)
-        _atomic_url_lt[_svc_id] = [f"http://{host}:{_atomic_first_port + _offset + _wi}"
-                                        for _wi in range(_w)]
-        _offset += _w
+    for _i, _svc_id in enumerate(_atomic_ids):
+        _atomic_url_lt[_svc_id] = [f"http://{host}:{_atomic_first_port + _i}"]
 
     _internal_url_lt: dict[str, list[str]] | None = None
     if _is_expanded:
         _internal_url_lt = {}
-        _offset = 0
-        for _stage_id in _INTERNAL_STAGE_IDS:
-            _w = _workers_for(_stage_id)
-            _internal_url_lt[_stage_id] = [f"http://{host}:{_internal_first_port + _offset + _wi}"
-                                                for _wi in range(_w)]
-            _offset += _w
+        for _i, _stage_id in enumerate(_INTERNAL_STAGE_IDS):
+            _internal_url_lt[_stage_id] = [f"http://{host}:{_internal_first_port + _i}"]
 
     if framework == "flask":
         _build_tas = build_tas_flask_app
@@ -170,6 +164,17 @@ def _build_mesh_specs(*,
         _build_tas = build_tas_fastapi_app
         _build_atomic = build_atomic_fastapi_app
         _build_internal = build_internal_stage_fastapi_app
+    _dflt_k = atomic_admission.get("k")
+    _dflt_c = atomic_admission.get("c")
+
+    def _eff(svc_id: str) -> tuple[int | None, int | None]:
+        """Aggregate `(K, c) = (K_specs, c_specs) * w_proc` for one service."""
+        _base_k, _base_c = _resolve_admission(svc_id, admission_lt, _dflt_k, _dflt_c)
+        _w = _w_proc(svc_id)
+        _agg_k = None if _base_k is None else int(_base_k) * _w
+        _agg_c = None if _base_c is None else int(_base_c) * _w
+        return _agg_k, _agg_c
+
     _tas_factory = functools.partial(
         _build_tas,
         url_lt=_atomic_url_lt,
@@ -182,10 +187,7 @@ def _build_mesh_specs(*,
     )
     _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS",
                                        app_factory=_tas_factory,
-                                       workers=_composite_workers)]
-
-    _dflt_k = atomic_admission.get("k")
-    _dflt_c = atomic_admission.get("c")
+                                       workers=1)]
 
     if _is_expanded:
         # Internal stages (TAS_{2..6}) come right after TAS_1 on consecutive ports.
@@ -199,7 +201,7 @@ def _build_mesh_specs(*,
                 _msg = f"stage_routes missing entry for {_stage_id!r}"
                 raise ValueError(_msg)
             _stage_mu = mu_lt[_stage_id] if inject_internal_stage_mu else 0.0
-            _stage_k, _stage_c = _resolve_admission(_stage_id, admission_lt, _dflt_k, _dflt_c)
+            _stage_k, _stage_c = _eff(_stage_id)
             _stage_factory = functools.partial(
                 _build_internal,
                 svc_name=_stage_id,
@@ -216,7 +218,7 @@ def _build_mesh_specs(*,
             )
             _specs.append(MeshSpec(svc_id=_stage_id,
                                    app_factory=_stage_factory,
-                                   workers=_workers_for(_stage_id)))
+                                   workers=1))
 
     for _svc_id in _atomic_ids:
         _entry = _catalogue.lookup(_svc_id)
@@ -228,7 +230,7 @@ def _build_mesh_specs(*,
             _failure_mix = None
         else:
             _failure_mix = dict(failure_modes_cfg.mix_for(_svc_id))
-        _svc_k, _svc_c = _resolve_admission(_svc_id, admission_lt, _dflt_k, _dflt_c)
+        _svc_k, _svc_c = _eff(_svc_id)
         _atomic_factory = functools.partial(
             _build_atomic,
             svc_name=_svc_id,
@@ -243,7 +245,7 @@ def _build_mesh_specs(*,
         )
         _specs.append(MeshSpec(svc_id=_svc_id,
                                app_factory=_atomic_factory,
-                               workers=_workers_for(_svc_id)))
+                               workers=1))
     if _is_expanded:
         _internal_stage_ids = list(_INTERNAL_STAGE_IDS)
     else:
@@ -447,10 +449,11 @@ def _build_mesh_admission(*,
                           eps_lt: dict[str, float],
                           atomic_admission: dict[str, Any],
                           internal_stage_ids: list[str] | None = None,
-                          include_composite: bool = True) -> dict[str, dict[str, Any]]:
+                          include_composite: bool = True,
+                          workers_lt: dict[str, int] | None = None) -> dict[str, dict[str, Any]]:
     """Build the `{svc_id: {c, K, mu, eps}}` block echoed into `verdict.json::mesh`.
 
-    Stage 9 (the yoly chart) reads this to verify the four methods used identical M/M/c/K parameters. Per-svc values come from `admission_lt`; the global `atomic_admission` fills in for ids the profile is silent on.
+    Stage 9 (the yoly chart) reads this to verify the four methods used identical M/M/c/K parameters. Per-svc values come from `admission_lt` multiplied by `workers_lt[svc_id]` so the row reflects the apparatus's effective M/M/c/K (single process per atomic, aggregate handler slots = `c_specs * w_proc`, aggregate capacity = `K_specs * w_proc`). The global `atomic_admission` fills in for ids the profile is silent on; missing `workers_lt` entries default to 1.
 
     Args:
         atomic_ids (list[str]): third-party atomic ids actually spawned.
@@ -460,16 +463,30 @@ def _build_mesh_admission(*,
         atomic_admission (dict): global default `{k, c}` from `target.json`.
         internal_stage_ids (list[str] | None, optional): internal-stage ids spawned in expanded mode (`TAS_{2..6}`). Each gets its own row. Defaults to None.
         include_composite (bool, optional): when True, prepend a `TAS_{1}` row with the composite's `(c, K, mu, eps)` from `profile.specs`. Defaults to True.
+        workers_lt (dict | None, optional): per-svc `w_proc` from `profile.specs`. When set, the rows report aggregate `(c * w_proc, K * w_proc)`. Defaults to None (rows report base `(c, K)`).
 
     Returns:
         dict[str, dict[str, Any]]: rows for the composite (when included), every internal stage, and every third-party atomic. Keys preserve the natural mesh order: TAS_{1}, TAS_{2..6}, atomics sorted.
     """
     _dflt_k = atomic_admission.get("k")
     _dflt_c = atomic_admission.get("c")
+
+    def _w_proc(svc_id: str) -> int:
+        if workers_lt is None:
+            return 1
+        return max(1, int(workers_lt.get(svc_id, 1)))
+
+    def _eff(svc_id: str) -> tuple[int | None, int | None]:
+        _base_k, _base_c = _resolve_admission(svc_id, admission_lt, _dflt_k, _dflt_c)
+        _w = _w_proc(svc_id)
+        _agg_k = None if _base_k is None else int(_base_k) * _w
+        _agg_c = None if _base_c is None else int(_base_c) * _w
+        return _agg_k, _agg_c
+
     _ans: dict[str, dict[str, Any]] = {}
     _composite_id = "TAS_{1}"
     if include_composite and _composite_id in mu_lt:
-        _k, _c = _resolve_admission(_composite_id, admission_lt, _dflt_k, _dflt_c)
+        _k, _c = _eff(_composite_id)
         _ans[_composite_id] = {
             "c": _c,
             "K": _k,
@@ -480,7 +497,7 @@ def _build_mesh_admission(*,
         for _stage_id in internal_stage_ids:
             if _stage_id not in mu_lt:
                 continue
-            _k, _c = _resolve_admission(_stage_id, admission_lt, _dflt_k, _dflt_c)
+            _k, _c = _eff(_stage_id)
             _ans[_stage_id] = {
                 "c": _c,
                 "K": _k,
@@ -488,7 +505,7 @@ def _build_mesh_admission(*,
                 "eps": float(eps_lt.get(_stage_id, 0.0)),
             }
     for _svc_id in atomic_ids:
-        _k, _c = _resolve_admission(_svc_id, admission_lt, _dflt_k, _dflt_c)
+        _k, _c = _eff(_svc_id)
         _ans[_svc_id] = {
             "c": _c,
             "K": _k,
@@ -499,19 +516,19 @@ def _build_mesh_admission(*,
 
 
 def _workers_lt_from_profile(adp: str) -> dict[str, int]:
-    """Read per-service worker counts (`w`) from the active profile's specs layer.
+    """Read per-service worker counts (`w_proc`) from the active profile's specs layer.
 
     Args:
         adp (str): adaptation key (selects which profile + scenario to load).
 
     Returns:
-        dict[str, int]: worker count per artifact id. Defaults to 1 when the spec is silent.
+        dict[str, int]: worker-process count per artifact id. Defaults to 1 when the spec is silent.
     """
     _net = load_profile(adaptation=adp, source="specs")
     _ans: dict[str, int] = {}
     for _artifact in _net.artifacts:
         try:
-            _ans[_artifact.key] = max(1, int(_artifact.w))
+            _ans[_artifact.key] = max(1, int(_artifact.w_proc))
         except KeyError:
             _ans[_artifact.key] = 1
     return _ans
@@ -845,7 +862,8 @@ def run_experiment(*,
                                             eps_lt=_eps_lt,
                                             atomic_admission=_cfg["atomic_admission"],
                                             internal_stage_ids=_internal_stage_ids,
-                                            include_composite=True)
+                                            include_composite=True,
+                                            workers_lt=_workers_lt)
 
     _trial = _cfg["trial"]
     _kind_p = _trial["kind_probability"]
@@ -895,20 +913,21 @@ def run_experiment(*,
                                  host=_cfg["host"],
                                  ready_timeout_s=_ctrl_ready_timeout_s,
                                  framework=framework) as _ctrl_url:
-            _summaries, _stop_reason = run_async_safe(lambda: _drive_trial(
-                tas_urls=_tas_urls,
-                n_requests=int(_trial["n_requests"]),
-                request_rate_per_s=float(_trial["request_rate_per_s"]),
-                p_alarm=float(_kind_p["alarm"]),
-                request_timeout_s=float(_cfg["request_timeout_s"]),
-                seed=_trial.get("seed"),
-                controller_url=_ctrl_url,
-                adp=adp,
-                poll_every_n=_poll_every_n,
-                consumer_pool_size=int(_trial.get("consumer_pool_size", 64)),
-                max_queue_depth=int(_trial.get("max_queue_depth", 1000)),
-                drain_timeout_s=float(_trial.get("drain_timeout_s", 60.0)),
-            ))
+            with windows_timer_resolution(1):
+                _summaries, _stop_reason = run_async_safe(lambda: _drive_trial(
+                    tas_urls=_tas_urls,
+                    n_requests=int(_trial["n_requests"]),
+                    request_rate_per_s=float(_trial["request_rate_per_s"]),
+                    p_alarm=float(_kind_p["alarm"]),
+                    request_timeout_s=float(_cfg["request_timeout_s"]),
+                    seed=_trial.get("seed"),
+                    controller_url=_ctrl_url,
+                    adp=adp,
+                    poll_every_n=_poll_every_n,
+                    consumer_pool_size=int(_trial.get("consumer_pool_size", 64)),
+                    max_queue_depth=int(_trial.get("max_queue_depth", 1000)),
+                    drain_timeout_s=float(_trial.get("drain_timeout_s", 60.0)),
+                ))
             _history = _fetch_controller_history(_ctrl_url)
     _finished_ts = time.time()
 

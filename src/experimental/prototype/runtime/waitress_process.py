@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 from waitress import serve
 
+from src.experimental.prototype.runtime.os_timer import windows_timer_resolution
 from src.experimental.prototype.runtime.watchdog import watch_parent
 
 # Runtime fallbacks for data/config/method/experimental.json::server.waitress.*.
@@ -53,12 +54,13 @@ def _worker_main(app_factory: AppFactory,
     _parent_pid = os.getppid()
     watch_parent(_parent_pid)
     _app = app_factory()
-    serve(_app,
-          host=str(host),
-          port=int(port),
-          backlog=int(backlog),
-          threads=int(threads),
-          _quiet=True)
+    with windows_timer_resolution(1):
+        serve(_app,
+              host=str(host),
+              port=int(port),
+              backlog=int(backlog),
+              threads=int(threads),
+              _quiet=True)
 
 
 class WaitressProcess:

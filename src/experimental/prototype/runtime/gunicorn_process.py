@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from src.experimental.prototype.runtime.os_timer import windows_timer_resolution
 from src.experimental.prototype.runtime.watchdog import watch_parent
 
 try:
@@ -112,7 +113,8 @@ def _worker_main(app_factory: AppFactory,
         "loglevel": "error",
         "accesslog": None,
     }
-    _GunicornDriver(_app, _options).run()
+    with windows_timer_resolution(1):
+        _GunicornDriver(_app, _options).run()
 
 
 class GunicornProcess:

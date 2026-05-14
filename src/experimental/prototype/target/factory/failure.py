@@ -1,15 +1,14 @@
 """Per-request failure dispatcher used by the atomic and composite route adapters.
 
-The route honours the request payload's `inject_failure` flag (`timeout` / `drop` / `5xx` / None); the client RNG sets the flag per the catalogue's `failure_mechanism_mix`.
+The route honours the request payload's `inject_failure` flag (`timeout` / `drop` / `5xx` / None); the client RNG sets the flag per the catalogue's `failure_mechanism_mix`. **All three mechanisms return immediately at the server** -- none holds the HTTP handler beyond normal processing time -- so the apparatus's observed throughput is bounded by the queueing model under study, not by the failure simulation itself.
 
-- `timeout`: server sleeps `timeout_grace_s` (default 30 s, past the client's 5 s timeout). Client records `Outcome="timeout"`.
+- `timeout`: server returns HTTP 504 (Gateway Timeout) immediately. The client maps status 504 -> `Outcome="timeout"` in `sender._dispatch`. Models an upstream-timeout failure mode (RFC 7231 504 = "didn't receive a timely response from an upstream server") rather than a hung-server scenario; observably identical at the response-measure level (failed request, classified as timeout) and removes the consumer-block tax that a sleep-based simulation imposes.
 - `drop`: server streams a partial JSON body, then the generator raises; uvicorn aborts the connection and httpx surfaces a `RemoteProtocolError` mapped to `Outcome="drop"`.
 - `5xx`: server returns HTTP 502 immediately. Client records `Outcome="5xx"`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -19,7 +18,6 @@ from starlette.responses import Response
 
 from src.experimental.common.payload.request import FailureMechanism
 
-DFLT_TIMEOUT_GRACE_S = 30.0
 _DROP_MARKER = "synthetic drop mid-stream"
 
 
@@ -84,13 +82,15 @@ def _install_synthetic_drop_filter() -> None:
 _install_synthetic_drop_filter()
 
 
-async def timeout_request(grace_s: float = DFLT_TIMEOUT_GRACE_S) -> None:
-    """Sleep `grace_s` seconds so the client times out.
+def timeout_request() -> JSONResponse:
+    """Return an HTTP 504 (Gateway Timeout) response immediately.
 
-    Args:
-        grace_s (float, optional): sleep duration. Defaults to `DFLT_TIMEOUT_GRACE_S`.
+    No sleep, no connection hold: the client receives a 504 status in one roundtrip and maps it to `Outcome="timeout"` via `sender._dispatch`. Older versions of this function slept `timeout_grace_s` to simulate a hung server and force `httpx.TimeoutException` on the client; that approach taxed every timeout-failure request with the client's `request_timeout_s` of consumer-block wait, capping apparatus throughput below the queueing model's prediction.
+
+    Returns:
+        JSONResponse: status 504 with a planted error body. The body is informational; the client classifies by status code, not body.
     """
-    await asyncio.sleep(grace_s)
+    return JSONResponse(content={"error": "synthetic_timeout"}, status_code=504)
 
 
 async def _aborted_body() -> AsyncIterator[bytes]:
@@ -125,17 +125,16 @@ def fivexx_request() -> JSONResponse:
     return JSONResponse(content={"error": "synthetic_5xx"}, status_code=502)
 
 
-async def apply_inject_failure(payload: dict[str, Any],
-                               *,
-                               timeout_grace_s: float = DFLT_TIMEOUT_GRACE_S) -> Response | None:
-    """Inspect `payload['inject_failure']`; trigger the matching mechanism when set.
+async def apply_inject_failure(payload: dict[str, Any]) -> Response | None:
+    """Inspect `payload['inject_failure']`; return the matching mechanism's response when set.
+
+    All three mechanisms return immediately at the server: 504 for `timeout`, mid-body abort for `drop`, 502 for `5xx`. None of them sleeps. The client distinguishes outcomes by inspecting the response (or the exception type httpx raises): 504 -> "timeout", `RemoteProtocolError` -> "drop", other 5xx -> "5xx".
 
     Args:
         payload (dict[str, Any]): inbound request body.
-        timeout_grace_s (float, optional): sleep duration for the `timeout` mechanism. Defaults to `DFLT_TIMEOUT_GRACE_S`.
 
     Returns:
-        Response | None: 502 response for `5xx`, mid-body abort for `drop`, None for `timeout` (after sleeping) or when the flag is absent.
+        Response | None: planted failure response when the flag is set; None when the flag is absent and the route should fall through to the normal handler.
 
     Raises:
         ValueError: when the flag is set but not in `{"timeout", "drop", "5xx"}`.
@@ -145,7 +144,7 @@ async def apply_inject_failure(payload: dict[str, Any],
     if _flag_raw is not None:
         _flag: FailureMechanism = _flag_raw
         if _flag == "timeout":
-            await timeout_request(timeout_grace_s)
+            _ans = timeout_request()
         elif _flag == "drop":
             _ans = drop_request()
         elif _flag == "5xx":
@@ -158,7 +157,6 @@ async def apply_inject_failure(payload: dict[str, Any],
 
 
 __all__ = [
-    "DFLT_TIMEOUT_GRACE_S",
     "apply_inject_failure",
     "drop_request",
     "fivexx_request",
