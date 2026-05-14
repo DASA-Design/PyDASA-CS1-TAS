@@ -250,7 +250,31 @@ Figure CS1.4. *TAS* adaptability overview: *MAPE-K* feedback loop over the manag
 
 *Cost per invocation* values are expressed in the nominal units of the *TAS* exemplar; [1] does not state an explicit currency. The cost-reliability inversion is deliberate: cheaper alternatives such as *Alarm Service 3* at `2.65` per invocation have higher failure rates (`0.18`), so the adaptation engine is forced to arbitrate between *Cost* and *Reliability* rather than pick a dominant service.
 
-**Intermediate 15-service catalogue [13].** The mid-generation revision introduces a fifteen-service catalogue (`5 AS + 5 MAS + 5 DS`), each characterised by failure rate, cost, **queue length**, and **response time** measured at runtime (Table II of [13]). The same paper defines service time as
+**Intermediate 15-service catalogue [13].** Weyns and Iftikhar 2016 introduce a fifteen-service catalogue (`5 AS + 5 MAS + 5 DS`) declared by the third-party service providers. Table I of [13] gives the initial `F_rate` (failure rate) and `Cost` (per invocation, nominal units) for each concrete service, reproduced verbatim below. This is the canonical source for the `\epsilon` values our PyDASA artifacts in `data/config/profile/dflt.json` and `data/config/profile/opti.json` carry for `AS_1..3`, `MAS_1..3`, `MAS_4`, `AS_4`, `DS_3`, and `DS_1`.
+
+**Table I, Third-party service profiles for TAS [13]:**
+
+| **S.No** | **AS F_rate** | **AS Cost** | **MAS F_rate** | **MAS Cost** | **DS F_rate** | **DS Cost** |
+| :------: | :-----------: | :---------: | :------------: | :----------: | :-----------: | :---------: |
+|    1     |     0.11      |     4.0     |      0.12      |     4.0      |     0.01      |     5.0     |
+|    2     |     0.04      |    12.0     |      0.07      |     14.0     |     0.03      |     3.0     |
+|    3     |     0.18      |     2.0     |      0.18      |     2.0      |     0.05      |     2.0     |
+|    4     |     0.08      |     3.0     |      0.10      |     6.0      |     0.07      |     1.0     |
+|    5     |     0.14      |     5.0     |      0.15      |     3.0      |     0.02      |     4.0     |
+
+[13] specifies the **default TAS configuration** as `{AS_3, MAS_4, DS_1}` (the triple our `dflt.json` carries as the no-adaptation baseline for `AS_3`, and our `opti.json` carries as the substitution target for `MAS_4` and `DS_1` in the *Select-Reliable* and aggregate scenarios). The `Cost` column matters for `R3`-style stakeholder utility analyses; the *PyDASA* methods used in this case study consume only `F_rate` so cost is stored as `notes` rather than as a *Variable* dict.
+
+**Workflow probabilities (from [13] Figure 1, reproduced in our `_routs["baseline"]` matrix):**
+
+- `0.75` of requests are vital-parameter checks (`TAS_1 → TAS_2`, dispatched to the *MAS* pool); `0.25` are emergency calls via the panic button (`TAS_1 → TAS_3`, dispatched to the *AS* pool).
+- After medical analysis (`TAS_4`): `0.66` invoke the drug service (`TAS_4 → DS`); `0.34` route to the alarm service (`TAS_4 → TAS_3`, re-entering the *AS* dispatch).
+
+**Two types of uncertainty [13] Section III:**
+
+1. **Action-probability uncertainty.** The `75/25` and `66/34` workflow splits are not stationary; they can drift in operation. Our methods treat the routing matrix as fixed at the time of the analytic / stochastic / dimensional solve.
+2. **Service-quality uncertainty.** Concrete service availability, failure rates, and response times are subject to change with load, network, and other conditions. Our methods treat `\mu` and `\epsilon` as fixed setpoints from `artifacts`; the prototype's `specs` layer is the place where this drift would be parameterised.
+
+**Table II of [13]** elaborates the same catalogue with runtime-observed queue length and response time, used in the simulation models in §V of that paper. The same paper defines service time as
 
 ```
 Service Time = Response Time + Waiting Time in Queue

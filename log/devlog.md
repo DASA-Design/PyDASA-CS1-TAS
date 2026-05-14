@@ -2013,6 +2013,29 @@ The file carries a PyDASA-compatible object with content keyed inside:
 - [ ] Scaffold empty `src/`, `data/`, `assets/`, `tests/` and notebook stubs
 - [x] ~~Decide: keep `__OLD__/` tracked in git, or `.gitignore` it?~~ → **Keep tracked** during migration; remove once the new notebooks + `src/` reproduce its results.
 
+## 2026-05-14 — Report A drafted end-to-end
+
+Closed the model-only chapter at `notes/report-A.md` — 14 sections, 5 figures embedded, all data-consistency-checked. Headline findings:
+
+- **R1 unbinds** under the 2026-05-13 locked routing: all four adaptations (baseline / S1 / S2 / aggregate) PASS R1 at $0.00$–$0.39$ % vs the $1$ % threshold. Earlier drafts had baseline + S2 failing at $1.25$ %; the routing-encoding pass on 2026-05-13 (self-loop = ε convention, feedback retry edges, inverse-ε dispatch, [13] Table I alignment, three ε corrections at AS_3 / MAS_4 / AS_4) pushed all four into PASS.
+- **Four-DC trade-off (Table 6.9)** is the chapter's principal RQ-02 evidence — θ, σ, φ drop by 3.6–5.7 % under adaptations; η rises by 0.9–2.4 %. φ (memory utilisation) is only visible in the dimensional view.
+- **Aggregate is non-additive** vs S1 + S2 (mechanism overlap on θ, compound-loading on η). Σθ residual = +0.0324 above additive prediction; Ση = 38.48 super-additively above both S1 (37.90) and S2 (38.23).
+- **Reference-frame caveat** (§6.4.1): bounds σ_R2 = 0.897, η_R1 = 23.23 are baseline-derived and held fixed across adaptations for cross-method legitimacy. Under S2's own design space, η_R1 would tighten to ≈ 13.94 — flagged as a deliberate methodological commitment.
+
+Three documentation corrections same session:
+
+- "Cámara 2023 six-decimal replication anchor" retracted; chapter's credibility hook is now input-traceability against [13] Table I.
+- The "$\theta \le 0.65$, $\sigma \le 1 - \theta$, $\eta \le 1$, $\phi \le 1$" bounds list was partially fabricated; replaced with the canonical PACS bounds ($\theta < 0.3$, $\sigma < 0.3$, $\rho \le 0.65$, $\phi \le 1$) and a CLAUDE.md "never claim these" entry.
+- AS_3 ε corrected from 0.10 to 0.18; MAS_4 / AS_4 epsilon values un-swapped (0.08 ↔ 0.10) per [13] Table I row 4.
+
+Three first-class items carried into next session ([[next-session-todos-2026-05-14]]):
+
+1. Fix `\w` vs `c` naming collision in `data/config/profile/*::specs`.
+2. Implement remote deployment (stage 8.1, starter daemon for `dpl="remote"`).
+3. Parent-PID watchdog for uvicorn workers (calibration leftover-process bug hit twice today).
+
+Memory entries written: `project_report_a_drafted_2026_05_14.md`, `project_locked_routing_2026_05_13.md`, `project_next_session_todos_2026_05_14.md`. MEMORY.md index + CLAUDE.md (notebook conventions, canonical DC bounds) updated.
+
 ## Open questions
 
 - Does PyDASA 0.3.2 already expose the π-group builders this case study needs, or do we need helpers in local `src/`?
