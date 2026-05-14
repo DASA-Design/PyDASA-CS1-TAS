@@ -72,11 +72,17 @@ def _build_vars_from_nodes(nds: pd.DataFrame,
         # chi = lambda * (1 - epsilon); effective throughput under faults
         _eps = _a.vars.get(f"\\epsilon_{{{_sub}}}", {}).get("_setpoint", 0.0)
         _updates[f"\\chi_{{{_sub}}}"] = float(_row["lambda"]) * (1 - _eps)
+        # M_act = L * d_req (linear memory: in-system messages times per-request payload). Without this refresh, M_act stays at its config placeholder for swap-out nodes (MAS_{3}/AS_{3}/DS_{3} under opti profile), producing spurious phi = M_act/M_buf = 0.6 dimensional readings.
+        _d_req = _a.vars.get(f"d_{{{_sub}}}", {}).get("_setpoint", 0.0)
+        _updates[f"M_{{act_{{{_sub}}}}}"] = float(_row["L"]) * _d_req
 
-        # refresh `_setpoint` and `_data` in place on the copied Vars
+        # refresh setpoint / std_setpoint / mean / std_mean / data in place on the copied Vars. PyDASA's Buckingham reads `_std_setpoint` for coefficient computation (buckingham.py:442); writing only `_setpoint` left `_std_setpoint` at the config placeholder for swap-out nodes that S1 keeps active (MAS_{3}, AS_{3}, DS_{3} under opti profile), producing spurious theta = 0.6 saturation flags in the dimensional output. For TAS variables, std-units coincide with raw units (no conversion needed), so the same value is written to both setpoint and std_setpoint.
         for _sym, _val in _updates.items():
             if _sym in _vars:
                 _vars[_sym]["_setpoint"] = _val
+                _vars[_sym]["_std_setpoint"] = _val
+                _vars[_sym]["_mean"] = _val
+                _vars[_sym]["_std_mean"] = _val
                 _vars[_sym]["_data"] = [_val]
 
         # record the per-artifact entry in the output dict

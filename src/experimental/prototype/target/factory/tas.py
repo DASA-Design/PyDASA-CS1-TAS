@@ -54,8 +54,8 @@ from src.experimental.prototype.target.workflow.loader import (
 DFLT_SAMPLES_BUFFER_SIZE = 1024
 
 
-def _filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
-                              url_lt: Mapping[str, str | list[str]]) -> ServiceCatalogue:
+def filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
+                             url_lt: Mapping[str, str | list[str]]) -> ServiceCatalogue:
     """Return a new catalogue restricted to entries the active mesh actually spawned.
 
     The on-disk catalogue layer (e.g. `weyns_iftikhar_2016`) lists every service across all adp scenarios. The active mesh only spawns the services declared in the active profile (e.g. baseline gets DS_{3}; s2 gets DS_{1}). Without this filter, `catalogue.by_kind` would happily return services the cache can't reach and the picker would hand them to `ServiceClient.invoke_operation` which then raises `UnknownServiceError`.
@@ -368,7 +368,7 @@ def build_tas_fastapi_app(*,
         _all_urls.update(internal_url_lt)
     _registry = _build_registry(_all_urls)
     _cache = ServiceCache(_registry)
-    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), url_lt)
+    _catalogue = filter_catalogue_to_mesh(load_catalogue(catalogue_version), url_lt)
     _workflow_spec = load_workflow(workflow_name)
     _engine = WorkflowEngine(spec=_workflow_spec, catalogue=_catalogue)
     if flows_path is None:
@@ -502,7 +502,7 @@ def build_tas_flask_app(*,
         _all_urls.update(internal_url_lt)
     _registry = _build_registry(_all_urls)
     _cache = ServiceCache(_registry)
-    _catalogue = _filter_catalogue_to_mesh(load_catalogue(catalogue_version), url_lt)
+    _catalogue = filter_catalogue_to_mesh(load_catalogue(catalogue_version), url_lt)
     _workflow_spec = load_workflow(workflow_name)
     _engine = WorkflowEngine(spec=_workflow_spec, catalogue=_catalogue)
     if flows_path is None:
@@ -547,4 +547,5 @@ __all__ = [
     "TasRoutesBase",
     "build_tas_fastapi_app",
     "build_tas_flask_app",
+    "filter_catalogue_to_mesh",
 ]

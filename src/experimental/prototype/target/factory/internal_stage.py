@@ -44,13 +44,17 @@ from src.experimental.prototype.target.factory.failure import (
     apply_inject_failure,
 )
 from src.experimental.prototype.target.factory.healthz import add_healthz_route
+from src.experimental.prototype.target.factory.tas import filter_catalogue_to_mesh
 from src.experimental.prototype.target.factory.third_party import (
     _drop_generator,
     _safe_filename,
     _status_for_failure,
 )
 from src.experimental.prototype.target.service.atomic import AtomicService
-from src.experimental.prototype.target.service.catalogue import load_catalogue
+from src.experimental.prototype.target.service.catalogue import (
+    ServiceCatalogue,
+    load_catalogue,
+)
 from src.experimental.prototype.target.service.client import (
     DFLT_TIMEOUT_S,
     ServiceClient,
@@ -95,7 +99,7 @@ class TasInternalAtomic(AtomicService):
                  mu: float,
                  client: ServiceClient,
                  cache: ServiceCache,
-                 catalogue_version: str | None = None,
+                 catalogue: ServiceCatalogue,
                  k: int | None = None,
                  c: int | None = None) -> None:
         """Wire the internal-stage atomic.
@@ -107,7 +111,7 @@ class TasInternalAtomic(AtomicService):
             mu (float): service rate. <= 0 disables the sleep.
             client (ServiceClient): pre-opened dispatch client (managed by the FastAPI lifespan).
             cache (ServiceCache): cache resolved for this stage's downstream calls.
-            catalogue_version (str | None, optional): catalogue version layer to consult for the picker (None reads `_setpoint`).
+            catalogue (ServiceCatalogue): catalogue used by the picker; the factory pre-filters this to the spawned mesh so `by_kind` never returns unspawned services.
             k (int | None, optional): in-flight cap. Defaults to None (no limit).
             c (int | None, optional): parallel-worker cap. Defaults to None.
         """
@@ -117,7 +121,7 @@ class TasInternalAtomic(AtomicService):
         self.mu = mu
         self._client = client
         self._cache = cache
-        self._catalogue = load_catalogue(catalogue_version)
+        self._catalogue = catalogue
 
     async def invoke_operation(self,
                                payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -287,6 +291,8 @@ def build_internal_stage_fastapi_app(*,
                                                       endpoint=_urls[0],
                                                       urls=_urls))
     _cache = ServiceCache(_registry)
+    _catalogue = filter_catalogue_to_mesh(load_catalogue(catalogue_version),
+                                          atomic_url_lt)
     if csv_dir is None:
         _csv_path: Path | None = None
     else:
@@ -305,7 +311,7 @@ def build_internal_stage_fastapi_app(*,
                                               mu=mu,
                                               client=_client,
                                               cache=_cache,
-                                              catalogue_version=catalogue_version,
+                                              catalogue=_catalogue,
                                               k=k,
                                               c=c)
             yield
@@ -453,6 +459,8 @@ def build_internal_stage_flask_app(*,
                                                       endpoint=_urls[0],
                                                       urls=_urls))
     _cache = ServiceCache(_registry)
+    _catalogue = filter_catalogue_to_mesh(load_catalogue(catalogue_version),
+                                          atomic_url_lt)
     if csv_dir is None:
         _csv_path: Path | None = None
     else:
@@ -470,7 +478,7 @@ def build_internal_stage_flask_app(*,
                                  mu=mu,
                                  client=_client,
                                  cache=_cache,
-                                 catalogue_version=catalogue_version,
+                                 catalogue=_catalogue,
                                  k=k,
                                  c=c)
 
