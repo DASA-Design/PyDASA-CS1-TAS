@@ -117,12 +117,12 @@ class ArtifactSpec:
         return int(self.read_setpoint(f"K_{{{self.format_sub()}}}"))
 
     @property
-    def w(self) -> int:
-        """*w* worker count setpoint for this artifact (specs-layer only).
+    def w_proc(self) -> int:
+        """*w_proc* OS worker-process count setpoint for this artifact (specs-layer only).
 
-        Number of parallel uvicorn / waitress worker processes the apparatus spawns for this service under `dpl="multiprocess"`. Lives in the specs layer because it is an apparatus knob, not a queueing-theory parameter; analytic / stochastic / dimensional methods never read it.
+        Number of parallel uvicorn / waitress worker processes the apparatus spawns for this service under `dpl="multiprocess"`. Lives in the specs layer because it is an apparatus knob, not a queueing-theory parameter; analytic / stochastic / dimensional methods never read it. Named `w_proc` (not bare `w` or `\\w`) to disambiguate from calibration's `w` (worker ramp axis) and queueing-theory's `c` (parallel servers in a station).
         """
-        return int(self.read_setpoint(f"\\w_{{{self.format_sub()}}}"))
+        return int(self.read_setpoint(f"w_proc_{{{self.format_sub()}}}"))
 
     @property
     def epsilon(self) -> float:
