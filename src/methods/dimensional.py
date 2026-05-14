@@ -34,6 +34,7 @@ from typing import Any, Dict, Optional
 from pydasa.dimensional.vaschy import Schema
 
 # local modules
+from src.analytic import solve_network
 from src.dimensional import (analyse_symbolic,
                              build_engine,
                              build_schema,
@@ -43,6 +44,38 @@ from src.io import ArtifactSpec, NetCfg, load_method_cfg, load_profile
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RESULTS_DIR = _ROOT / "data" / "results" / "dimensional"
+
+
+def _refresh_artifact_vars(cfg: NetCfg, nds) -> None:
+    """*_refresh_artifact_vars()* overwrite per-artifact operational variables with values from the analytic solve.
+
+    The dimensional method runs on `cfg.artifacts`, whose `vars` come straight from the profile JSON. For nodes that the profile carries as placeholders (typical when a node is inactive under one adaptation but active under another), the placeholder propagates into PyDASA's `_std_setpoint`/`_mean` and produces wrong coefficient setpoints. This refresh replaces lambda, chi, L, Lq, W, Wq with the values just computed by `solve_network()` so PyDASA reads the actual operating point.
+
+    Args:
+        cfg (NetCfg): resolved network configuration (artifacts list is mutated in place).
+        nds (pd.DataFrame): per-node metrics frame from `src.analytic.solve_network`.
+    """
+    for _i, _a in enumerate(cfg.artifacts):
+        _row = nds.iloc[_i]
+        _sub = _a.format_sub()
+        _eps = _a.vars.get(f"\\epsilon_{{{_sub}}}", {}).get("_setpoint", 0.0)
+        _d_req = _a.vars.get(f"d_{{{_sub}}}", {}).get("_setpoint", 0.0)
+        _updates = {
+            f"\\lambda_{{{_sub}}}": float(_row["lambda"]),
+            f"L_{{{_sub}}}": float(_row["L"]),
+            f"L_{{q, {_sub}}}": float(_row["Lq"]),
+            f"W_{{{_sub}}}": float(_row["W"]),
+            f"W_{{q, {_sub}}}": float(_row["Wq"]),
+            f"\\chi_{{{_sub}}}": float(_row["lambda"]) * (1 - _eps),
+            f"M_{{act_{{{_sub}}}}}": float(_row["L"]) * _d_req,
+        }
+        for _sym, _val in _updates.items():
+            if _sym in _a.vars:
+                _a.vars[_sym]["_setpoint"] = _val
+                _a.vars[_sym]["_std_setpoint"] = _val
+                _a.vars[_sym]["_mean"] = _val
+                _a.vars[_sym]["_std_mean"] = _val
+                _a.vars[_sym]["_data"] = [_val]
 
 
 def _analyse_artifact(artifact: ArtifactSpec,
@@ -126,6 +159,9 @@ def run(adp: Optional[str] = None,
         _mcfg = method_cfg
     else:
         _mcfg = load_method_cfg("dimensional")
+    # Solve the analytic Jackson network first so we can refresh the operational variables (lambda, chi, L, Lq, W, Wq) on every artifact before PyDASA reads them. The config profile may carry placeholder values for swap-out nodes (e.g., L = 6 at MAS_{3}/AS_{3}/DS_{3} in opti.json, which are inactive under S2/aggregate but active under S1); without this refresh, those placeholders propagate into PyDASA's coefficient setpoints and produce spurious dimensional readings.
+    _nds = solve_network(_cfg)
+    _refresh_artifact_vars(_cfg, _nds)
     # one schema reused across every artifact: PyDASA validates the framework once
     _sch = build_schema(_mcfg["fdus"])
     _arts: Dict[str, Dict[str, Any]] = {}
