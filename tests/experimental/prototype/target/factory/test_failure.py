@@ -60,8 +60,11 @@ class TestApplyInjectFailure:
             await anext(_iter)
 
     @pytest.mark.asyncio
-    async def test_timeout(self) -> None:
-        """*test_timeout()* a `'timeout'` flag returns a `JSONResponse` with status 504 immediately."""
+    async def test_timeout(self,
+                           monkeypatch: pytest.MonkeyPatch) -> None:
+        """*test_timeout()* a `'timeout'` flag returns a `JSONResponse` with status 504 after the optional `TIMEOUT_RETURN_DELAY_S`."""
+        monkeypatch.setattr("src.experimental.prototype.target.factory.failure.TIMEOUT_RETURN_DELAY_S",
+                            0.0)
         _ans = await apply_inject_failure({"inject_failure": "timeout"})
         assert _ans is not None
         assert _ans.status_code == 504

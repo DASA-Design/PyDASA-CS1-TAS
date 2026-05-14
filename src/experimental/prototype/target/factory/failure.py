@@ -9,6 +9,7 @@ The route honours the request payload's `inject_failure` flag (`timeout` / `drop
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -18,6 +19,10 @@ from starlette.responses import Response
 
 from src.experimental.common.payload.request import FailureMechanism
 
+# Temporary diagnostic knob: artificial server-side delay before returning the 504 for
+# `timeout` failures. Set to 0.0 for the production path (instant return); set to e.g.
+# 0.01 to test whether a small artificial server hold changes X_0 / R_s materially.
+TIMEOUT_RETURN_DELAY_S = 0.01
 _DROP_MARKER = "synthetic drop mid-stream"
 
 
@@ -82,14 +87,16 @@ def _install_synthetic_drop_filter() -> None:
 _install_synthetic_drop_filter()
 
 
-def timeout_request() -> JSONResponse:
-    """Return an HTTP 504 (Gateway Timeout) response immediately.
+async def timeout_request() -> JSONResponse:
+    """Optionally sleep `TIMEOUT_RETURN_DELAY_S`, then return an HTTP 504 (Gateway Timeout) response.
 
-    No sleep, no connection hold: the client receives a 504 status in one roundtrip and maps it to `Outcome="timeout"` via `sender._dispatch`. Older versions of this function slept `timeout_grace_s` to simulate a hung server and force `httpx.TimeoutException` on the client; that approach taxed every timeout-failure request with the client's `request_timeout_s` of consumer-block wait, capping apparatus throughput below the queueing model's prediction.
+    The default delay is 0.0 (instant return): the client receives a 504 in one roundtrip and maps it to `Outcome="timeout"` via `sender._dispatch`. Setting the module-level `TIMEOUT_RETURN_DELAY_S` knob to a positive value (e.g. 0.01 s) is a diagnostic seam for testing whether a small server-side delay materially changes X_0 / R_s. Older versions of this function slept `timeout_grace_s` (30 s default) to force `httpx.TimeoutException` on the client; that approach taxed every timeout-failure request with the client's `request_timeout_s` of consumer-block wait, capping apparatus throughput below the queueing model's prediction.
 
     Returns:
         JSONResponse: status 504 with a planted error body. The body is informational; the client classifies by status code, not body.
     """
+    if TIMEOUT_RETURN_DELAY_S > 0:
+        await asyncio.sleep(TIMEOUT_RETURN_DELAY_S)
     return JSONResponse(content={"error": "synthetic_timeout"}, status_code=504)
 
 
@@ -144,7 +151,7 @@ async def apply_inject_failure(payload: dict[str, Any]) -> Response | None:
     if _flag_raw is not None:
         _flag: FailureMechanism = _flag_raw
         if _flag == "timeout":
-            _ans = timeout_request()
+            _ans = await timeout_request()
         elif _flag == "drop":
             _ans = drop_request()
         elif _flag == "5xx":
