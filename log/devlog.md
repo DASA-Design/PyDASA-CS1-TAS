@@ -2,6 +2,209 @@
 
 Running log of design decisions, pivots, and open questions for the Tele Assistance System case study. Append only; newest entry on top.
 
+## 2026-05-13 — Stage 8.0 extraction + R3 retirement + yoly op-points overlay + plot_node_heatmap fix
+
+Four cross-cutting changes landed today. All four behind a single 561-passing pytest suite.
+
+### Stage 8.0 — extract `src/methods/experimental.py` into `procedure/`
+
+`src/methods/experimental.py` shrunk **1501 → 326 lines** (thin facade). Body moved into the `procedure/` package per the design intent the package's own `__init__.py` docstring spelled out at stage 0 (`deployment` + `tuning` + `experiment` triad). Mechanical refactor, zero behaviour change.
+
+- [src/experimental/procedure/experiment.py](src/experimental/procedure/experiment.py) — filled (was empty): `run_experiment` + 19 helpers (profile extractors, mesh-spec builders, open-loop trial driver, controller polling, bounds gate). 1019 lines.
+- [src/experimental/procedure/tuning.py](src/experimental/procedure/tuning.py) — new: `run_calibration` + `_BringUpFactory` + `_run_workers_scaling` + `find_latest_envelope`. 247 lines.
+- [src/experimental/procedure/__init__.py](src/experimental/procedure/__init__.py) — re-exports `run_calibration`, `run_experiment`, `find_latest_envelope`; docstring updated to match the new triad.
+- [src/methods/experimental.py](src/methods/experimental.py) — thin facade: `run(stage)` dispatcher + `main()` + CLI printers + re-exports of every private symbol the test harness reaches into (`_admission_lt_from_profile`, `_resolve_admission`, `_build_mesh_admission`, `_dispatch_at_rate`, `_consume_payloads`, `_drive_trial`, `_check_breach`, `User`, etc.).
+
+**Back-compat strategy:** the facade re-exports private symbols so existing import paths keep working; tests migrate from attribute-form `monkeypatch.setattr(experimental, "User", _FakeUser)` to string-path form `monkeypatch.setattr("src.experimental.procedure.experiment.User", _FakeUser)`. Patches now hit the lookup site instead of the facade's alias.
+
+`_maybe_check_bounds` (in `procedure/experiment.py`) imports `find_latest_envelope` lazily from `procedure/tuning` inside the function body — keeps `experiment.py` free of an outgoing import-time dependency on `tuning.py`.
+
+### R3 ditched everywhere
+
+R3 (cost minimisation, conditional on R1 ∧ R2) had `threshold: null` and was a derived flag (`R3.pass = R1.pass and R2.pass`); the user wanted to focus the case-study on the two thresholded requirements. Stripped from:
+
+- `data/reference/baseline.json` — only R1 + R2 remain in `requirements`.
+- `src/analytic/metrics.py` — `check_reqs` signature drops the `cost` kwarg; verdict dict `{R1, R2, R3}` → `{R1, R2}`.
+- `src/analytic/__init__.py`, `src/methods/{analytic,stochastic,dimensional}.py`, `src/io/config.py`, `src/experimental/prototype/target/service/qos.py` — narrative + docstring touch-ups.
+- Notebooks 01 / 02 / 03 / 05 — intro inputs/outputs, summary table column, verdict section title, verdict table column, summary narrative all R3-free.
+- `tests/analytic/test_metrics.py` — removed `test_cost_recorded_but_not_thresholded`; renamed `test_r3_threshold_is_null_in_reference` → `test_reference_has_only_r1_r2`. `tests/methods/test_analytic.py` + `test_stochastic.py` shape assertions updated.
+
+### Yoly + dimensional operating-point overlay
+
+New feature anchoring each adaptation's `(theta, sigma, eta, phi)` dimensional verdict onto `04-yoly.ipynb`'s swept design space.
+
+**New API:**
+- [src/dimensional/reshape.py::load_dim_op_points](src/dimensional/reshape.py) — reads saved `data/results/dimensional/<adp>/<profile>.json` and aggregates each adp's per-artifact coefficients via `coefs_to_net` (mean reducer; matches `03-dimensional.ipynb §2`).
+- [src/dimensional/reshape.py::load_dim_op_points_per_node](src/dimensional/reshape.py) — per-artifact variant for the per-node arts_behaviour overlay.
+- [src/view/charter.py::plot_yoly_with_op_points](src/view/charter.py) — wraps `plot_yoly_chart` (kind="chart") or `plot_yoly_space` (kind="space"). X markers (s=180, black-edged, sentence-case bold labels with white α=0.6 bbox) + dim-grey dashed trajectory line connect baseline → s1 → s2 → aggregate.
+- [src/view/charter.py::plot_yoly_arts_with_op_points](src/view/charter.py) — per-node 3D variant.
+- `legend_ncol_cap` threaded through `plot_yoly_chart` / `plot_yoly_space`; the wrapper extends the footer legend with one X-marker proxy per adaptation (suffix `(op)`, same colour as the cloud).
+
+**Critical bug solved (worth pinning):** the yoly sweep painter assigns scenario colours by `sorted(paths.keys())`, not insertion order. With `scenarios={"No Adaptation": ..., "S1: Retry": ..., "S2: Select-Reliable": ..., "S1 & S2": ...}` the alphabetical sort puts `"S1 & S2"` BEFORE `"S1: Retry"` (space `0x20` < colon `0x3A`), so a naive wrapper iterating op_points in insertion order assigns the wrong colour to every adp except baseline. `_resolve_op_point_colors(adps, scenarios, paths)` mirrors the sweep's sort + zip-by-position to fix this.
+
+**Notebook restructure (04-yoly.ipynb)** — final 6-section layout:
+- §1: Sweep all 4 adaptations (single loop).
+- §2: Per-adp arch chart + space (loop).
+- §3: Per-node grids (baseline + aggregate only — keeps figure count manageable).
+- §4: 4-way cmp arch overlay with op-points.
+- §5: 2-way baseline-vs-aggregate cmp overlay with op-points.
+- §6: Per-node 3D arts_behaviour with op-points.
+
+### `plot_node_heatmap` positional alignment
+
+Legacy `plot_node_heatmap(ndss, names, nodes, ...)` filtered each panel's rows by `_df[cname].isin(nodes)` — so when adaptations swapped services at the same row position (baseline `MAS_{3}` ↔ s2 `MAS_{4}`), the s2 panel silently dropped the swap-slot rows. Confirmed in `data/img/analytic/s2/heatmap_vs_baseline.png` (baseline = 13 rows, s2 = 10).
+
+**Refactor:** dropped the `nodes` parameter; each panel renders `max(len(df) for df in ndss)` rows; shorter panels NaN-pad; per-row `cname` value comes from `_df.iloc[i][cname]` so each panel's y-axis labels come from its own column. Swap-slot rows now show `MAS_{3}` on baseline panel and `MAS_{4}` on s2 panel at the same row position. Suppressed seaborn's "key" y-axis title via `_ax.set_ylabel("")`. `plot_node_diffmap` gained a `y_labels` kwarg for per-row label override.
+
+All four notebooks (01-analytic, 02-stochastic, 03-dimensional, 05-experimental) dropped their `_slot` workaround. New `tests/view/test_diagrams.py` (5 tests) pins the positional-alignment + per-panel-labels contracts.
+
+### Tests + verification
+
+| Stage | Count | Delta |
+|---|---|---|
+| Pre-session | 550 | — |
+| After plotter fix + notebooks | 555 | +5 (new `test_diagrams.py`) |
+| After R3 stripped | 554 | -1 (deleted `test_cost_recorded_but_not_thresholded`) |
+| After yoly overlay | 561 | +7 (new `test_charter_overlay.py`) |
+| After stage 8.0 extraction | 561 | ±0 (zero regression, monkeypatches migrated) |
+
+**Open:** stage 8.1 (remote deployment) sits behind the now-clean facade. `data/config/method/prototype/hosts.json` + starter daemon + placement-aware `bring_up_mesh` is the next chunk. Plan at `C:\Users\Felipe\.claude\plans\lets-go-to-plan-velvet-meteor.md`.
+
+## 2026-05-12 — Stage 7 closed: thin notebook + observed aggregator + multi-worker mesh + Flask target + open-loop driver
+
+**Decision.** Close stage 7 of the `src/experimental/` rebuild. The 16-grid notebook `05-experimental.ipynb` drives `(adp x framework x granularity)` end-to-end under `dpl="multiprocess"` and reuses the analytic plotters per `(framework, granularity)` slice. `verdict.json::mesh` echoes the per-atomic `(c, K, mu, eps)` actually applied so stage 9 can verify cross-method parity. 550 pytest green.
+
+**Planned scope landed** (c/K + aggregator + notebook):
+
+- `_admission_lt_from_profile(adp)` + `_resolve_admission(...)` lift per-svc `(c, K)` from `profile.specs[svc_id]`; threaded through `_build_mesh_specs` so each atomic spawns with its profile-declared caps.
+- `_build_mesh_admission(...)` + `compute_verdict(mesh_admission=...)` echo `{svc_id: {c, K, mu, eps}}` into `verdict.json::mesh` (TAS_{1} composite + TAS_{2..6} internal stages when expanded).
+- `observed_nodes_from_run(..., composite_op=...)` aggregates per-pid CSVs into an analytic-shaped nodes DataFrame; composite TAS_{1} synthesised from `verdict.operational` since the composite writes flow JSONL not per-pid CSV.
+- `05-experimental.ipynb`: 16-row summary / verdict tables, plots per `(framework, granularity)` slice. R3 dropped (cost is the comparison method's job).
+
+**Unplanned (multi-worker mesh):**
+
+- New `\w_{<svc>}` PACS Variable in `profile/{dflt,opti}.json::specs` (default `w=2`; tried `w=4` first but laptop CPU thrashed during cold-start storm). `ArtifactSpec.w` + `_workers_lt_from_profile(adp)` lift the map.
+- `MeshSpec.workers: int = 1`; `bring_up_mesh` spawns N processes per spec on consecutive ports and yields `dict[svc_id, list[str]]`. `_find_contiguous_block` picks an N-port window.
+- `ServiceDescription.urls: tuple[str, ...]` (parallel to legacy `endpoint`); `ServiceClient._pick_url` round-robins per service via a per-instance counter.
+- `pick_free_port` floors at `MIN_USER_PORT = 8000` (out of system + registered port ranges) + auto-rotates so TIME_WAIT on Windows doesn't block back-to-back iterations.
+- `target.json::ready_timeout_s: 20.0 -> 90.0` (cold-start storm) + `controller.ready_timeout_s: 5.0 -> 20.0`.
+
+**Unplanned (open-loop trial driver):**
+
+The closed-loop "one User per TAS_{1} worker" pattern saturated the apparatus at ~33 req/s. At the case-study design point `lambda_z = 345 req/s` this is a 10x undershoot that would look like a slow trial rather than a verdict-level operational finding. Replaced with an open-loop producer / consumer over `asyncio.Queue`:
+
+- `_dispatch_at_rate(queue, n_requests, rate, stop_event, ...)` pushes ticks at `request_rate_per_s` regardless of server speed; drift-corrected pacing via `start + i/rate` targets.
+- `_consume_payloads(consumer_id, base_url, queue, ...)` consumers each own one User + httpx.AsyncClient; exit on `None` sentinel or `stop_event`.
+- `_drive_trial(tas_urls, ..., consumer_pool_size=64, max_queue_depth=1000, drain_timeout_s=60.0)` spawns N consumers + 1 dispatcher; drains via `asyncio.gather(timeout=drain_timeout_s)`.
+- `consumer_pool_size = 64` kept below httpx's default `max_connections = 100` to avoid pool throttling. `max_queue_depth = 1000` is the back-pressure ceiling: when consumers stall, `queue.put()` blocks and the offered rate slips below `request_rate_per_s` — which surfaces as a real `X_0_req_per_s` undershoot in the verdict.
+
+Baseline stop predicate switched from R1 AND R2 to R1 OR R2 (`_STOP_PREDICATES["baseline"] = ("r1_breach", "r2_breach")`). The intent: in baseline we want to stop on ANY single-requirement breach (this is the "no adaptation" reference; if EITHER requirement is breached the run is already a failure). Per-adp: s1 -> `("r1_breach",)`, s2 -> `("r2_breach",)`, aggregate -> `("r1_breach", "r2_breach")`.
+
+**Unplanned (apparatus mu = ideal mu).** `profile/{dflt,opti}.json::specs[<svc>]::\mu_{<svc>}._setpoint` lifted to match `artifacts[<svc>]::\mu_{<svc>}._setpoint` (case-study ideal). Specs no longer declares a fractional apparatus floor; the experiment now runs over the same service rates the analytic / dim / stoch methods compute over. Values: TAS_{1..6}=700, MAS_{1}=180, MAS_{2}=530, MAS_{3}=150, MAS_{4}=880, AS_{1}=700, AS_{2}=410, AS_{3}=1580, AS_{4}=210, DS_{1}=250, DS_{3}=550. NB: s2 swap AS_{3}->AS_{4} has `mu_AS4 = 210 < mu_AS3 = 1580` (classic throughput-for-reliability trade); MAS_{3}->MAS_{4} is a pure upgrade.
+
+**Unplanned (Flask target + controller).** ABC route bases land per stage: `AtomicRoutesBase` (third_party.py), `InternalStageRoutesBase` (internal_stage.py), `TasRoutesBase` (tas.py), `ControllerRoutesBase` (controller/app.py). FastAPI + Flask subclasses each. New `build_*_flask_app` builders. `AsyncLoopThread` (`target/factory/async_bridge.py`) hosts a daemon-thread asyncio loop so waitress worker threads share K + c gating + httpx client. `SyncSamplePoller` (controller/poller.py) is the threading-based mirror of `SamplePoller` for the Flask controller.
+
+**Unplanned (notebook polish).** Collapsed mode uses an empirical star routing (TAS_{1} -> atomic_i weighted by observed lambda) since the profile routing matrix disconnects TAS_{1} from atomics when TAS_{2..6} are absent. Heatmap / diffmap rows are union-padded across all 4 adps per `(fw, gr)` slice so swap-slot scenarios (s2 swaps MAS_{3}->MAS_{4} etc.) don't drop rows. Nodes reorder to `cfg.list_node_keys()` workflow order rather than alphabetical. All variant runs land at `data/results/experimental/<adp>_<framework>_<granularity>/` (single underscore between every segment; the variant suffix is always present so there is no bare canonical path).
+
+**Calibration override.** Latest envelopes for `localhost` + `multiprocess` carry `r_max_req_s = 350` (measured 328) with an `_overrides` block recording the manual value and rationale: the case-study `lambda_z = 345` requires a bounds gate above the host's hardware ceiling so the trial actually runs; the undershoot then lands in `verdict.operational.X_0_req_per_s` as a real experimental finding.
+
+**Tests + verification.** 550 pytest passing. 7 new open-loop driver tests (`_dispatch_at_rate` flood / pacing / stop / breach; `_consume_payloads` sentinel / records; `_drive_trial` drain timeout) all kept inside the single `TestExperimental` class (user feedback: "lets try to keep as few tests clases as possible"). At `w=2`: collapsed mesh = 17 procs (8 svcs x 2 + 1 controller), expanded = 27 (13 x 2 + 1).
+
+**Out of scope going forward.** R1/R2 trajectory plotters over `window.parquet` (analytic / dim render only scalar snapshots; experimental follows). Multi-trial repetition. Multi-worker breach merging in the controller (polls `tas_urls[0]` only; verdict R1/R2 unaffected since they come from the merged flow JSONL). R3 in the experimental notebook.
+
+**Open.** Stage 8 = `dpl="remote"` in `procedure/deployment.py::_resolve_ports` + cross-host spawning. Stage 9 = `src/methods/comparison.py` + `06-comparison.ipynb` (yoly chart over `verdict.json` from all four methods).
+
+## 2026-05-11 — Stage 6 closed: thin MAPE-K controller + per-adp mesh + 4 strategies + R1/R2 verdict
+
+**Decision.** Close stage 6 of the `src/experimental/` rebuild. The experimental method now drives the four case-study adaptation strategies (baseline, S1 retry, S2 prefer-reliable, aggregate) against their own physical meshes, with a thin MAPE-K controller monitoring R1 / R2 in a rolling window and a verdict landing in `data/results/experimental/<adp>/verdict.json`. End-to-end demo (`python -m tests.demo.experiment`) produces distinct verdicts per adp.
+
+**Architecture** (three subsystems spawned by `run_experiment`):
+
+- **Target system** (TAS_1 + atomic mesh): unchanged dispatch path; new endpoints `GET /samples?since=<offset>` (pull-style probe buffer) and `POST /config` (install picker on live workflow engine). `recent_samples` deque on `app.state` holds the last 1024 records.
+- **Controller** (independent uvicorn process): runs the controller FastAPI app. `SamplePoller` asyncio task pulls `/samples` every `poll_interval_ms` and feeds records into a rolling-window deque + unbounded history list. Exposes `GET /aggregates` (running R1 / R2 + breach flags) and `GET /history` (full trajectory for `window.parquet`).
+- **Client**: unchanged load generator.
+
+Orchestrator polls `/aggregates` every `orchestrator_poll_every_n` requests and applies a strategy-specific stop predicate (baseline = R1 AND R2; s1 = R1; s2 = R2; aggregate = R1 OR R2). Trial halts on first breach post-warmup or after N requests.
+
+**Strategies** (`src/experimental/prototype/controller/strategies.py`). Picker contract widened to `(svc_kind, operation, catalogue) -> list[ServiceCatalogueEntry]` because `_routs` is anchored per dispatching stage (so the same kind can have different weights at TAS_{3} vs TAS_{4}). Four classes:
+
+| Picker | adp | First pick | Retry behaviour | Honours `_routs`? |
+|---|---|---|---|---|
+| `FirstOfKindPicker` | baseline | weighted-random per `_routs[operation]` | none | yes |
+| `RetryOnFailurePicker` | s1 | weighted-random | drop failed svc_id, renormalise, weighted-random over remaining; up to `max_attempts` | yes |
+| `PreferReliablePicker` | s2 | argmin observed failure rate | none | no (explicit override) |
+| `RetryAndPreferReliablePicker` | aggregate | argmin observed failure rate | next-most-reliable; up to `max_attempts` | no (explicit override) |
+
+Reliability-aware pickers expose `observe(svc_id, success)`; the engine calls it after every attempt to update the rolling window. `extract_op_weights(routs, nodes, stage_routes, scenario=adp)` builds the per-operation weight table from the active profile's routing matrix.
+
+**Per-adp mesh** (the case study's S2 = service-instance swap). Each adp loads its own service set from `_nodes`: baseline + s1 share MAS_3 / AS_3 / DS_3; s2 + aggregate use MAS_4 / AS_4 / DS_1. The catalogue is the `weyns_iftikhar_2016` 15-service superset; `_build_mesh_specs` iterates `catalogue.entries ∩ mu_lt.keys()` so each adp only spawns its own 7 atomics. `build_tas_fastapi_app` filters the workflow engine's catalogue down to the spawned mesh so `by_kind` only returns reachable services.
+
+**Server-side ε injection** (`AtomicRoutes._maybe_inject_failure`). Each atomic carries `eps` (from `profile.specs[svc_id].epsilon`) + `failure_mix` (from `failure_modes.json`). At the top of every request, the route draws `random.random()` against `eps`; if it lands inside, a mechanism is picked from the mix and stamped onto the payload. Client-set `inject_failure` always wins (the route only fills `None`). Stack-trace noise from the `drop` mechanism (the `_aborted_body` generator's `RuntimeError("synthetic drop mid-stream")`) is silenced by a `logging.Filter` on the `uvicorn.error` logger installed at `failure.py` module load.
+
+**R1 threshold corrected to 0.01** (Weyns & Calinescu 2015 SEAMS Step 1: "TAS service invocations that fail to complete successfully is less than 1 %"). The previous `0.0003` came from Cámara 2023 (Fig. 1(b): "0.03 %"), but Cámara's per-service failure rates are also in percent (column header `Fail.rate (%)`), so the threshold was 100× too strict for our profile values which are Weyns-style fractions (e.g., MAS_1 = 0.12 = 12 %). The project anchors to Weyns 2015 for the failure-rate scale.
+
+**Verdict** = Denning & Buzen 1978 operational analysis over the flow JSONL: `A` (arrivals), `C` (completions), `F` (failures), `T_s` (observation window), `X_0` (throughput), `R_s` (mean response time). R1 = F/A, R2 = R_s. Plus pass flags against thresholds + stop reason. `window.parquet` carries the per-sample running-R1/R2 trajectory for stage 7+ plots.
+
+**End-to-end demo** (`python -m tests.demo.experiment`) at N=100:
+
+| adp | R1 | R2_ms | stop_reason |
+|---|---|---|---|
+| baseline | 0.10 | 53.0 | n_reached |
+| s1 retry | 0.04 | 245.4 | n_reached |
+| s2 prefer-reliable | 0.00 | 42.5 | n_reached |
+| aggregate (S1 + S2) | 0.00 | 136.5 | n_reached |
+
+S1 halves baseline R1 (Weyns 2015 Table IV confirms this ratio); S2 + aggregate reach 0 failures on this small N. R2 climbs because retries / smart picks add per-request hops; the strategy comparison stays methodologically clean because R2 is the same axis for everyone.
+
+**Test surface.** 386 tests pass across `tests/experimental/` + `tests/methods/` (was 348 before stage 6 started). 38 new tests in `tests/experimental/prototype/controller/` (strategies + verdict + app + poller) + 2 new endpoint tests in `tests/experimental/prototype/target/factory/test_tas.py` + 4 new filter tests in `tests/experimental/prototype/target/factory/test_failure.py`.
+
+**Refactor pattern locked.** `TasRoutes`, `ControllerRoutes`, `AtomicRoutes` all follow the same class-based-routes shape: module-scope class holds the per-app immutable settings, route methods are bound async methods. No nested defs inside factory functions; pickle-friendly across `multiprocessing.spawn`.
+
+**Next.** Stage 7: experimental notebook + R1/R2 trajectory plotters reading `window.parquet`. Drives `run_experiment` across the four adps from `05-experimental.ipynb`. Also: thread per-atomic `c / K` from `profile.specs` into the mesh (today they're `null` in `target.json::atomic_admission`) and echo the applied c/K into `verdict.json`, so the stage-9 yoly chart can verify analytic / dim / stoch / experimental all run over identical M/M/c/K parameters.
+
+**Permanently out of scope** (don't re-open in later stages):
+
+- MAPE-K **Analyse + Plan** phases. The case study only gives the four decisions (the adp labels); we execute them, we don't derive them. Controller stays at Monitor + Execute.
+- **Mid-trial picker swaps**. `POST /config` fires once at trial start. A live-reconfiguration demo would be a separate artefact, not part of the case-study replication.
+
+**Deferred** (may revisit): multi-trial repetition with statistical envelopes around R1 / R2.
+
+## 2026-05-10 — Target-granularity switch + apparatus-wide cleanup pass
+
+**Decision.** Add two new switches on top of stage 5 (`target.json` + CLI): `target_granularity ∈ {collapsed, expanded}` and `inject_internal_stage_mu ∈ {false, true}`. Default = `(collapsed, false)`, byte-identical to the previous stage-5 surface. Expanded mode promotes the conceptual stages `TAS_{2..6}` into real uvicorn workers so per-stage queue length / response time / CSV become directly observable, at the cost of 5 extra HTTP hops per request and a ~13-spawner mesh.
+
+**Mesh.** Collapsed = 8 spawners (1 composite TAS_1 + 7 third-parties). Expanded = 13 spawners (TAS_1 + 5 internal-stage atomics `TAS_{2..6}` + 7 third-parties). Stage mapping: `TAS_{2}` → `medical_analysis (analyseData)`; `TAS_{3}` → `alarm (triggerAlarm)`; `TAS_{4}` → `alarm (sendAlarm)`; `TAS_{5}` → `drug (changeDrug)`; `TAS_{6}` → `drug (changeDose)`.
+
+**Class hierarchy stayed Fig.3-faithful.** New subclass `TasInternalAtomic(AtomicService)` for `TAS_{2..6}`. `AtomicService` and `CompositeService` remain siblings under `AbstractService`; no reparenting; `_handle` contract unchanged. The composite never does work itself in either mode.
+
+**μ asymmetry.** Third-party atomics (MAS / AS / DS) always sleep on μ. TAS framework atomics (TAS_{2..6}) only sleep when `inject_internal_stage_mu=True`. Default OFF so the extra HTTP hops show up cleanly in latency comparisons before adding μ-fidelity overhead.
+
+**Workflow loader + engine gained the `svc_id` step-form.** Previously every step targeted a catalogue `svc_kind` (picker resolves to a concrete id). Steps may now alternatively carry `svc_id` for direct cache lookup (no picker). Exactly one of `svc_kind` / `svc_id` must be set; the loader rejects both / neither. Collapsed loads `workflow/tas.json` (svc_kind throughout); expanded loads a separate `workflow/tas_expanded.json` (svc_id throughout). Two architecturally distinct files on disk, no translation or in-memory synthesis.
+
+**Orchestrator wiring** ([src/methods/experimental.py](src/methods/experimental.py)). `_build_mesh_specs` became a small dispatcher that emits 8 or 13 `MeshSpec`s. Port layout: TAS at `tas_base_port`; in expanded mode the next 5 ports cover `TAS_{2..6}`; then the sorted atomic ids. `bring_up_mesh` is unchanged, already topology-agnostic.
+
+**Demo.** [tests/demo/granularity.py](tests/demo/granularity.py) runs all three modes (`collapsed`, `expanded mu off`, `expanded mu on`) back-to-back with `n_requests=5`, prints a per-run worker table (svc, OS PID, host:port, parsed from the per-pid CSV filenames + the first JSONL flow record for TAS_1), and a side-by-side comparison. CLI smoke verified all three modes produce 100 % success at low load.
+
+**Apparatus-wide cleanup pass.** 19-module sweep across `src/experimental/prototype/target/` + `src/experimental/procedure/deployment.py`:
+
+- Module + class docstrings stripped of stage references, em-dashes, and source/objective/deviation blocks (technobabble); kept the substance, dropped the framing.
+- Single-return rule applied across catalogue.py / workflow loader / workflow engine / failure.py wherever multi-return blocks lingered (`lookup`, `load_catalogue`, `_parse_catalogue`, `_build_entry`, `_build_step`, `apply_inject_failure`, `_dispatch`, `_step_to_dict`).
+- Renames: `_AdmissionGate` → `AdmissionGate`; `_AtomicRoutes` → `AtomicRoutes`; `_maybe_log_csv` → `_log_csv_row` (twice, in third_party.py and internal_stage.py); `_handle_with_status` → `_dispatch` (shorter).
+- Fixed pyright `Never` error in internal_stage.py by deleting the dead `if not isinstance(_body, dict): _body = ...` branch; the return type already guaranteed `dict[str, Any]`, so the branch was unreachable and the assignment narrowed `_body` to `Never`.
+- `AdmissionGate.acquire` rewritten to single-return; redundant `(body or {}).get(...)` repetition in two `_log_csv_row` methods collapsed to a single `_body = body or {}` then plain `.get(...)` per field.
+- `tas.py` helper docstrings (`_lifespan`, `_post_root`, `_write_flow_record`) gained complete Args / Yields / Returns sections.
+- `target/config.py` aligned with the catalogue pattern: split the single `DFLT_TGT_CFG_PATH` into `DFLT_TGT_CFG_DIR` + `DFLT_TGT_CFG_FILE`, joined inside `load_target_cfg`. Test imports updated.
+
+**Test-side cleanup.**
+
+- Pyright complaints defused: frozen-dataclass writes routed through `setattr(...)` inside `pytest.raises(FrozenInstanceError)`; `_iter.__anext__()` replaced with the `aiter()` + `anext()` builtins (Starlette's `AsyncContentStream` is typed loosely enough that the dunder is invisible to pyright).
+- Unused imports dropped from `test_engine.py` (`ServiceRegistry`, `ServiceCache`, `ServiceDescription`, `ServiceClient`) and `test_client.py` (`typing.Any`). Missing `source=""` arg added to one `ServiceCatalogue(...)` literal.
+- Test names shortened aggressively across 9 test modules: `test_atomic_app_round_trip` → `test_round_trip`; `test_inject_failure_5xx_short_circuits` → `test_inject_5xx`; `test_dispatch_status_zero_becomes_502` → `test_status_zero_to_502`; `test_first_of_kind_picker_no_match_raises` → `test_picker_no_match`; and ~30 more. The `*test_name()* ...` docstring carries the contract; the function name is just a handle.
+
+**Test surface.** 348 tests pass (`tests/experimental/` + `tests/methods/`). No regressions.
+
+**Next.** Stage 6: controller + adaptation strategy plug-ins + R1/R2/R3 verdict computation. The granularity switch sets us up to attach probes to `TAS_{2..6}` directly when running in expanded mode for stage-9 yoly comparisons.
+
 ## 2026-05-10 — Calibration stage 4 closed (apparatus characterisation end-to-end)
 
 **Decision.** Close stage 4 of the `src/experimental/` rebuild. The calibration ping/echo apparatus, the gate / report layer, the per-probe + summary plotters, the notebook-driven workflow, and the multi-process load generator are all wired end-to-end. The apparatus produces a per-deployment envelope JSON and a 2x3 figure (single) / 2x4 figure (overlay) characterising clock + scheduler + kernel + handler + worker scaling floors, plus the operating envelope (`c_max`, `r_max`, `w_max`). Test surface holds at 416+ green across the repo; calibration namespace alone is at 94 tests.
@@ -58,6 +261,9 @@ Twelve thin cells. Imports + `DPLS: list[Dpl]` typed annotations + `Dpl`-typed `
 - Gate / summary / report contract: data-only headlines (`gate.summary[*].headline`), no per-row interpretive prose, no FAIL banner. Interpretation lives in the dissertation, not the tool.
 - Bar-chart panels (timer / jitter / loopback) use horizontal bars with `±s²` error caps; loopback gets a translucent precision band `[φ-s², φ+s²]`.
 - Workers scaling panel: y-axis = "worker rate (req/s)", twin axis = "efficiency (%)", green-shaded verifiable region up to the stable knee.
+- Greek-symbol convention pinned: median = `$\Phi$` (uppercase), sample mean = `$\overline{\chi}$` (chi with overline, NOT `\hat{\chi}` and NOT `\bar{\chi}`). Applies across timer / jitter / loopback / handler-scaling labels.
+- Calibration panel axis labels finalised. Handler Scaling x = `$c$: concurrent user requests`, y = `Latency change $[\mu s]$` (loopback floor subtracted from displayed values). Workers Scaling x = `$w$: concurrent workers`, y = `worker rate (req/s)`. Rate Sweep x = `target rate (req/s)`, y = `$p_{95}$ latency $[\mu s]$`.
+- Overlay table polish: legend / table column body narrowed by 45 % (`_OVERLAY_COL_START`, `_REPORT_LEGEND_BODY_X` from 0.20 -> 0.12); the divider above `Latency:` now renders as an `ax.plot()` segment in axes coordinates (matched to table column span via `div_left` / `div_right`) instead of a glyph row.
 
 **Stop-gate verification.**
 
