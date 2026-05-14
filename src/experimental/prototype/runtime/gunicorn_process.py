@@ -15,12 +15,15 @@ from __future__ import annotations
 import atexit
 import multiprocessing as mp
 import multiprocessing.process as mp_process
+import os
 import sys
 import time
 import weakref
 from typing import Any
 
 import httpx
+
+from src.experimental.prototype.runtime.watchdog import watch_parent
 
 try:
     from gunicorn.app.base import BaseApplication  # type: ignore[import-not-found]
@@ -100,6 +103,8 @@ def _worker_main(app_factory: AppFactory,
         port (int): TCP port.
         workers (int): pre-fork worker count.
     """
+    _parent_pid = os.getppid()
+    watch_parent(_parent_pid)
     _app = app_factory()
     _options = {
         "bind": f"{host}:{port}",

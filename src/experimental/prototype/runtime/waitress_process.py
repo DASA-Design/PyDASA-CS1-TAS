@@ -10,12 +10,15 @@ from __future__ import annotations
 import atexit
 import multiprocessing as mp
 import multiprocessing.process as mp_process
+import os
 import time
 import weakref
 from typing import Any
 
 import httpx
 from waitress import serve
+
+from src.experimental.prototype.runtime.watchdog import watch_parent
 
 # Runtime fallbacks for data/config/method/experimental.json::server.waitress.*.
 _DFLT_BACKLOG = 16384
@@ -47,6 +50,8 @@ def _worker_main(app_factory: AppFactory,
         backlog (int): kernel socket-queue depth.
         threads (int): worker thread count for the WSGI thread pool.
     """
+    _parent_pid = os.getppid()
+    watch_parent(_parent_pid)
     _app = app_factory()
     serve(_app,
           host=str(host),

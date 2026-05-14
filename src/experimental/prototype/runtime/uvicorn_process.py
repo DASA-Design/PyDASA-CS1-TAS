@@ -12,12 +12,15 @@ from __future__ import annotations
 import atexit
 import multiprocessing as mp
 import multiprocessing.process as mp_process
+import os
 import time
 import weakref
 from typing import Any
 
 import httpx
 import uvicorn
+
+from src.experimental.prototype.runtime.watchdog import watch_parent
 
 # Runtime fallbacks for data/config/method/experimental.json::server.uvicorn.*.
 _DFLT_BACKLOG = 16384
@@ -46,6 +49,7 @@ def _worker_main(app_factory: AppFactory,
         port (int): TCP port.
         backlog (int): kernel socket-queue depth.
     """
+    _parent_pid = os.getppid()
     _app = app_factory()
     _config = uvicorn.Config(_app,
                              host=str(host),
@@ -54,6 +58,8 @@ def _worker_main(app_factory: AppFactory,
                              access_log=False,
                              backlog=int(backlog))
     _server = uvicorn.Server(_config)
+    watch_parent(_parent_pid,
+                 on_orphan=lambda: setattr(_server, "should_exit", True))
     _server.run()
 
 
