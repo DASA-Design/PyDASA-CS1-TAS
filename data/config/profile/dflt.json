@@ -3225,20 +3225,22 @@
                     "_dims": "S*T^-1",
                     "_units": "n.a.",
                     "_std_units": "n.a.",
-                    "_setpoint": 0.1,
+                    "_setpoint": 0.18,
                     "_min": 0.1,
                     "_max": 0.1,
-                    "_mean": 0.1,
-                    "_std_setpoint": 0.1,
+                    "_mean": 0.18,
+                    "_std_setpoint": 0.18,
                     "_std_min": 0.1,
                     "_std_max": 0.1,
-                    "_std_mean": 0.1,
+                    "_std_mean": 0.18,
                     "_dist_type": "adjusted_uniform",
                     "_depends": [],
                     "_dist_params": {
                         "constant": 0.1
                     },
-                    "_data": []
+                    "_data": [
+                        0.18
+                    ]
                 },
                 "\\chi_{AS_{3}}": {
                     "_sym": "\\chi_{AS_{3}}",
@@ -8595,20 +8597,22 @@
                     "_dims": "S*T^-1",
                     "_units": "n.a.",
                     "_std_units": "n.a.",
-                    "_setpoint": 0.1,
+                    "_setpoint": 0.18,
                     "_min": 0.1,
                     "_max": 0.1,
-                    "_mean": 0.1,
-                    "_std_setpoint": 0.1,
+                    "_mean": 0.18,
+                    "_std_setpoint": 0.18,
                     "_std_min": 0.1,
                     "_std_max": 0.1,
-                    "_std_mean": 0.1,
+                    "_std_mean": 0.18,
                     "_dist_type": "adjusted_uniform",
                     "_depends": [],
                     "_dist_params": {
                         "constant": 0.1
                     },
-                    "_data": []
+                    "_data": [
+                        0.18
+                    ]
                 },
                 "\\chi_{AS_{3}}": {
                     "_sym": "\\chi_{AS_{3}}",
@@ -10691,7 +10695,7 @@
                     0.0,
                     0.0,
                     0.33,
-                    0.33,
+                    0.34,
                     0.33,
                     0.0,
                     0.0,
@@ -10709,7 +10713,7 @@
                     0.0,
                     0.0,
                     0.33,
-                    0.33,
+                    0.34,
                     0.33,
                     0.0,
                     0.0,
