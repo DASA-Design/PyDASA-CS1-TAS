@@ -127,7 +127,7 @@ class TestExperimental:
         assert isinstance(_entry["c"], int)
         assert isinstance(_entry["k"], int)
         assert _entry["c"] == 1
-        assert _entry["k"] == 10
+        assert _entry["k"] == 16
 
     def test_resolve_admission_per_svc_wins(self) -> None:
         """*test_resolve_admission_per_svc_wins()* per-svc lookup overrides the global default; missing ids fall through."""
