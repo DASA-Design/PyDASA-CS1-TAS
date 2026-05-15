@@ -1,36 +1,32 @@
-"""JSONL writer for per-request flow records (batched, with periodic flush).
+"""JSONL writer for per-request flow records.
 
 One line per end-to-end request, newline-separated. Streamable, grep-able,
-schema-flexible.
+schema-flexible. The writer is append-only and flushes on every record.
 
-Records buffer in RAM and dump to disk every `_BATCH_SIZE` records (and on
-`close()`). The periodic flush bounds data loss on abrupt worker
-termination - the apparatus calls `Process.terminate()` on workers without
-running Python's atexit hooks, so a writer that only flushes on `close()`
-loses every record from the last batch when workers are killed at trial end.
-
-`_BATCH_SIZE = 100` balances throughput (each fsync amortised over 100
-records) against durability (at most 100 records lost on abrupt teardown,
-typically a fraction of one second of trial output).
+Per-record flush is deliberate, not a missed optimisation. On Windows the
+apparatus tears workers down with `TerminateProcess` (a hard kill that runs
+no atexit hook, no signal handler, no `finally` block), so any in-memory
+batch buffer is lost when the worker dies at trial end. The per-pid atomic
+CSVs and the composite flow JSONL must therefore reach disk synchronously.
+Profiling (2026-05-15) confirmed the per-record write is not a throughput
+bottleneck - the binding cost is the composite-to-atomic HTTP roundtrip.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
-_BATCH_SIZE = 100
+import orjson
 
 
 class JsonlWriter:
-    """Append-only JSONL writer; batches writes, flushes every `_BATCH_SIZE` records.
+    """Append-only JSONL writer for per-request flow records.
 
     Attributes:
         _path (Path): destination file.
-        _fh (TextIO): open append-mode handle.
-        _batch (list[str]): in-memory buffer of serialised JSON lines awaiting flush.
+        _fh (TextIO): open append-mode handle, flushed on every write and closed by `close()` or context-manager exit.
     """
 
     def __init__(self, path: Path) -> None:
@@ -42,33 +38,24 @@ class JsonlWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._fh = path.open("a", encoding="utf-8")
-        self._batch: list[str] = []
 
     def write(self, record: dict[str, Any]) -> None:
-        """Serialise one record and buffer it; flush the batch every `_BATCH_SIZE` calls.
+        """Serialise one record with orjson and append it as a line; flush immediately.
 
         Args:
             record (dict[str, Any]): any JSON-serialisable dict.
         """
-        self._batch.append(json.dumps(record, separators=(",", ":")))
-        if len(self._batch) >= _BATCH_SIZE:
-            self._flush_batch()
-
-    def _flush_batch(self) -> None:
-        """Append the in-memory batch to the open file in one I/O call; clear the buffer."""
-        if not self._batch:
-            return
-        self._fh.write("\n".join(self._batch))
+        # orjson.dumps returns bytes; decode to str for the text-mode handle.
+        # ~4-8x faster than stdlib json.dumps for small dicts.
+        self._fh.write(orjson.dumps(record).decode("utf-8"))
         self._fh.write("\n")
         self._fh.flush()
-        self._batch.clear()
 
     def close(self) -> None:
-        """Drain any buffered records, then flush and close the file handle. Idempotent."""
-        if self._fh.closed:
-            return
-        self._flush_batch()
-        self._fh.close()
+        """Flush and close the file handle. Idempotent: safe to call twice."""
+        if not self._fh.closed:
+            self._fh.flush()
+            self._fh.close()
 
     def __enter__(self) -> Self:
         """Enter the context manager.
@@ -82,7 +69,7 @@ class JsonlWriter:
                  _exc_type: type[BaseException] | None,
                  _exc: BaseException | None,
                  _tb: TracebackType | None,) -> None:
-        """Exit the context manager: drain + flush + close, propagating any exception.
+        """Exit the context manager: flush + close, propagating any exception.
 
         Args:
             _exc_type (type[BaseException] | None): exception type if raised in the block, else None.

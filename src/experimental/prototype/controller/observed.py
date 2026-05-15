@@ -172,7 +172,18 @@ def _load_svc_rows(csv_dir: Path, svc_id: str) -> pd.DataFrame:
         return pd.DataFrame()
     _parts: list[pd.DataFrame] = []
     for _path in _files:
-        _parts.append(pd.read_csv(_path))
+        # A worker SIGTERMed before its CsvWriter wrote anything can leave a
+        # header-only or zero-byte file; pandas raises EmptyDataError on the
+        # latter. Skip files with no data rows so one dead worker does not
+        # abort the whole aggregation.
+        try:
+            _df = pd.read_csv(_path)
+        except pd.errors.EmptyDataError:
+            continue
+        if not _df.empty:
+            _parts.append(_df)
+    if not _parts:
+        return pd.DataFrame()
     return pd.concat(_parts, ignore_index=True)
 
 

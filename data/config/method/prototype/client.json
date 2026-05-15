@@ -17,7 +17,7 @@
         "timeout_s": 5.0
     },
     "guard": {
-        "max_requests": 1000,
+        "max_requests": 1024,
         "infra_failure_threshold": 5,
         "infra_window_s": 5.0,
         "quality_window_s": 60.0,

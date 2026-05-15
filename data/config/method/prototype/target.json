@@ -1,5 +1,5 @@
 {
-    "_note": "Target-system bindings for src/experimental/prototype/target/factory/. Selects catalogue + workflow, sets ports / admission caps / timeouts; `trial` carries the load-generation knobs. `target_granularity` picks between the collapsed topology (1 composite + 7 third-party atomics) and the expanded topology (1 composite + 5 internal-stage atomics + 7 third-party atomics). `inject_internal_stage_mu` only affects the TAS framework atomics (TAS_{2..6}); third-party atomics always sleep on mu.",
+    "_note": "Target-system topology + admission for src/experimental/prototype/target/factory/. Selects catalogue + workflow, sets ports / admission caps / timeouts. Trial-level knobs (n_requests, request_rate_per_s, consumer_pool_size, kind_probability) live in `data/config/method/experimental.json::trial`; controller + strategy knobs live in `data/config/method/prototype/controller.json`. `target_granularity` picks collapsed (1 composite + 7 atomics) vs expanded (adds 5 internal-stage atomics TAS_{2..6}); `inject_internal_stage_mu` only affects those framework atomics, third-party atomics always sleep on mu.",
     "catalogue_version": "weyns_iftikhar_2016",
     "workflows": {
         "_note": "Two on-disk workflow files, one per architectural view. The orchestrator picks `collapsed` or `expanded` based on `target_granularity` and threads the chosen stem into the TAS_1 factory.",
@@ -39,34 +39,5 @@
     "atomic_admission": {
         "k": null,
         "c": null
-    },
-    "trial": {
-        "_note_rate": "request_rate_per_s = 248 matches `lambda_z` = TAS_{1}.lambda_z in `data/config/profile/dflt.json` (the case-study design point). The latest calibration on this host measured a per-worker saturation knee at ~328 req/s, so the envelopes under `data/results/calibration/<dpl>/` were manually bumped to `r_max_req_s = 350` to keep the bounds gate aligned with the case-study design rather than the host's hardware ceiling. The undershoot (real throughput < 248) lands in `verdict.operational.X_0_req_per_s` for stage 9 to see.",
-        "_note_open_loop": "The trial driver is open-loop (producer/consumer over an asyncio.Queue): a dispatcher pushes ticks at request_rate_per_s regardless of how fast the server replies; consumer_pool_size consumers drain the queue, each running its own User + httpx pool. The in-flight ceiling equals consumer_pool_size (one in-flight per consumer at a time), so keep it below httpx's max_connections=100 default to avoid pool throttling. When the server saturates, the queue grows; on hitting max_queue_depth the dispatcher blocks at queue.put() so saturation surfaces as an offered-rate undershoot in verdict.operational.X_0_req_per_s. drain_timeout_s caps the wait for in-flight consumers at trial end.",
-        "n_requests": 1000,
-        "request_rate_per_s": 248,
-        "consumer_pool_size": 64,
-        "max_queue_depth": 1000,
-        "drain_timeout_s": 60.0,
-        "kind_probability": {
-            "alarm": 0.25,
-            "medical_analysis": 0.75
-        },
-        "atomic_response_time_overrides": null
-    },
-    "strategies": {
-        "_note": "Honoured by controller.strategies.make_picker; the controller threads these to TAS_1 via POST /config at trial start.",
-        "max_attempts": 3,
-        "window_size": 100
-    },
-    "controller": {
-        "_note": "Thin MAPE-K agent for the target system: M = poll TAS_1 /samples; E = one-shot POST /config to TAS_1 at trial start. A and P are not modelled; the decision is the run's `adp` value.",
-        "port": 9001,
-        "ready_timeout_s": 20.0,
-        "poll_interval_ms": 100,
-        "warmup_n": 100,
-        "r1_r2_stop_enabled": true,
-        "orchestrator_poll_every_n": 10,
-        "samples_buffer_size": 1024
     }
 }

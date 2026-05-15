@@ -334,9 +334,26 @@ async def _tas_lifespan_factory(app: FastAPI,
         app.state.composite = CompositeService(service_name="TAS",
                                                workflow=engine,
                                                client=_client)
+        await _prewarm_atomic_connections(_client, cache)
         yield
     if flows_writer is not None:
         flows_writer.close()
+
+
+async def _prewarm_atomic_connections(client: ServiceClient,
+                                       cache: ServiceCache) -> None:
+    """Open one keep-alive connection per known atomic URL at composite startup.
+
+    Each first httpx request to a host pays a one-off TCP + HTTP-handshake cost (~3-5 ms on Windows loopback). Issuing a single GET /healthz to every atomic URL during the composite's startup primes httpx's keep-alive pool so the trial's first batch of requests doesn't see the cold-start tax. Failures are swallowed -- if an atomic isn't up yet (rare; deployment.bring_up_mesh waits on /healthz), the trial's normal POST path will reopen the connection.
+    """
+    if client._http is None:  # type: ignore[reportPrivateUsage]
+        return
+    for desc in cache.svc_descriptions.values():
+        for _url in desc.iter_urls():
+            try:
+                await client._http.get(f"{_url}/healthz", timeout=2.0)  # type: ignore[reportPrivateUsage]
+            except Exception:
+                continue
 
 
 def build_tas_fastapi_app(*,

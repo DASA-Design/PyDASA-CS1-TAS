@@ -54,6 +54,14 @@ from src.experimental.procedure.experiment import (
     run_experiment,
 )
 from src.experimental.procedure.experiment import User  # type: ignore[attr-defined]  # noqa: F401  (test monkeypatch target)
+from src.experimental.procedure.bench import (
+    BENCH_DATA_DIR,
+    BENCH_IMG_DIR,
+    profile_stages,
+    run_bench,
+    save_bench_summary,
+    summarize_bench,
+)
 from src.experimental.procedure.tuning import (
     _BringUpFactory,
     _run_workers_scaling,
@@ -62,15 +70,46 @@ from src.experimental.procedure.tuning import (
 )
 
 __all__ = [
+    "BENCH_DATA_DIR",
+    "BENCH_IMG_DIR",
     "BoundsReport",
     "Dpl",
     "Framework",
     "WsgiServer",
     "find_latest_envelope",
     "main",
+    "profile_stages",
     "run",
+    "run_bench",
     "run_calibration",
     "run_experiment",
+    "save_bench_summary",
+    "summarize_bench",
+    # Private re-exports the test harness patches; listed here so linters do
+    # not strip the (otherwise unreferenced) imports above.
+    "_BringUpFactory",
+    "_INTERNAL_STAGE_IDS",
+    "_STOP_PREDICATES",
+    "_admission_lt_from_profile",
+    "_build_mesh_admission",
+    "_build_mesh_specs",
+    "_check_breach",
+    "_consume_payloads",
+    "_count_outcomes",
+    "_dispatch_at_rate",
+    "_drive_trial",
+    "_eps_lt_from_profile",
+    "_fetch_controller_history",
+    "_maybe_check_bounds",
+    "_mu_lt_from_profile",
+    "_op_weights_from_profile",
+    "_resolve_admission",
+    "_resolve_granularity_for_paths",
+    "_run_workers_scaling",
+    "_should_stop_from_aggregates",
+    "_thresholds_from_reference",
+    "_variant_suffix_for",
+    "_workers_lt_from_profile",
 ]
 
 

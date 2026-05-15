@@ -1605,6 +1605,8 @@ def _paint_groups_3d_yoly(ax: Any,
 def _bfs_layout_shared(routs: List[np.ndarray]) -> dict:
     """*_bfs_layout_shared()* compute a single BFS layout over the union of all routing matrices so every subplot in a grid uses the same node positions.
 
+    `networkx.bfs_layout` requires every node be reachable from `start`. A node with no incoming routing edge (e.g. an atomic that saw zero observed traffic in the empirical-collapsed routing) is unreachable and would raise `NetworkXError`. To keep the topology plot robust to such partial-data cases, any node unreachable from node 0 gets a temporary layout-only edge `(0, node)` before the layout call; that edge positions the orphan node sensibly without appearing in the rendered topology, which draws edges from the routing matrices, not from this union graph.
+
     Args:
         routs (List[np.ndarray]): list of routing matrices (same N x N shape).
 
@@ -1620,6 +1622,12 @@ def _bfs_layout_shared(routs: List[np.ndarray]) -> dict:
             for _j in range(_n):
                 if _r[_i, _j] > 0:
                     _union.add_edge(_i, _j)
+    # Add layout-only edges from node 0 to any node not reachable from it, so
+    # bfs_layout does not raise on a partially-disconnected routing graph.
+    _reachable = set(nx.descendants(_union, 0)) | {0}
+    for _node in range(_n):
+        if _node not in _reachable:
+            _union.add_edge(0, _node)
     return nx.bfs_layout(_union, start=0)
 
 

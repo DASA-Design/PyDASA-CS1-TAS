@@ -1,3 +1,16 @@
 {
-    "_note": "Controller behaviour: probe sampling, effector params, ServiceProfile dispatch overrides, InputProfile shape. Empty placeholder; populated at stage 7 when prototype/controller/ lands."
+    "_note": "Controller behaviour: probe sampling cadence, R1/R2 early-stop gate, picker / strategy knobs. Loaded by src/methods/experimental.py at trial start, threaded into the MAPE-K controller bootstrap. The `controller` knobs (port, ready_timeout_s, poll_interval_ms, warmup_n, r1_r2_stop_enabled, orchestrator_poll_every_n, samples_buffer_size) configure the controller process itself; `strategies` (max_attempts, window_size) configure the picker chosen per adaptation.",
+    "port": 9001,
+    "ready_timeout_s": 20.0,
+    "poll_interval_ms": 500,
+    "warmup_n": 100,
+    "r1_r2_stop_enabled": true,
+    "orchestrator_poll_every_n": 20,
+    "samples_buffer_size": 1024,
+    "_note_origin": "Thin MAPE-K agent for the target system: M = poll TAS_1 /samples; E = one-shot POST /config to TAS_1 at trial start. A and P are not modelled; the decision is the run's `adp` value.",
+    "strategies": {
+        "_note": "Honoured by controller.strategies.make_picker; the controller threads these to TAS_1 via POST /config at trial start.",
+        "max_attempts": 3,
+        "window_size": 100
+    }
 }

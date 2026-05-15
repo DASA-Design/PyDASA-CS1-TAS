@@ -7,9 +7,15 @@ Module split:
 - `charter.py`: yoly coefficient charts (theta, sigma, eta, phi).
 - `diagrams.py`: queueing topology + per-node heatmaps + architecture bars.
 - `characterization.py`: calibration envelope diagnostics.
+- `bench.py`: multi-trial benchmark distribution + R1/R2 verdict matrix plotters.
 """
 
 # shared design-contract primitives + project-wide constants
+from src.view.bench import (
+    plot_rs_by_stack,
+    plot_verdict_matrix,
+    plot_x0_distribution,
+)
 from src.view.common import (
     AxisSpec,
     BodySpec,
@@ -81,8 +87,11 @@ __all__ = [
     "plot_node_heatmap",
     "plot_qn_topology",
     "plot_rate_sweep",
+    "plot_rs_by_stack",
     "plot_timer",
+    "plot_verdict_matrix",
     "plot_workers_scaling",
+    "plot_x0_distribution",
     "plot_yoly_arts_behaviour",
     "plot_yoly_arts_charts",
     "plot_yoly_arts_hist",
