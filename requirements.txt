@@ -97,6 +97,7 @@ notebook_shim==0.2.4
 numpy==2.3.3
 opt_einsum==3.4.0
 optree==0.17.0
+orjson==3.11.9
 packaging==25.0
 pandas==2.3.3
 pandocfilters==1.5.1
