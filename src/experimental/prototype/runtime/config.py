@@ -1,6 +1,6 @@
-"""Loader for `data/config/method/experimental.json::server.*`.
+"""Loader for `data/config/method/experimental.json`.
 
-Reads per-spawner tuning blocks from JSON and hands them to the three process spawners. The JSON is the source of truth; each spawner also keeps `_DFLT_*` constants as fallbacks for callers that skip the loader.
+Reads the orchestrator-level run knobs: seed, framework, server tuning per spawner, dpl, run_label, and the `trial` block (n_requests, request_rate_per_s, consumer_pool_size, kind_probability, drain_timeout_s, atomic_response_time_overrides). The JSON is the source of truth; each spawner also keeps `_DFLT_*` constants as fallbacks for callers that skip the loader.
 """
 
 from __future__ import annotations

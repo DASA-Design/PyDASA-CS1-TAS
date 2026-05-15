@@ -19,10 +19,14 @@ from starlette.responses import Response
 
 from src.experimental.common.payload.request import FailureMechanism
 
-# Temporary diagnostic knob: artificial server-side delay before returning the 504 for
-# `timeout` failures. Set to 0.0 for the production path (instant return); set to e.g.
-# 0.01 to test whether a small artificial server hold changes X_0 / R_s materially.
-TIMEOUT_RETURN_DELAY_S = 0.01
+# Small server-side delay before returning a failure response. Acts as a natural
+# failure-path rate limiter: without it, the consumer sees an instant failure and
+# immediately fires its next request, generating a retry-storm that collapses
+# throughput (verified empirically by the 0.0 -> 0.01 A/B that lifted X_0 from
+# 32 to 99 req/s). 0.01 s is far below the client timeout, so it doesn't
+# affect the failure classification at the client; it just spreads bursts.
+FAILURE_RETURN_DELAY_S = 0.01
+TIMEOUT_RETURN_DELAY_S = FAILURE_RETURN_DELAY_S  # backwards-compat alias for `timeout` path
 _DROP_MARKER = "synthetic drop mid-stream"
 
 
@@ -87,16 +91,24 @@ def _install_synthetic_drop_filter() -> None:
 _install_synthetic_drop_filter()
 
 
-async def timeout_request() -> JSONResponse:
-    """Optionally sleep `TIMEOUT_RETURN_DELAY_S`, then return an HTTP 504 (Gateway Timeout) response.
+async def _failure_pacing_delay() -> None:
+    """Sleep `FAILURE_RETURN_DELAY_S` to prevent client retry-storm collapse on failure paths.
 
-    The default delay is 0.0 (instant return): the client receives a 504 in one roundtrip and maps it to `Outcome="timeout"` via `sender._dispatch`. Setting the module-level `TIMEOUT_RETURN_DELAY_S` knob to a positive value (e.g. 0.01 s) is a diagnostic seam for testing whether a small server-side delay materially changes X_0 / R_s. Older versions of this function slept `timeout_grace_s` (30 s default) to force `httpx.TimeoutException` on the client; that approach taxed every timeout-failure request with the client's `request_timeout_s` of consumer-block wait, capping apparatus throughput below the queueing model's prediction.
+    Shared by the three failure mechanisms. An instant failure response (no delay) lets the consumer fire its next request immediately, generating a tight retry burst that drives the apparatus into a positive-feedback collapse. A 10 ms hold breaks the feedback loop without changing the client-side outcome classification.
+    """
+    if FAILURE_RETURN_DELAY_S > 0:
+        await asyncio.sleep(FAILURE_RETURN_DELAY_S)
+
+
+async def timeout_request() -> JSONResponse:
+    """Sleep `FAILURE_RETURN_DELAY_S`, then return HTTP 504 (Gateway Timeout).
+
+    The client maps status 504 to `Outcome="timeout"` via `sender._dispatch`. Older versions slept `timeout_grace_s` (30 s default) to force `httpx.TimeoutException` on the client; that approach taxed every timeout-failure request with the client's `request_timeout_s` of consumer-block wait, capping apparatus throughput well below the queueing model's prediction.
 
     Returns:
         JSONResponse: status 504 with a planted error body. The body is informational; the client classifies by status code, not body.
     """
-    if TIMEOUT_RETURN_DELAY_S > 0:
-        await asyncio.sleep(TIMEOUT_RETURN_DELAY_S)
+    await _failure_pacing_delay()
     return JSONResponse(content={"error": "synthetic_timeout"}, status_code=504)
 
 
@@ -114,21 +126,25 @@ async def _aborted_body() -> AsyncIterator[bytes]:
     raise RuntimeError(_msg)
 
 
-def drop_request() -> Response:
-    """Return a streaming response that aborts mid-body so the client sees a transport-level drop.
+async def drop_request() -> Response:
+    """Sleep `FAILURE_RETURN_DELAY_S`, then return a streaming response that aborts mid-body.
+
+    The client sees a transport-level drop (`httpx.RemoteProtocolError`) and records `Outcome="drop"`. The small delay mirrors the timeout and 5xx paths so failure pacing is uniform across mechanisms (retry-storm collapse otherwise applies to drop too).
 
     Returns:
-        Response: streaming response with content-type `application/json`. The first chunk lands; the second chunk raises and uvicorn closes the TCP connection without finishing the body. The client maps the resulting `RemoteProtocolError` to `Outcome="drop"`.
+        Response: streaming response with content-type `application/json`. The first chunk lands; the second chunk raises and uvicorn closes the TCP connection without finishing the body.
     """
+    await _failure_pacing_delay()
     return StreamingResponse(_aborted_body(), media_type="application/json")
 
 
-def fivexx_request() -> JSONResponse:
-    """Return an HTTP 502 response.
+async def fivexx_request() -> JSONResponse:
+    """Sleep `FAILURE_RETURN_DELAY_S`, then return HTTP 502.
 
     Returns:
-        JSONResponse: status 502 with a planted error body.
+        JSONResponse: status 502 with a planted error body. The client records `Outcome="5xx"`.
     """
+    await _failure_pacing_delay()
     return JSONResponse(content={"error": "synthetic_5xx"}, status_code=502)
 
 
@@ -153,9 +169,9 @@ async def apply_inject_failure(payload: dict[str, Any]) -> Response | None:
         if _flag == "timeout":
             _ans = await timeout_request()
         elif _flag == "drop":
-            _ans = drop_request()
+            _ans = await drop_request()
         elif _flag == "5xx":
-            _ans = fivexx_request()
+            _ans = await fivexx_request()
         else:
             _msg = (f"unknown inject_failure flag {_flag_raw!r}; "
                     "expected None, 'timeout', 'drop', or '5xx'")

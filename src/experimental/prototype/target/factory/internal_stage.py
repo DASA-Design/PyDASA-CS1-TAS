@@ -388,7 +388,7 @@ class InternalStageFlaskRoutes(InternalStageRoutesBase):
 def _sync_apply_inject_failure(payload: dict[str, Any]) -> FlaskResponse | None:
     """Sync (WSGI) mirror of `failure.apply_inject_failure` for the internal-stage path.
 
-    All three mechanisms return immediately: 504 for `timeout`, drop-streaming response for `drop`, 502 for `5xx`.
+    All three mechanisms return after a small `FAILURE_RETURN_DELAY_S` hold (the same retry-storm pacing knob the async path uses): 504 for `timeout`, drop-streaming response for `drop`, 502 for `5xx`.
 
     Args:
         payload (dict[str, Any]): inbound request body; `inject_failure` decides the branch.
@@ -399,9 +399,12 @@ def _sync_apply_inject_failure(payload: dict[str, Any]) -> FlaskResponse | None:
     Raises:
         ValueError: when the flag is set but not in `{"timeout", "drop", "5xx"}`.
     """
+    from src.experimental.prototype.target.factory.failure import FAILURE_RETURN_DELAY_S
     _flag_raw = payload.get("inject_failure")
     if _flag_raw is None:
         return None
+    if FAILURE_RETURN_DELAY_S > 0:
+        time.sleep(FAILURE_RETURN_DELAY_S)
     if _flag_raw == "timeout":
         _resp = jsonify({"error": "synthetic_timeout"})
         _resp.status_code = 504

@@ -16,6 +16,10 @@ from src.experimental.prototype.controller.app import (
     build_controller_app,
     ingest_samples,
 )
+from src.experimental.prototype.controller.config import (
+    DFLT_CONTROLLER_CFG_PATH,
+    load_controller_cfg,
+)
 from src.experimental.prototype.controller.observed import (
     observed_nodes_from_run,
 )
@@ -39,6 +43,7 @@ from src.experimental.prototype.controller.verdict import (
 )
 
 __all__ = [
+    "DFLT_CONTROLLER_CFG_PATH",
     "FirstOfKindPicker",
     "PreferReliablePicker",
     "RetryAndPreferReliablePicker",
@@ -50,6 +55,7 @@ __all__ = [
     "compute_verdict",
     "extract_op_weights",
     "ingest_samples",
+    "load_controller_cfg",
     "make_picker",
     "observed_nodes_from_run",
     "picker_from_wire",

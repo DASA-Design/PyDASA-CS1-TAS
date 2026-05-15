@@ -21,7 +21,7 @@ class TestTargetCfg:
     """`load_target_cfg` shape + error handling."""
 
     def test_load_default_path(self) -> None:
-        """*test_load_default_path()* the default-path load returns a dict with `catalogue_version`, `workflows`, `target_granularity`, `inject_internal_stage_mu`, `stage_routes`, `tas_base_port`, `trial`, and `atomic_admission`."""
+        """*test_load_default_path()* the default-path load returns a dict with `catalogue_version`, `workflows`, `target_granularity`, `inject_internal_stage_mu`, `stage_routes`, `tas_base_port`, and `atomic_admission`. Trial-level knobs live in `experimental.json::trial` and controller knobs in `controller.json`."""
         _cfg = load_target_cfg()
         _required = (
             "catalogue_version",
@@ -30,7 +30,6 @@ class TestTargetCfg:
             "inject_internal_stage_mu",
             "stage_routes",
             "tas_base_port",
-            "trial",
             "atomic_admission",
         )
         for _key in _required:

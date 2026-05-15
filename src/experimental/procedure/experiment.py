@@ -33,10 +33,12 @@ from src.experimental.prototype.controller import (
     bring_up_controller,
     compute_verdict,
     extract_op_weights,
+    load_controller_cfg,
     write_verdict_json,
     write_window_parquet,
 )
 from src.experimental.prototype.runtime.async_loop import run_async_safe
+from src.experimental.prototype.runtime.config import load_experimental_cfg
 from src.experimental.prototype.runtime.os_timer import windows_timer_resolution
 from src.experimental.prototype.target.config import load_target_cfg
 from src.experimental.prototype.target.factory.internal_stage import (
@@ -795,6 +797,8 @@ def run_experiment(*,
         _cfg = load_target_cfg()
     else:
         _cfg = target_cfg
+    _exp_cfg = load_experimental_cfg()
+    _ctrl_cfg_full = load_controller_cfg()
     if run_id is None:
         _run_id = make_run_id(prefix=adp)
     else:
@@ -810,7 +814,7 @@ def run_experiment(*,
 
     _bounds_report = _maybe_check_bounds(dpl=dpl,
                                          envelope=envelope,
-                                         trial_cfg=_cfg["trial"],
+                                         trial_cfg=_exp_cfg["trial"],
                                          atomic_admission=_cfg["atomic_admission"],
                                          skip=skip_bounds_check)
 
@@ -865,10 +869,10 @@ def run_experiment(*,
                                             include_composite=True,
                                             workers_lt=_workers_lt)
 
-    _trial = _cfg["trial"]
+    _trial = _exp_cfg["trial"]
     _kind_p = _trial["kind_probability"]
-    _ctrl_cfg = _cfg.get("controller", {})
-    _strat_cfg = _cfg.get("strategies", {})
+    _ctrl_cfg = _ctrl_cfg_full
+    _strat_cfg = _ctrl_cfg_full.get("strategies", {})
     _thresholds = _thresholds_from_reference()
     _stage_routes_for_weights = _cfg.get("stage_routes") or {}
     _op_weights = _op_weights_from_profile(adp, _stage_routes_for_weights)
