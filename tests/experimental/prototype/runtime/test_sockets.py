@@ -9,17 +9,19 @@
 
 **TestPortRegistry**: the spawn registry, exercised against a throwaway file.
 
-- `test_register_records`: `register` writes one `[pid, create_time]` entry per resolved port.
+- `test_register_records`: `register` writes a `[worker_pid, ct, owner_pid, owner_ct]` entry per resolved port.
 - `test_register_empty_noop`: `register([])` writes nothing.
 - `test_release_drops`: `release` removes the named ports and leaves the rest.
-- `test_reap_kills_match`: `reap` kills an entry whose PID + create-time still match, and clears the file.
-- `test_reap_skips_reused_pid`: `reap` leaves an entry alone when the create-time no longer matches.
-- `test_reap_empty`: `reap` on an empty / absent registry returns `[]`.
+- `test_reap_kills_dead_owner_orphan`: a worker whose owner is gone (and whose own PID still matches) is killed.
+- `test_reap_spares_live_owner`: a worker whose owner is still alive (a concurrent run) is left untouched.
+- `test_reap_skips_dead_worker`: a dead-owner entry whose worker is also gone is dropped, not killed.
+- `test_reap_empty`: `reap` on an absent registry returns `[]`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -75,12 +77,13 @@ class TestPortRegistry:
     """Spawn registry: record / release / reap against a throwaway file."""
 
     def test_register_records(self, tmp_path: Path) -> None:
-        """*test_register_records()* `register` writes one `[pid, create_time]` entry per resolved port."""
+        """*test_register_records()* `register` writes a `[worker_pid, ct, owner_pid, owner_ct]` entry, owner = this process."""
         _reg = PortRegistry(path=tmp_path / "reg.json")
         with patch(_LISTENERS_PATH, return_value={8000: (1234, 111.0)}):
             _reg.register([8000])
-        _data = json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))
-        assert _data == {"8000": [1234, 111.0]}
+        _entry = json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))["8000"]
+        assert _entry[:2] == [1234, 111.0]
+        assert _entry[2] == os.getpid()
 
     def test_register_empty_noop(self, tmp_path: Path) -> None:
         """*test_register_empty_noop()* `register([])` writes no registry file."""
@@ -91,29 +94,44 @@ class TestPortRegistry:
     def test_release_drops(self, tmp_path: Path) -> None:
         """*test_release_drops()* `release` removes the named ports and keeps the rest."""
         _path = tmp_path / "reg.json"
-        _path.write_text(json.dumps({"8000": [1, 1.0], "8020": [2, 2.0]}), encoding="utf-8")
+        _path.write_text(json.dumps({"8000": [1, 1.0, 9, 9.0], "8020": [2, 2.0, 9, 9.0]}),
+                         encoding="utf-8")
         PortRegistry(path=_path).release([8000])
-        assert json.loads(_path.read_text(encoding="utf-8")) == {"8020": [2, 2.0]}
+        assert json.loads(_path.read_text(encoding="utf-8")) == {"8020": [2, 2.0, 9, 9.0]}
 
-    def test_reap_kills_match(self, tmp_path: Path) -> None:
-        """*test_reap_kills_match()* `reap` kills an entry whose PID + create-time match, then clears the file."""
+    def test_reap_kills_dead_owner_orphan(self, tmp_path: Path) -> None:
+        """*test_reap_kills_dead_owner_orphan()* a worker whose owner is gone, and whose own PID still matches, is killed and the file cleared."""
         _path = tmp_path / "reg.json"
-        _path.write_text(json.dumps({"8000": [1234, 111.0]}), encoding="utf-8")
-        with patch(_SAME_PROC_PATH, return_value=True), \
+        _path.write_text(json.dumps({"8000": [1234, 111.0, 9999, 222.0]}), encoding="utf-8")
+        # _is_same_process: owner -> False (gone), worker -> True (alive).
+        with patch(_SAME_PROC_PATH, side_effect=[False, True]), \
              patch(_KILL_PATH, return_value="python.exe"):
             _killed = PortRegistry(path=_path).reap(verbose=False)
         assert _killed == [(8000, 1234)]
         assert json.loads(_path.read_text(encoding="utf-8")) == {}
 
-    def test_reap_skips_reused_pid(self, tmp_path: Path) -> None:
-        """*test_reap_skips_reused_pid()* `reap` leaves an entry alone when the create-time no longer matches."""
+    def test_reap_spares_live_owner(self, tmp_path: Path) -> None:
+        """*test_reap_spares_live_owner()* a worker whose owner is still alive (a concurrent run) is neither killed nor dropped."""
         _path = tmp_path / "reg.json"
-        _path.write_text(json.dumps({"8000": [1234, 111.0]}), encoding="utf-8")
-        with patch(_SAME_PROC_PATH, return_value=False), \
+        _entry = {"8000": [1234, 111.0, 9999, 222.0]}
+        _path.write_text(json.dumps(_entry), encoding="utf-8")
+        with patch(_SAME_PROC_PATH, return_value=True), \
              patch(_KILL_PATH) as _kill:
             _killed = PortRegistry(path=_path).reap(verbose=False)
         assert _killed == []
         _kill.assert_not_called()
+        assert json.loads(_path.read_text(encoding="utf-8")) == _entry
+
+    def test_reap_skips_dead_worker(self, tmp_path: Path) -> None:
+        """*test_reap_skips_dead_worker()* a dead-owner entry whose worker is also gone is dropped without a kill."""
+        _path = tmp_path / "reg.json"
+        _path.write_text(json.dumps({"8000": [1234, 111.0, 9999, 222.0]}), encoding="utf-8")
+        with patch(_SAME_PROC_PATH, side_effect=[False, False]), \
+             patch(_KILL_PATH) as _kill:
+            _killed = PortRegistry(path=_path).reap(verbose=False)
+        assert _killed == []
+        _kill.assert_not_called()
+        assert json.loads(_path.read_text(encoding="utf-8")) == {}
 
     def test_reap_empty(self, tmp_path: Path) -> None:
         """*test_reap_empty()* `reap` on an absent registry returns an empty list."""

@@ -9,6 +9,7 @@ Ports stay at or above `MIN_USER_PORT` (8000), clear of the system and registere
 from __future__ import annotations
 
 import json
+import os
 import socket
 import tempfile
 from pathlib import Path
@@ -143,9 +144,9 @@ def _is_same_process(pid: int, create_time: float) -> bool:
 
 
 class PortRegistry:
-    """Tracks the `(port, pid, create_time)` of apparatus workers across runs.
+    """Tracks apparatus workers across runs so a crashed run's debris gets reaped.
 
-    Backed by a machine-local JSON file. `bring_up` / `bring_up_mesh` call `register` once a mesh is up and `release` on clean shutdown; `reap` runs at the next startup and kills anything a crash left behind. Recording `create_time` per PID means a reused PID is never mistaken for an apparatus worker, so only processes the apparatus provably spawned are ever killed.
+    Backed by a machine-local JSON file. `bring_up` / `bring_up_mesh` call `register` once a mesh is up and `release` on clean shutdown; `reap` runs at the next startup. Each entry records the worker's `(pid, create_time)` and its owner's - the orchestrator process that spawned it. `reap` kills a worker only when its owner is gone (so the run is genuinely dead) and the worker's own `(pid, create_time)` still matches (so a reused PID is never mistaken for ours). A concurrently-live run, whose owner is still alive, is never touched.
 
     Attributes:
         _path (Path): the JSON registry file.
@@ -188,19 +189,21 @@ class PortRegistry:
             pass
 
     def register(self, ports: list[int]) -> None:
-        """Record the `(pid, create_time)` of the apparatus workers bound on `ports`.
+        """Record each worker's `(pid, create_time)` plus this run's owner identity.
 
-        Called once a mesh is up. `reap` reads these back on the next run to kill anything a crash leaves behind. Each port's listener PID is resolved by a lookup of that exact (caller-owned) port, never a range scan.
+        Called once a mesh is up. The owner - the orchestrator process calling this - is stored alongside each worker so `reap` can later tell a crashed run's debris (owner gone) from a concurrently-live run (owner alive). Each port's listener PID is resolved by a lookup of that exact (caller-owned) port, never a range scan.
 
         Args:
             ports (list[int]): ports the caller just brought up.
         """
         if ports:
             _found = _listeners_on(set(ports))
-            if _found:
+            _owner_pid = os.getpid()
+            _owner_ct = _proc_create_time(_owner_pid)
+            if _found and _owner_ct is not None:
                 _reg = self._load()
                 for _port, (_pid, _ct) in _found.items():
-                    _reg[str(_port)] = [_pid, _ct]
+                    _reg[str(_port)] = [_pid, _ct, _owner_pid, _owner_ct]
                 self._save(_reg)
 
     def release(self, ports: list[int]) -> None:
@@ -220,9 +223,9 @@ class PortRegistry:
                 self._save(_reg)
 
     def reap(self, *, verbose: bool = True) -> list[tuple[int, int]]:
-        """Kill every registered apparatus worker still alive from a crashed prior run.
+        """Kill apparatus workers orphaned by a crashed run; spare concurrently-live runs.
 
-        For each recorded `(port, pid, create_time)`, kills the process only when it still exists and its create-time matches the recorded value, so a reused PID is never mistaken for our worker. The registry is then cleared: a clean prior run already emptied it via `release`, so anything left is crash debris. Assumes no other apparatus run is concurrently live.
+        For each entry, the worker is reaped only when its **owner is gone** (the run that spawned it has died) and the worker's own `(pid, create_time)` still matches (so a reused PID is never killed). An entry whose owner is still alive belongs to a concurrently-running apparatus and is kept untouched - a parallel run is never killed. Entries with a dead owner are dropped; live-owner entries survive for that run to `release` itself.
 
         Args:
             verbose (bool, optional): print one line per reaped orphan. Defaults to True.
@@ -231,17 +234,22 @@ class PortRegistry:
             list[tuple[int, int]]: `(port, pid)` pairs for processes that were reaped.
         """
         _killed: list[tuple[int, int]] = []
+        _survivors: dict[str, list[Any]] = {}
         _reg = self._load()
         for _port_s, _entry in _reg.items():
-            _pid, _ct = int(_entry[0]), float(_entry[1])
-            if _is_same_process(_pid, _ct):
-                _name = _kill_pid(_pid)
-                if _name is not None:
-                    _killed.append((int(_port_s), _pid))
-                    if verbose:
-                        print(f"  port {_port_s}: reaped orphan PID {_pid} ({_name})")
+            if len(_entry) >= 4:
+                _w_pid, _w_ct = int(_entry[0]), float(_entry[1])
+                _o_pid, _o_ct = int(_entry[2]), float(_entry[3])
+                if _is_same_process(_o_pid, _o_ct):
+                    _survivors[_port_s] = _entry
+                elif _is_same_process(_w_pid, _w_ct):
+                    _name = _kill_pid(_w_pid)
+                    if _name is not None:
+                        _killed.append((int(_port_s), _w_pid))
+                        if verbose:
+                            print(f"  port {_port_s}: reaped orphan PID {_w_pid} ({_name})")
         if _reg:
-            self._save({})
+            self._save(_survivors)
         return _killed
 
 
