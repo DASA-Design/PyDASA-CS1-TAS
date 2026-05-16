@@ -78,7 +78,7 @@ def _run_one_trial(adp: str,
     _result: dict = {}
     try:
         run_experiment(adp=adp, framework=framework,
-                       target_granularity=granularity, skip_bounds_check=True)
+                       target_granularity=granularity, skip_bounds_check=False)
         if not _verdict_path.exists():
             _result = {"error": f"verdict.json missing for {_cell}"}
         else:

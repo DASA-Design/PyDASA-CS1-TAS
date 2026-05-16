@@ -136,7 +136,7 @@ def run(*,
         write (bool, optional): persist outputs to disk. Defaults to True.
         run_id (str | None, optional): explicit run id.
         cfg (dict[str, Any] | None, optional): pre-loaded calibration config (calibration stages only).
-        skip_bounds_check (bool, optional): skip the envelope check (experiment stages only). Defaults to False.
+        skip_bounds_check (bool, optional): skip the trial-ceiling check (experiment stages only). Defaults to False.
         target_granularity (str | None, optional): `collapsed` / `expanded` override (experiment stages only). None falls through to `target.json`.
         inject_internal_stage_mu (bool | None, optional): TAS_{2..6} mu-sleep override (experiment stages only). None falls through to `target.json`.
 
@@ -175,7 +175,6 @@ def run(*,
                               framework=framework,
                               wsgi_server=wsgi_server,
                               write=write,
-                              envelope=_calib,
                               skip_bounds_check=skip_bounds_check,
                               target_granularity=target_granularity,
                               inject_internal_stage_mu=inject_internal_stage_mu)
@@ -356,7 +355,7 @@ def _print_experiment_summary(result: dict[str, Any]) -> None:
         print(f"  {_label:<13} {_path}")
     if _bounds is not None:
         print()
-        print(f"envelope:        run={_bounds.envelope_run_id}  passed={_bounds.passed}")
+        print(f"bounds:          passed={_bounds.passed}")
         for _check in _bounds.checks:
             print(f"  {_check.message}")
 

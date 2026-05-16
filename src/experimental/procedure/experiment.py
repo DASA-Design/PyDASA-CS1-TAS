@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Experiment-stage orchestrator.
 
-Mount the TAS service mesh, drive a single trial through the controller, and emit the per-request flow JSONL + per-pid CSV + summary parquet row + `verdict.json` + `window.parquet`. The public entry is `run_experiment(adp=...)`; the rest of the module is the bridge from `profile.specs` (per-svc mu / epsilon / admission / workers) to the `MeshSpec` list `bring_up_mesh` consumes, plus the open-loop producer / consumer trial driver.
+`run_experiment` mounts the TAS mesh, drives one open-loop trial through the controller, and writes the per-request flow JSONL, per-pid CSV, `verdict.json`, `window.parquet`, and a `runs.parquet` summary row. The private helpers bridge `profile.specs` to the `MeshSpec` list and run the producer / consumer driver.
 
-Earlier this code lived in `src.methods.experimental`; it moved here as part of stage 8.0 so `src/methods/experimental.py` shrinks to a thin CLI / notebook facade and the deployment-axis refactor (stage 8.1 remote) has a clean home to land in. Symbols are re-exported from `src.methods.experimental` for back-compat.
+Re-exported from `src.methods.experimental` for back-compat.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import functools
 import time
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from src.experimental.common.io.parquet import append_run_summary
 from src.experimental.common.io.runs import make_run_id, make_run_paths
@@ -27,7 +29,6 @@ from src.experimental.procedure.deployment import (
     WsgiServer,
     bring_up_mesh,
 )
-from src.experimental.prototype.calibration.envelope import read_envelope
 from src.experimental.prototype.client.users import User
 from src.experimental.prototype.controller import (
     bring_up_controller,
@@ -105,10 +106,14 @@ def _build_mesh_specs(*,
         run_id (str): identifier written into every record.
         request_timeout_s (float): per-dispatch HTTP timeout.
         mu_lt (dict[str, float]): `svc_id -> mu` from the profile specs layer.
+        eps_lt (dict[str, float] | None, optional): `svc_id -> epsilon` (per-call failure rate). Defaults to None (no injected failures).
+        failure_modes_cfg (Any, optional): failure-mode config supplying each atomic's failure mechanism mix. Defaults to None.
         target_granularity (str, optional): `collapsed` (default) or `expanded`.
         inject_internal_stage_mu (bool, optional): when True (and expanded mode), TAS_{2..6} sleep on their published mu. Defaults to False.
         stage_routes (dict | None, optional): per-stage `calls_kind` + `operation` map (used in expanded mode). Required when `target_granularity="expanded"`.
         admission_lt (dict | None, optional): `{svc_id: {"c": int, "k": int}}` from `profile.specs`. When set, each atomic gets its per-svc cap; falls through to `atomic_admission` per-key when the profile is silent. Defaults to None (use the global `atomic_admission` for every atomic).
+        framework (Framework, optional): server stack picking the FastAPI or Flask app factories. Defaults to `"fastapi"`.
+        workers_lt (dict[str, int] | None, optional): per-svc `w_proc` from `profile.specs`; scales each atomic's `(c, K)`. Defaults to None (`w_proc = 1` everywhere).
 
     Returns:
         tuple[list[MeshSpec], list[str], list[str]]: spec list + sorted third-party atomic ids + sorted internal-stage ids (empty list in collapsed mode).
@@ -118,27 +123,14 @@ def _build_mesh_specs(*,
         ValueError: when `target_granularity="expanded"` and `stage_routes` is None.
     """
     _catalogue = load_catalogue(catalogue_version)
-    # Spawn only the catalogue entries the active profile declares (mu_lt is keyed by
-    # artifact id). Different adp values can declare different service sets while
-    # sharing one catalogue layer that covers the union.
+    # Spawn only the catalogue entries the active profile declares (keyed by mu_lt).
     _atomic_ids = sorted(_id for _id in _catalogue.entries if _id in mu_lt)
     _is_expanded = target_granularity == "expanded"
     if _is_expanded and stage_routes is None:
         _msg = "stage_routes is required when target_granularity='expanded'"
         raise ValueError(_msg)
 
-    # Single-process per atomic: each service gets exactly one worker process exposing
-    # an effective M/M/c=c_specs*w_proc/K=K_specs*w_proc queue (asyncio semaphore
-    # `effective_c`, queue depth `effective_K`). `w_proc` from `profile.specs` is kept
-    # as a multiplier on (c, K) so the deployed aggregate capacity matches what the
-    # old multi-worker apparatus delivered, without the per-worker isolation that
-    # broke pooled M/M/c/K semantics.
-    def _w_proc(svc_id: str) -> int:
-        if workers_lt is None:
-            return 1
-        return max(1, int(workers_lt.get(svc_id, 1)))
-
-    _composite_id = "TAS_{1}"
+    # One process per atomic; w_proc scales (c, K) so deployed capacity matches the old multi-worker mesh.
     _tas_first_port = base_port
 
     if _is_expanded:
@@ -169,14 +161,6 @@ def _build_mesh_specs(*,
     _dflt_k = atomic_admission.get("k")
     _dflt_c = atomic_admission.get("c")
 
-    def _eff(svc_id: str) -> tuple[int | None, int | None]:
-        """Aggregate `(K, c) = (K_specs, c_specs) * w_proc` for one service."""
-        _base_k, _base_c = _resolve_admission(svc_id, admission_lt, _dflt_k, _dflt_c)
-        _w = _w_proc(svc_id)
-        _agg_k = None if _base_k is None else int(_base_k) * _w
-        _agg_c = None if _base_c is None else int(_base_c) * _w
-        return _agg_k, _agg_c
-
     _tas_factory = functools.partial(
         _build_tas,
         url_lt=_atomic_url_lt,
@@ -203,7 +187,8 @@ def _build_mesh_specs(*,
                 _msg = f"stage_routes missing entry for {_stage_id!r}"
                 raise ValueError(_msg)
             _stage_mu = mu_lt[_stage_id] if inject_internal_stage_mu else 0.0
-            _stage_k, _stage_c = _eff(_stage_id)
+            _stage_k, _stage_c = _effective_admission(_stage_id, admission_lt,
+                                                      _dflt_k, _dflt_c, workers_lt)
             _stage_factory = functools.partial(
                 _build_internal,
                 svc_name=_stage_id,
@@ -232,7 +217,8 @@ def _build_mesh_specs(*,
             _failure_mix = None
         else:
             _failure_mix = dict(failure_modes_cfg.mix_for(_svc_id))
-        _svc_k, _svc_c = _eff(_svc_id)
+        _svc_k, _svc_c = _effective_admission(_svc_id, admission_lt,
+                                              _dflt_k, _dflt_c, workers_lt)
         _atomic_factory = functools.partial(
             _build_atomic,
             svc_name=_svc_id,
@@ -288,6 +274,47 @@ def _resolve_admission(svc_id: str,
     return _k, _c
 
 
+def _w_proc(svc_id: str, workers_lt: dict[str, int] | None) -> int:
+    """Return the worker-process multiplier (`w_proc`) for one service.
+
+    Args:
+        svc_id (str): artifact id to look up.
+        workers_lt (dict[str, int] | None): per-svc `w_proc` from `profile.specs`; None means 1 everywhere.
+
+    Returns:
+        int: `w_proc` for this service, clamped to a minimum of 1.
+    """
+    if workers_lt is None:
+        return 1
+    return max(1, int(workers_lt.get(svc_id, 1)))
+
+
+def _effective_admission(svc_id: str,
+                         admission_lt: dict[str, dict[str, int]] | None,
+                         dflt_k: Any,
+                         dflt_c: Any,
+                         workers_lt: dict[str, int] | None) -> tuple[int | None, int | None]:
+    """Return aggregate `(K, c) = (K_specs, c_specs) * w_proc` for one service.
+
+    One process per atomic exposes an effective M/M/c/K queue whose `c` and `K` are the per-spec values scaled by the worker-process count, so deployed capacity matches the old multi-worker mesh.
+
+    Args:
+        svc_id (str): artifact id to resolve.
+        admission_lt (dict[str, dict[str, int]] | None): per-svc `{c, k}` from `profile.specs`.
+        dflt_k (Any): global `atomic_admission["k"]` fallback.
+        dflt_c (Any): global `atomic_admission["c"]` fallback.
+        workers_lt (dict[str, int] | None): per-svc `w_proc`; None means 1.
+
+    Returns:
+        tuple[int | None, int | None]: aggregate `(K, c)`; an element is None when its base value is None.
+    """
+    _base_k, _base_c = _resolve_admission(svc_id, admission_lt, dflt_k, dflt_c)
+    _w = _w_proc(svc_id, workers_lt)
+    _agg_k = None if _base_k is None else int(_base_k) * _w
+    _agg_c = None if _base_c is None else int(_base_c) * _w
+    return _agg_k, _agg_c
+
+
 def _thresholds_from_reference() -> dict[str, float]:
     """Read R1 / R2 numeric thresholds from `data/reference/baseline.json`.
 
@@ -334,7 +361,6 @@ def _fetch_controller_history(controller_url: str,
     Returns:
         list[dict[str, Any]]: per-sample trajectory records. Empty on transport error.
     """
-    import httpx
     _ans: list[dict[str, Any]] = []
     try:
         with httpx.Client(timeout=timeout_s) as _http:
@@ -354,6 +380,27 @@ _STOP_PREDICATES: dict[str, tuple[str, ...]] = {
     "s2": ("r2_breach",),
     "aggregate": ("r1_breach", "r2_breach"),
 }
+
+# Transport-level outcomes that signal the apparatus broke rather than the
+# architecture failing. Mirrors `StopGuard._is_infra_failure`'s apparatus-vs-
+# architecture split, minus 503: a full M/M/c/K admission queue is modelled
+# architecture behaviour, not an apparatus fault. The per-consumer consecutive
+# count in `_consume_payloads` is what separates a dead worker (an unbroken run)
+# from interleaved injected-failure-mechanism hits (which never run long).
+_INFRA_OUTCOMES: frozenset[str] = frozenset({"timeout", "drop"})
+_DFLT_INFRA_THRESHOLD = 20
+
+
+def _is_infra_outcome(outcome: str) -> bool:
+    """Return True when `outcome` is a transport-level (apparatus) failure.
+
+    Args:
+        outcome (str): the `RequestRecord.outcome` label.
+
+    Returns:
+        bool: True for `timeout` / `drop`; False for `success` / `5xx`.
+    """
+    return outcome in _INFRA_OUTCOMES
 
 
 def _should_stop_from_aggregates(adp: str, agg: dict[str, Any]) -> tuple[bool, str]:
@@ -472,23 +519,11 @@ def _build_mesh_admission(*,
     """
     _dflt_k = atomic_admission.get("k")
     _dflt_c = atomic_admission.get("c")
-
-    def _w_proc(svc_id: str) -> int:
-        if workers_lt is None:
-            return 1
-        return max(1, int(workers_lt.get(svc_id, 1)))
-
-    def _eff(svc_id: str) -> tuple[int | None, int | None]:
-        _base_k, _base_c = _resolve_admission(svc_id, admission_lt, _dflt_k, _dflt_c)
-        _w = _w_proc(svc_id)
-        _agg_k = None if _base_k is None else int(_base_k) * _w
-        _agg_c = None if _base_c is None else int(_base_c) * _w
-        return _agg_k, _agg_c
-
     _ans: dict[str, dict[str, Any]] = {}
     _composite_id = "TAS_{1}"
     if include_composite and _composite_id in mu_lt:
-        _k, _c = _eff(_composite_id)
+        _k, _c = _effective_admission(_composite_id, admission_lt,
+                                      _dflt_k, _dflt_c, workers_lt)
         _ans[_composite_id] = {
             "c": _c,
             "K": _k,
@@ -499,7 +534,8 @@ def _build_mesh_admission(*,
         for _stage_id in internal_stage_ids:
             if _stage_id not in mu_lt:
                 continue
-            _k, _c = _eff(_stage_id)
+            _k, _c = _effective_admission(_stage_id, admission_lt,
+                                          _dflt_k, _dflt_c, workers_lt)
             _ans[_stage_id] = {
                 "c": _c,
                 "K": _k,
@@ -507,7 +543,8 @@ def _build_mesh_admission(*,
                 "eps": float(eps_lt.get(_stage_id, 0.0)),
             }
     for _svc_id in atomic_ids:
-        _k, _c = _eff(_svc_id)
+        _k, _c = _effective_admission(_svc_id, admission_lt,
+                                      _dflt_k, _dflt_c, workers_lt)
         _ans[_svc_id] = {
             "c": _c,
             "K": _k,
@@ -566,7 +603,8 @@ async def _drive_trial(*,
                        poll_every_n: int = 0,
                        consumer_pool_size: int = 64,
                        max_queue_depth: int = 1000,
-                       drain_timeout_s: float = 60.0) -> tuple[list[dict[str, Any]], str]:
+                       drain_timeout_s: float = 60.0,
+                       infra_threshold: int = _DFLT_INFRA_THRESHOLD) -> tuple[list[dict[str, Any]], str]:
     """Drive `n_requests` against the composite TAS via an open-loop producer / consumer.
 
     Decouples *offered load* from *consumed throughput*: one **dispatcher** coroutine pushes ticks onto an `asyncio.Queue` at the configured `request_rate_per_s` regardless of how fast the server replies, and `consumer_pool_size` **consumer** coroutines drain the queue, each running its own `User` instance + `httpx.AsyncClient` against one of the `tas_urls` (round-robin assignment). Each consumer handles at most one in-flight request at a time, so the in-flight ceiling is exactly `consumer_pool_size` — pick it below httpx's `max_connections = 100` default and the transport never throttles.
@@ -586,9 +624,10 @@ async def _drive_trial(*,
         consumer_pool_size (int, optional): number of concurrent consumer coroutines (= in-flight ceiling). Defaults to 64.
         max_queue_depth (int, optional): bounded queue size; dispatcher blocks when full. Defaults to 1000.
         drain_timeout_s (float, optional): max seconds to wait for in-flight consumers to finish after the dispatcher exits. Defaults to 60.0.
+        infra_threshold (int, optional): consecutive transport-level failures on a single consumer that trip the `infra_failure` stop (the apparatus broke; the run's R1 / R2 numbers are not a verdict on the architecture). Defaults to 20.
 
     Returns:
-        tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"`).
+        tuple[list[dict[str, Any]], str]: per-request summaries + stop_reason (`"n_reached"` / `"r1_breach"` / `"r2_breach"` / `"infra_failure"`).
     """
     if not tas_urls:
         _msg = "_drive_trial requires at least one TAS URL"
@@ -599,7 +638,6 @@ async def _drive_trial(*,
     _summaries_lock = asyncio.Lock()
     _stop_event = asyncio.Event()
     _stop_reason_box: list[str] = ["n_reached"]
-    import httpx
     _breach_http: httpx.AsyncClient | None = None
     if controller_url is not None and poll_every_n > 0:
         _breach_http = httpx.AsyncClient(timeout=2.0)
@@ -619,6 +657,8 @@ async def _drive_trial(*,
                 summaries=_summaries,
                 summaries_lock=_summaries_lock,
                 stop_event=_stop_event,
+                stop_reason_box=_stop_reason_box,
+                infra_threshold=infra_threshold,
                 p_alarm=p_alarm,
                 request_timeout_s=request_timeout_s,
                 seed=_consumer_seed,
@@ -652,20 +692,29 @@ async def _drive_trial(*,
 
 
 async def _dispatch_at_rate(*,
-                            queue: "asyncio.Queue[int | None]",
+                            queue: asyncio.Queue[int | None],
                             n_requests: int,
                             rate: float,
                             stop_event: asyncio.Event,
                             stop_reason_box: list[str],
-                            breach_http: "httpx.AsyncClient | None",
+                            breach_http: httpx.AsyncClient | None,
                             controller_url: str | None,
                             adp: str,
                             poll_every_n: int) -> None:
-    """Push `n_requests` ticks onto `queue` at fixed `rate` (drift-corrected pacing).
+    """Push `n_requests` ticks onto `queue` at a fixed `rate`, then return.
 
-    Each tick is a sequence number that the consumer pool drains and uses to fire one request. Pacing uses absolute targets (`start + i / rate`) rather than cumulative sleeps so Windows asyncio.sleep granularity (~15 ms) doesn't accumulate drift.
+    Pacing uses absolute targets (`start + i / rate`) so Windows' coarse `asyncio.sleep` granularity does not accumulate drift. Blocking at a full `queue.put()` surfaces consumer back-pressure as an offered-rate undershoot.
 
-    Stops early when `stop_event` is set (a breach poll signalled it) or when the budget is exhausted. The dispatcher itself blocks at `queue.put()` when the queue is full, which surfaces consumer-side back-pressure as an offered-rate undershoot.
+    Args:
+        queue (asyncio.Queue[int | None]): tick queue the consumer pool drains.
+        n_requests (int): total dispatch budget.
+        rate (float): offered rate in req/s; 0 floods with no pacing.
+        stop_event (asyncio.Event): set to halt dispatch early.
+        stop_reason_box (list[str]): single-slot box a breach writes its reason into.
+        breach_http (httpx.AsyncClient | None): client for breach polling; None disables it.
+        controller_url (str | None): controller base URL for breach polling.
+        adp (str): adaptation key (drives the stop predicate).
+        poll_every_n (int): dispatch count between breach polls; 0 disables polling.
     """
     if rate > 0:
         _start = asyncio.get_event_loop().time()
@@ -693,17 +742,35 @@ async def _dispatch_at_rate(*,
 async def _consume_payloads(*,
                             consumer_id: int,
                             base_url: str,
-                            queue: "asyncio.Queue[int | None]",
+                            queue: asyncio.Queue[int | None],
                             summaries: list[dict[str, Any]],
                             summaries_lock: asyncio.Lock,
                             stop_event: asyncio.Event,
                             p_alarm: float,
                             request_timeout_s: float,
-                            seed: int | None) -> None:
+                            seed: int | None,
+                            stop_reason_box: list[str] | None = None,
+                            infra_threshold: int = _DFLT_INFRA_THRESHOLD) -> None:
     """Drain `queue` and fire one request per tick; append the per-request summary under a lock.
 
-    Each consumer owns its own `User` + `httpx.AsyncClient` so the per-consumer pool is isolated; the consumer holds at most one in-flight request at a time, so the trial's in-flight ceiling equals `consumer_pool_size`. Exits on a `None` sentinel (clean shutdown) or when `stop_event` is set (breach early-stop).
+    Each consumer owns its own `User` + `httpx.AsyncClient` so the per-consumer pool is isolated; the consumer holds at most one in-flight request at a time, so the trial's in-flight ceiling equals `consumer_pool_size`. Exits on a `None` sentinel (clean shutdown) or when `stop_event` is set (breach or infra early-stop).
+
+    The consumer keeps a private consecutive-infra counter: each transport-level outcome (`timeout` / `drop`) or escaped exception increments it, any clean outcome resets it. A dead worker produces an unbroken run of failures on the one consumer pinned to it, so reaching `infra_threshold` consecutive failures trips the `infra_failure` stop; interleaved injected-failure-mechanism hits never run long enough to reach it.
+
+    Args:
+        consumer_id (int): index of this consumer in the pool.
+        base_url (str): the TAS_{1} URL this consumer drives.
+        queue (asyncio.Queue[int | None]): tick queue; `None` is the shutdown sentinel.
+        summaries (list[dict[str, Any]]): shared per-request summary list.
+        summaries_lock (asyncio.Lock): guards appends to `summaries`.
+        stop_event (asyncio.Event): set to halt every consumer + the dispatcher.
+        p_alarm (float): probability the next request is an alarm.
+        request_timeout_s (float): per-request timeout.
+        seed (int | None): RNG seed for kind selection.
+        stop_reason_box (list[str] | None, optional): single-slot box the infra stop writes `"infra_failure"` into. None disables reason recording (the stop still fires). Defaults to None.
+        infra_threshold (int, optional): consecutive transport-level failures that trip the infra stop. Defaults to 20.
     """
+    _consec_infra = 0
     async with User(client_id=f"trial-c{consumer_id}",
                     base_url=base_url,
                     endpoint_path="/",
@@ -716,24 +783,36 @@ async def _consume_payloads(*,
             try:
                 if _tick is None or stop_event.is_set():
                     break
+                _infra_hit = False
                 try:
                     _record = await _user.run_one()
                 except Exception:
-                    # Don't let one malformed request kill the consumer; the next tick proceeds.
-                    continue
-                async with summaries_lock:
-                    summaries.append({
-                        "req_id": _record.req_id,
-                        "kind": _record.kind,
-                        "outcome": _record.outcome,
-                        "status": _record.status_code,
-                        "latency_s": _record.total_latency_s,
-                    })
+                    # An exception escaping run_one is an unexpected apparatus fault.
+                    _infra_hit = True
+                else:
+                    if _is_infra_outcome(_record.outcome):
+                        _infra_hit = True
+                    async with summaries_lock:
+                        summaries.append({
+                            "req_id": _record.req_id,
+                            "kind": _record.kind,
+                            "outcome": _record.outcome,
+                            "status": _record.status_code,
+                            "latency_s": _record.total_latency_s,
+                        })
+                if _infra_hit:
+                    _consec_infra += 1
+                else:
+                    _consec_infra = 0
+                if _consec_infra >= infra_threshold and not stop_event.is_set():
+                    if stop_reason_box is not None:
+                        stop_reason_box[0] = "infra_failure"
+                    stop_event.set()
             finally:
                 queue.task_done()
 
 
-async def _check_breach(http: "httpx.AsyncClient",
+async def _check_breach(http: httpx.AsyncClient,
                         controller_url: str,
                         adp: str) -> tuple[bool, str]:
     """Poll the controller's `/aggregates` and apply the strategy-specific stop predicate.
@@ -769,13 +848,12 @@ def run_experiment(*,
                    write: bool = True,
                    run_id: str | None = None,
                    target_cfg: dict[str, Any] | None = None,
-                   envelope: dict[str, Any] | None = None,
                    skip_bounds_check: bool = False,
                    target_granularity: str | None = None,
                    inject_internal_stage_mu: bool | None = None) -> dict[str, Any]:
     """Mount the TAS topology, drive one trial, write the per-request + per-service logs.
 
-    Reads `target.json` for bindings, validates the planned operating point against the latest calibration envelope (unless skipped), brings the mesh up, drives `trial.n_requests` requests through one synthetic user, and appends a row to `runs.parquet`.
+    Reads `target.json` for bindings, validates the planned operating point against the `experimental.json::trial` ceiling (unless skipped), brings the mesh up, drives `trial.n_requests` requests through one synthetic user, and appends a row to `runs.parquet`.
 
     Args:
         adp (str, optional): adaptation key (`baseline` / `s1` / `s2` / `aggregate`). Defaults to `"baseline"`.
@@ -785,8 +863,7 @@ def run_experiment(*,
         write (bool, optional): persist outputs to disk. Defaults to True.
         run_id (str | None, optional): explicit run id. Defaults to a fresh `<adp>_<ts>_<nonce>` id.
         target_cfg (dict[str, Any] | None, optional): pre-loaded target config. Defaults to reading the on-disk JSON.
-        envelope (dict[str, Any] | None, optional): explicit calibration envelope. Defaults to auto-discover the latest for `dpl`.
-        skip_bounds_check (bool, optional): skip the envelope check. Defaults to False.
+        skip_bounds_check (bool, optional): skip the ceiling check. Defaults to False.
         target_granularity (str | None, optional): `collapsed` or `expanded`. Overrides `target.json::target_granularity` when set; falls through to the JSON value when None.
         inject_internal_stage_mu (bool | None, optional): when True (and expanded), TAS_{2..6} sleep on mu. Overrides `target.json::inject_internal_stage_mu` when set; falls through to the JSON value when None.
 
@@ -812,9 +889,7 @@ def run_experiment(*,
                             variant_suffix=_variant_suffix)
     _paths.ensure()
 
-    _bounds_report = _maybe_check_bounds(dpl=dpl,
-                                         envelope=envelope,
-                                         trial_cfg=_exp_cfg["trial"],
+    _bounds_report = _maybe_check_bounds(trial_cfg=_exp_cfg["trial"],
                                          atomic_admission=_cfg["atomic_admission"],
                                          skip=skip_bounds_check)
 
@@ -900,10 +975,7 @@ def run_experiment(*,
                        base_port=int(_cfg["tas_base_port"]),
                        ready_timeout_s=float(_cfg["ready_timeout_s"])) as _urls:
         _tas_urls: list[str] = _urls["TAS"]
-        # Controller polls only the first TAS_{1} worker's /samples; each worker has its
-        # own buffer so cross-worker sample merging would need a shared store. The final
-        # verdict is computed from the shared flow JSONL (every worker appends), so the
-        # /samples gap only affects early-stop breach detection, not the verdict numbers.
+        # Controller polls only worker 0's /samples; the verdict reads the shared flow JSONL.
         _ctrl_target = _tas_urls[0]
         with bring_up_controller(target_url=_ctrl_target,
                                  adp=adp,
@@ -931,6 +1003,8 @@ def run_experiment(*,
                     consumer_pool_size=int(_trial.get("consumer_pool_size", 64)),
                     max_queue_depth=int(_trial.get("max_queue_depth", 1000)),
                     drain_timeout_s=float(_trial.get("drain_timeout_s", 60.0)),
+                    infra_threshold=int(_trial.get("infra_consecutive_threshold",
+                                                   _DFLT_INFRA_THRESHOLD)),
                 ))
             _history = _fetch_controller_history(_ctrl_url)
     _finished_ts = time.time()
@@ -960,9 +1034,9 @@ def run_experiment(*,
         "n_timeout": _outcome_counts.get("timeout", 0),
         "n_drop": _outcome_counts.get("drop", 0),
         "n_5xx": _outcome_counts.get("5xx", 0),
+        "stop_reason": _stop_reason,
         "started_ts": _started_ts,
         "finished_ts": _finished_ts,
-        "envelope_run_id": _bounds_report.envelope_run_id if _bounds_report else None,
         "bounds_passed": _bounds_report.passed if _bounds_report else None,
     }
     if write:
@@ -996,45 +1070,46 @@ def run_experiment(*,
 
 
 def _maybe_check_bounds(*,
-                        dpl: Dpl,
-                        envelope: dict[str, Any] | None,
                         trial_cfg: dict[str, Any],
                         atomic_admission: dict[str, Any],
                         skip: bool) -> BoundsReport | None:
-    """Check the planned `(c, r, w)` against the latest calibration envelope, when one exists.
+    """Check the planned `(c, r, w)` against the `experimental.json::trial` ceiling.
+
+    The ceiling (`r_max` / `c_max` / `w_max`) is read straight from `trial_cfg`, so the experiment is self-contained: no calibration-envelope file is consulted. A null axis in the config is unbounded (that axis is skipped).
 
     Args:
-        dpl (Dpl): deployment mode (drives envelope lookup).
-        envelope (dict[str, Any] | None): explicit envelope override.
-        trial_cfg (dict[str, Any]): trial block from `target.json`.
-        atomic_admission (dict[str, Any]): admission caps from `target.json`.
+        trial_cfg (dict[str, Any]): `trial` block from `experimental.json` (carries `request_rate_per_s` and the `r_max` / `c_max` / `w_max` ceiling).
+        atomic_admission (dict[str, Any]): admission caps from `target.json` (supplies the planned `c`).
         skip (bool): if True, return None without checking.
 
     Returns:
-        BoundsReport | None: per-axis verdicts, or None when nothing was checked.
+        BoundsReport | None: per-axis verdicts, or None when the check was skipped.
     """
     if skip:
         return None
-    if envelope is None:
-        # Import lazily to avoid a cycle with `procedure.tuning` (which has no
-        # outgoing dependency on this module today, but the import path stays
-        # tidier as `tuning` -> `experiment` only via the public facade).
-        from src.experimental.procedure.tuning import find_latest_envelope
-        _path = find_latest_envelope(dpl)
-        if _path is None:
-            return None
-        envelope = read_envelope(_path)
+    _limits: dict[str, Any] = {
+        "c_max": trial_cfg.get("c_max"),
+        "r_max": trial_cfg.get("r_max"),
+        "w_max": trial_cfg.get("w_max"),
+    }
     _exp_cfg: dict[str, Any] = {
         "r": float(trial_cfg.get("request_rate_per_s", 0)),
     }
     _c = atomic_admission.get("c")
     if isinstance(_c, (int, float)):
         _exp_cfg["c"] = float(_c)
-    return validate_experimental_limits(_exp_cfg, envelope, raise_on_fail=True)
+    return validate_experimental_limits(_exp_cfg, _limits, raise_on_fail=True)
 
 
 def _count_outcomes(summaries: list[dict[str, Any]]) -> dict[str, int]:
-    """Tally `outcome` values across the summaries."""
+    """Tally `outcome` values across the per-request summaries.
+
+    Args:
+        summaries (list[dict[str, Any]]): per-request summary dicts from `_drive_trial`.
+
+    Returns:
+        dict[str, int]: count of each distinct `outcome` label.
+    """
     _counts: dict[str, int] = {}
     for _row in summaries:
         _key = str(_row.get("outcome", "?"))
