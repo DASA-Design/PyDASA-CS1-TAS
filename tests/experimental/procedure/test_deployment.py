@@ -3,13 +3,13 @@
 **TestDeployment**: port resolution + `bring_up` / `bring_up_mesh` orchestration via a fake adapter factory; real spawns happen in `00-calibration.ipynb` and `tests/demo/vernier.py`.
 
 - *test_localhost_one_port()*: localhost mode resolves to a single-entry port list at the requested base port.
-- *test_multiprocess_n_ports()*: multiprocess mode resolves to N consecutive ports starting at `base_port`.
+- *test_multiprocess_n_ports()*: multiprocess mode resolves to N ports on the `PORT_STRIDE` grid from `base_port`.
 - *test_unknown_dpl_raises()*: an unknown deployment mode is rejected immediately.
 - *test_remote_not_yet_supported()*: remote mode raises `NotImplementedError` so callers know to wait.
 - *test_bring_up_localhost()*: localhost mounts one adapter on the base port; on exit the adapter's `shutdown` runs.
-- *test_bring_up_multiprocess()*: multiprocess mounts N adapters on consecutive ports; each shuts down on exit.
-- *test_bring_up_mesh_assigns_consecutive_ports()*: mesh mode mounts one adapter per spec and yields a `svc_id -> [URL]` mapping (single-worker specs return a one-element list).
-- *test_bring_up_mesh_workers_spawns_n_per_spec()*: `MeshSpec(workers=N)` mounts N adapters on consecutive ports; offsets accumulate across specs.
+- *test_bring_up_multiprocess()*: multiprocess mounts N adapters on the `PORT_STRIDE` grid; each shuts down on exit.
+- *test_bring_up_mesh_assigns_strided_ports()*: mesh mode mounts one adapter per spec, one `PORT_STRIDE` slot apart, and yields a `svc_id -> [URL]` mapping (single-worker specs return a one-element list).
+- *test_bring_up_mesh_workers_spawns_n_per_spec()*: `MeshSpec(workers=N)` mounts N adapters inside the spec's `PORT_STRIDE` slot; the next spec starts at the next slot.
 - *test_bring_up_mesh_empty_specs_raises()*: an empty `MeshSpec` list raises `ValueError` immediately.
 - *test_bring_up_mesh_shuts_down_on_exception()*: if the body raises, every mounted mesh adapter still shuts down (in reverse order).
 - *test_bring_up_shuts_down_on_exception()*: if the body raises inside `bring_up`, every started adapter still gets shutdown.
@@ -65,9 +65,9 @@ class TestDeployment:
         assert _ports == [8001]
 
     def test_multiprocess_n_ports(self) -> None:
-        """*test_multiprocess_n_ports()* multiprocess mode resolves to N consecutive ports starting at `base_port`."""
-        _ports = _resolve_ports("multiprocess", base_port=8001, workers=4)
-        assert _ports == [8001, 8002, 8003, 8004]
+        """*test_multiprocess_n_ports()* multiprocess mode resolves to N ports on the `PORT_STRIDE` grid from `base_port`."""
+        _ports = _resolve_ports("multiprocess", base_port=8000, workers=4)
+        assert _ports == [8000, 8020, 8040, 8060]
 
     def test_unknown_dpl_raises(self) -> None:
         """*test_unknown_dpl_raises()* an unknown deployment-mode name is rejected immediately."""
@@ -93,7 +93,7 @@ class TestDeployment:
         _factory.adapters[0].shutdown.assert_called_once()
 
     def test_bring_up_multiprocess(self) -> None:
-        """*test_bring_up_multiprocess()* bringing up multiprocess mounts N adapters on consecutive ports, yields all their URLs, and shuts each one down on exit."""
+        """*test_bring_up_multiprocess()* bringing up multiprocess mounts N adapters on the `PORT_STRIDE` grid, yields all their URLs, and shuts each one down on exit."""
         _factory = _AdapterFactory()
         with bring_up("multiprocess",
                       app_factory=_noop_app,
@@ -101,8 +101,8 @@ class TestDeployment:
                       workers=3,
                       adapter_factory=_factory) as _urls:
             assert _urls == ["http://127.0.0.1:9200",
-                             "http://127.0.0.1:9201",
-                             "http://127.0.0.1:9202"]
+                             "http://127.0.0.1:9220",
+                             "http://127.0.0.1:9240"]
             assert len(_factory.adapters) == 3
             for _adp in _factory.adapters:
                 _adp.mount.assert_called_once()
@@ -110,8 +110,8 @@ class TestDeployment:
         for _adp in _factory.adapters:
             _adp.shutdown.assert_called_once()
 
-    def test_bring_up_mesh_assigns_consecutive_ports(self) -> None:
-        """*test_bring_up_mesh_assigns_consecutive_ports()* `bring_up_mesh` mounts one adapter per spec on consecutive ports and yields a `svc_id -> [URL]` mapping (single-worker specs return a one-element list)."""
+    def test_bring_up_mesh_assigns_strided_ports(self) -> None:
+        """*test_bring_up_mesh_assigns_strided_ports()* `bring_up_mesh` mounts one adapter per spec, one `PORT_STRIDE` slot apart, and yields a `svc_id -> [URL]` mapping (single-worker specs return a one-element list)."""
         _factory = _AdapterFactory()
         _specs = [
             MeshSpec(svc_id="TAS", app_factory=_noop_app),
@@ -123,8 +123,8 @@ class TestDeployment:
                            adapter_factory=_factory) as _urls:
             assert _urls == {
                 "TAS": ["http://127.0.0.1:9400"],
-                "MAS_{1}": ["http://127.0.0.1:9401"],
-                "AS_{1}": ["http://127.0.0.1:9402"],
+                "MAS_{1}": ["http://127.0.0.1:9420"],
+                "AS_{1}": ["http://127.0.0.1:9440"],
             }
             assert len(_factory.adapters) == 3
             for _adp in _factory.adapters:
@@ -134,7 +134,7 @@ class TestDeployment:
             _adp.shutdown.assert_called_once()
 
     def test_bring_up_mesh_workers_spawns_n_per_spec(self) -> None:
-        """*test_bring_up_mesh_workers_spawns_n_per_spec()* `MeshSpec(workers=N)` mounts N adapters on consecutive ports and the URL list has N entries; offsets accumulate across specs."""
+        """*test_bring_up_mesh_workers_spawns_n_per_spec()* `MeshSpec(workers=N)` mounts N adapters inside the spec's `PORT_STRIDE` slot; the next spec starts at the next slot."""
         _factory = _AdapterFactory()
         _specs = [
             MeshSpec(svc_id="TAS", app_factory=_noop_app, workers=3),
@@ -147,8 +147,8 @@ class TestDeployment:
                 "TAS": ["http://127.0.0.1:9600",
                         "http://127.0.0.1:9601",
                         "http://127.0.0.1:9602"],
-                "MAS_{1}": ["http://127.0.0.1:9603",
-                            "http://127.0.0.1:9604"],
+                "MAS_{1}": ["http://127.0.0.1:9620",
+                            "http://127.0.0.1:9621"],
             }
             assert len(_factory.adapters) == 5
         for _adp in _factory.adapters:

@@ -15,6 +15,7 @@
 - *test_dispatch_breach_poll_sets_reason()*: a mocked breach trips `stop_reason_box[0]` to the breach reason.
 - *test_consumer_sentinel_exits_cleanly()*: a `None` tick exits the consumer without calling `run_one`.
 - *test_consumer_records_into_summaries()*: each tick produces one entry in the shared summaries list.
+- *test_consumer_infra_run_trips_stop()*: a consecutive run of transport-level outcomes trips `infra_failure`.
 - *test_drive_trial_drain_timeout_cancels_hanging_consumer()*: a consumer that never exits is cancelled after `drain_timeout_s`.
 
 The full calibration + experiment paths are integration code; `tests/demo/calibration.py` exercises them end-to-end and the notebook is the human-facing check.
@@ -64,6 +65,18 @@ class _HangingUser(_FakeUser):
                                status_code=200, total_latency_s=0.0)
 
 
+class _InfraUser(_FakeUser):
+    """`run_one()` always returns a transport-level (`drop`) outcome, as a dead worker would."""
+
+    async def run_one(self) -> Any:
+        self.calls += 1
+        return SimpleNamespace(req_id=f"{self.client_id}-r{self.calls}",
+                               kind="alarm",
+                               outcome="drop",
+                               status_code=0,
+                               total_latency_s=0.001)
+
+
 class TestExperimental:
     """Top-level `run()` dispatcher, admission lifts, and open-loop trial driver."""
 
@@ -95,8 +108,8 @@ class TestExperimental:
         _mocked.assert_called_once()
 
     def test_run_dispatches_both(self) -> None:
-        """*test_run_dispatches_both()* `stage='both'` calls `run_calibration` then `run_experiment` (envelope is threaded into the second call) and returns both keyed by stage."""
-        _calib: dict[str, Any] = {"calib": True, "gate": {"verifiable_range": {}}}
+        """*test_run_dispatches_both()* `stage='both'` calls `run_calibration` then `run_experiment` and returns both keyed by stage."""
+        _calib: dict[str, Any] = {"calib": True}
         _exp: dict[str, Any] = {"exp": True}
         with patch.object(experimental,
                           "run_calibration",
@@ -111,8 +124,6 @@ class TestExperimental:
         assert _ans == {"calibration": _calib, "experiment": _exp}
         _calib_mock.assert_called_once()
         _exp_mock.assert_called_once()
-        # The experiment must reuse the freshly produced envelope rather than re-discovering one.
-        assert _exp_mock.call_args.kwargs["envelope"] is _calib
 
     def test_run_unknown_stage_raises(self) -> None:
         """*test_run_unknown_stage_raises()* an unknown stage name is rejected immediately rather than silently doing nothing."""
@@ -293,6 +304,34 @@ class TestExperimental:
         assert len(_summaries) == 3
         assert {"req_id", "kind", "outcome", "status", "latency_s"} <= set(_summaries[0])
         assert _summaries[0]["status"] == 200
+
+    @pytest.mark.asyncio
+    async def test_consumer_infra_run_trips_stop(self,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+        """*test_consumer_infra_run_trips_stop()* `infra_threshold` consecutive transport-level outcomes set `stop_reason_box[0]` to `infra_failure` and trip `stop_event`."""
+        monkeypatch.setattr("src.experimental.procedure.experiment.User", _InfraUser)
+        _queue: asyncio.Queue[int | None] = asyncio.Queue()
+        for _i in range(10):
+            await _queue.put(_i)
+        await _queue.put(None)
+        _summaries: list[dict[str, Any]] = []
+        _reason_box = ["n_reached"]
+        _stop_event = asyncio.Event()
+        await experimental._consume_payloads(
+            consumer_id=0,
+            base_url="http://x",
+            queue=_queue,
+            summaries=_summaries,
+            summaries_lock=asyncio.Lock(),
+            stop_event=_stop_event,
+            p_alarm=0.25,
+            request_timeout_s=1.0,
+            seed=None,
+            stop_reason_box=_reason_box,
+            infra_threshold=3,
+        )
+        assert _reason_box[0] == "infra_failure"
+        assert _stop_event.is_set()
 
     @pytest.mark.asyncio
     async def test_drive_trial_drain_timeout_cancels_hanging_consumer(self,

@@ -23,6 +23,7 @@ from src.experimental.procedure.bounds import (
     validate_experimental_limits,
 )
 from src.experimental.procedure.deployment import (
+    PORT_STRIDE,
     Dpl,
     Framework,
     MeshSpec,
@@ -89,6 +90,7 @@ def _build_mesh_specs(*,
                       admission_lt: dict[str, dict[str, int]] | None = None,
                       framework: Framework = "fastapi",
                       workers_lt: dict[str, int] | None = None,
+                      tas_workers: int = 1,
                       ) -> tuple[list[MeshSpec], list[str], list[str]]:
     """Lay out the TAS mesh.
 
@@ -114,6 +116,7 @@ def _build_mesh_specs(*,
         admission_lt (dict | None, optional): `{svc_id: {"c": int, "k": int}}` from `profile.specs`. When set, each atomic gets its per-svc cap; falls through to `atomic_admission` per-key when the profile is silent. Defaults to None (use the global `atomic_admission` for every atomic).
         framework (Framework, optional): server stack picking the FastAPI or Flask app factories. Defaults to `"fastapi"`.
         workers_lt (dict[str, int] | None, optional): per-svc `w_proc` from `profile.specs`; scales each atomic's `(c, K)`. Defaults to None (`w_proc = 1` everywhere).
+        tas_workers (int, optional): number of TAS composite worker processes; `> 1` spreads request flows across processes for multi-core parallelism. Defaults to 1.
 
     Returns:
         tuple[list[MeshSpec], list[str], list[str]]: spec list + sorted third-party atomic ids + sorted internal-stage ids (empty list in collapsed mode).
@@ -131,24 +134,24 @@ def _build_mesh_specs(*,
         raise ValueError(_msg)
 
     # One process per atomic; w_proc scales (c, K) so deployed capacity matches the old multi-worker mesh.
-    _tas_first_port = base_port
-
+    # Services bind on the PORT_STRIDE grid by spec index: TAS at index 0,
+    # internal stages next (expanded only), then the third-party atomics.
     if _is_expanded:
-        _internal_first_port = _tas_first_port + 1
-        _atomic_first_port = _internal_first_port + len(_INTERNAL_STAGE_IDS)
+        _first_atomic_idx = 1 + len(_INTERNAL_STAGE_IDS)
     else:
-        _internal_first_port = _tas_first_port + 1  # unused in collapsed
-        _atomic_first_port = _tas_first_port + 1
+        _first_atomic_idx = 1
 
     _atomic_url_lt: dict[str, list[str]] = {}
     for _i, _svc_id in enumerate(_atomic_ids):
-        _atomic_url_lt[_svc_id] = [f"http://{host}:{_atomic_first_port + _i}"]
+        _port = base_port + (_first_atomic_idx + _i) * PORT_STRIDE
+        _atomic_url_lt[_svc_id] = [f"http://{host}:{_port}"]
 
     _internal_url_lt: dict[str, list[str]] | None = None
     if _is_expanded:
         _internal_url_lt = {}
         for _i, _stage_id in enumerate(_INTERNAL_STAGE_IDS):
-            _internal_url_lt[_stage_id] = [f"http://{host}:{_internal_first_port + _i}"]
+            _port = base_port + (1 + _i) * PORT_STRIDE
+            _internal_url_lt[_stage_id] = [f"http://{host}:{_port}"]
 
     if framework == "flask":
         _build_tas = build_tas_flask_app
@@ -173,7 +176,7 @@ def _build_mesh_specs(*,
     )
     _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS",
                                        app_factory=_tas_factory,
-                                       workers=1)]
+                                       workers=max(1, tas_workers))]
 
     if _is_expanded:
         # Internal stages (TAS_{2..6}) come right after TAS_1 on consecutive ports.
@@ -850,7 +853,8 @@ def run_experiment(*,
                    target_cfg: dict[str, Any] | None = None,
                    skip_bounds_check: bool = False,
                    target_granularity: str | None = None,
-                   inject_internal_stage_mu: bool | None = None) -> dict[str, Any]:
+                   inject_internal_stage_mu: bool | None = None,
+                   tas_workers: int | None = None) -> dict[str, Any]:
     """Mount the TAS topology, drive one trial, write the per-request + per-service logs.
 
     Reads `target.json` for bindings, validates the planned operating point against the `experimental.json::trial` ceiling (unless skipped), brings the mesh up, drives `trial.n_requests` requests through one synthetic user, and appends a row to `runs.parquet`.
@@ -866,6 +870,7 @@ def run_experiment(*,
         skip_bounds_check (bool, optional): skip the ceiling check. Defaults to False.
         target_granularity (str | None, optional): `collapsed` or `expanded`. Overrides `target.json::target_granularity` when set; falls through to the JSON value when None.
         inject_internal_stage_mu (bool | None, optional): when True (and expanded), TAS_{2..6} sleep on mu. Overrides `target.json::inject_internal_stage_mu` when set; falls through to the JSON value when None.
+        tas_workers (int | None, optional): number of TAS composite worker processes. Overrides `target.json::tas_workers` when set; falls through to the JSON value when None.
 
     Returns:
         dict[str, Any]: run summary (`run_id`, `adp`, `dpl`, `n_requests`, `outcome_counts`, `paths`, `bounds`, `target_granularity`).
@@ -905,6 +910,11 @@ def run_experiment(*,
     else:
         _inject_mu = bool(_cfg.get("inject_internal_stage_mu", False))
 
+    if tas_workers is not None:
+        _tas_workers = max(1, tas_workers)
+    else:
+        _tas_workers = max(1, int(_cfg.get("tas_workers", 1)))
+
     # Pick the workflow file matching the chosen mode.
     _workflows_map = _cfg.get("workflows")
     if isinstance(_workflows_map, dict) and _granularity in _workflows_map:
@@ -934,6 +944,7 @@ def run_experiment(*,
         admission_lt=_admission_lt,
         framework=framework,
         workers_lt=_workers_lt,
+        tas_workers=_tas_workers,
     )
     _mesh_admission = _build_mesh_admission(atomic_ids=_atomic_ids,
                                             admission_lt=_admission_lt,
@@ -1029,6 +1040,7 @@ def run_experiment(*,
         "framework": framework,
         "target_granularity": _granularity,
         "inject_internal_stage_mu": _inject_mu,
+        "tas_workers": _tas_workers,
         "n_requests": len(_summaries),
         "n_success": _outcome_counts.get("success", 0),
         "n_timeout": _outcome_counts.get("timeout", 0),
@@ -1049,6 +1061,7 @@ def run_experiment(*,
         "framework": framework,
         "target_granularity": _granularity,
         "inject_internal_stage_mu": _inject_mu,
+        "tas_workers": _tas_workers,
         "n_requests": len(_summaries),
         "outcome_counts": _outcome_counts,
         "atomic_ids": _atomic_ids,

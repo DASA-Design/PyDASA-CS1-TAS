@@ -31,7 +31,6 @@ from pathlib import Path
 import pandas as pd
 
 from src.experimental.procedure.experiment import run_experiment
-from src.experimental.prototype.runtime.cleanup import cleanup_calibration_ports
 from src.io.config import load_method_cfg, load_reference
 
 # The benchmark is an apparatus probe: data + figures sit beside calibration.
@@ -44,9 +43,6 @@ _BENCH_GLOB = "_bench_*.csv"
 ADAPTATIONS = ("baseline", "s1", "s2", "aggregate")
 FRAMEWORKS = ("fastapi", "flask")
 GRANULARITIES = ("collapsed", "expanded")
-
-# Port ranges swept clean between trials to avoid TIME_WAIT / orphan collisions.
-_CLEANUP_PORTS = list(range(8001, 8050)) + list(range(9001, 9050))
 
 _BENCH_FIELDS = (
     "adp", "framework", "granularity", "trial",
@@ -71,8 +67,8 @@ def _run_one_trial(adp: str,
     Returns:
         dict: headline metrics (`X_0`, `R_s_ms`, `T_s`, `A`, `C`, `F`, `r1`, `r2_ms`, `stop`) on success, or `{"error": <msg>}` on failure.
     """
-    cleanup_calibration_ports(ports=_CLEANUP_PORTS,
-                              verbose=False)
+    # Leftover workers from a crashed prior trial are reaped by the spawn
+    # registry at the next `bring_up_mesh` (inside `run_experiment`).
     _cell = f"{adp}_{framework}_{granularity}"
     _verdict_path = _EXPERIMENT_DIR / _cell / "verdict.json"
     _result: dict = {}

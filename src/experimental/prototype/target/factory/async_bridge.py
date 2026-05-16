@@ -49,6 +49,8 @@ class AsyncLoopThread:
     def submit(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run a coroutine on the worker loop and block until it resolves.
 
+        For sync callers (Flask / WSGI handlers). Async callers use `submit_async` so their own loop stays free.
+
         Args:
             coro (Coroutine[Any, Any, T]): coroutine to drive.
 
@@ -60,6 +62,23 @@ class AsyncLoopThread:
         """
         _fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
         return _fut.result()
+
+    async def submit_async(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run a coroutine on the worker loop; await the result from the caller's loop.
+
+        The async sibling of `submit`: instead of blocking the calling thread, it suspends the calling coroutine so the caller's own event loop stays free to do other work while the worker loop drives `coro`. For async callers (FastAPI / ASGI handlers).
+
+        Args:
+            coro (Coroutine[Any, Any, T]): coroutine to drive on the worker loop.
+
+        Returns:
+            T: whatever the coroutine returned.
+
+        Raises:
+            BaseException: re-raises whatever the coroutine raised.
+        """
+        _fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return await asyncio.wrap_future(_fut)
 
     def shutdown(self) -> None:
         """Stop the loop and join the worker thread."""

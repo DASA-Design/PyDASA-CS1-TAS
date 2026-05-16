@@ -31,7 +31,9 @@
             "operation": "changeDose"
         }
     },
-    "tas_base_port": 8001,
+    "tas_base_port": 8000,
+    "_note_tas_workers": "Number of TAS composite worker processes. >1 spreads the concurrent request flows across processes for real multi-core parallelism (each process owns its event loop); the open-loop driver round-robins consumers across them and every worker appends to the shared flow JSONL. They take consecutive ports inside the TAS slot (8000, 8001, ...).",
+    "tas_workers": 1,
     "host": "127.0.0.1",
     "_note_ready_timeout": "Bumped from 20s to 90s because each iteration of the experimental grid now spawns up to ~32 uvicorn / waitress worker processes (8 services x w=4 workers in collapsed, 13 x w=4 in expanded). The host CPU thrashes during the cold-start storm so individual workers can take 30s+ to pass /healthz under load.",
     "ready_timeout_s": 90.0,

@@ -7,7 +7,7 @@ The composite app exposes:
 - `POST /config`: accepts `{picker_name, op_weights, max_attempts, window_size}` and installs the corresponding strategy picker on the live workflow engine.
 - `GET /healthz`: readiness probe.
 
-The `ServiceCache` is built at app construction time from the `url_lt` mapping (`svc_id -> base URL`). The FastAPI variant uses `lifespan` to own the `ServiceClient`; the Flask variant runs everything on a dedicated `AsyncLoopThread` so the engine, picker, and httpx client share one event loop across waitress worker threads.
+The `ServiceCache` is built at app construction time from the `url_lt` mapping (`svc_id -> base URL`). Both variants run the composite (engine, picker, httpx client) on a dedicated `AsyncLoopThread` so its outbound atomic I/O never contends with the server's inbound-request loop: FastAPI's `lifespan` opens the loop and routes dispatch through it, the Flask variant shares one loop across waitress worker threads.
 
 Both factories are top-level and `functools.partial`-bindable so they pickle across `multiprocessing.spawn` on Windows.
 """
@@ -252,8 +252,9 @@ class TasFastapiRoutes(TasRoutesBase):
             JSONResponse: workflow body + status returned by `CompositeService.invoke_operation`.
         """
         _composite: CompositeService = self._app.state.composite
+        _loop: AsyncLoopThread = self._app.state.dispatch_loop
         _t_start = time.time()
-        _body, _status = await _composite.invoke_operation(payload)
+        _body, _status = await _loop.submit_async(_composite.invoke_operation(payload))
         _t_end = time.time()
         if self._flows_writer is not None:
             _write_flow_record(writer=self._flows_writer,
@@ -304,6 +305,28 @@ class TasFastapiRoutes(TasRoutesBase):
         return {"applied": True, "picker_name": str(body.get("picker_name", "first_of_kind"))}
 
 
+async def _open_dispatch_composite(*,
+                                   cache: ServiceCache,
+                                   engine: WorkflowEngine,
+                                   timeout_s: float) -> CompositeService:
+    """Open a `ServiceClient` and wrap it in a `CompositeService` ready for dispatch.
+
+    Must be driven on the loop that will own the composite's outbound I/O: the FastAPI lifespan submits it to the dedicated dispatch loop so the `httpx.AsyncClient` is bound there (Lever P1). Pre-warms one keep-alive connection per atomic before returning.
+
+    Args:
+        cache (ServiceCache): the resolved svc-id-to-endpoint cache.
+        engine (WorkflowEngine): the workflow engine driving dispatch.
+        timeout_s (float): per-dispatch HTTP timeout.
+
+    Returns:
+        CompositeService: composite bound to an open client, atomic connections pre-warmed.
+    """
+    _client = ServiceClient(client_id="TAS", cache=cache, timeout_s=timeout_s)
+    await _client.__aenter__()
+    await _prewarm_atomic_connections(_client, cache)
+    return CompositeService(service_name="TAS", workflow=engine, client=_client)
+
+
 @asynccontextmanager
 async def _tas_lifespan_factory(app: FastAPI,
                                 *,
@@ -312,12 +335,12 @@ async def _tas_lifespan_factory(app: FastAPI,
                                 timeout_s: float,
                                 samples_buffer_size: int,
                                 flows_writer: JsonlWriter | None) -> AsyncIterator[None]:
-    """Open the dispatch client and composite on startup; close them on shutdown.
+    """Open the dispatch client + composite on a dedicated loop thread; close them on shutdown.
 
-    Initialises `app.state.recent_samples` (rolling sample buffer the controller pulls) and `app.state.sample_offset` (monotonically-increasing counter for `?since=` lookups), then opens the `ServiceClient` inside `async with` so its `httpx.AsyncClient` lives across requests.
+    The composite's outbound httpx I/O runs on its own `AsyncLoopThread`, never on uvicorn's inbound-request loop (Lever P1): a fast atomic response is picked up at once instead of queueing behind dozens of inbound coroutines. Also initialises `app.state.recent_samples` (the rolling sample buffer the controller pulls) and `app.state.sample_offset`.
 
     Args:
-        app (FastAPI): the app being started; `app.state.composite`, `recent_samples`, and `sample_offset` are populated for the route handlers.
+        app (FastAPI): the app being started; `app.state.composite`, `dispatch_loop`, `recent_samples`, and `sample_offset` are populated for the route handlers.
         cache (ServiceCache): the resolved svc-id-to-endpoint cache.
         engine (WorkflowEngine): the workflow engine driving dispatch.
         timeout_s (float): per-dispatch HTTP timeout.
@@ -327,17 +350,20 @@ async def _tas_lifespan_factory(app: FastAPI,
     Yields:
         None: control returns to FastAPI while the app serves requests.
     """
-    _client = ServiceClient(client_id="TAS", cache=cache, timeout_s=timeout_s)
     app.state.recent_samples = deque(maxlen=samples_buffer_size)
     app.state.sample_offset = 0
-    async with _client:
-        app.state.composite = CompositeService(service_name="TAS",
-                                               workflow=engine,
-                                               client=_client)
-        await _prewarm_atomic_connections(_client, cache)
+    _loop = AsyncLoopThread()
+    app.state.dispatch_loop = _loop
+    app.state.composite = await _loop.submit_async(
+        _open_dispatch_composite(cache=cache, engine=engine, timeout_s=timeout_s))
+    try:
         yield
-    if flows_writer is not None:
-        flows_writer.close()
+    finally:
+        _client = app.state.composite.client
+        await _loop.submit_async(_client.__aexit__(None, None, None))
+        _loop.shutdown()
+        if flows_writer is not None:
+            flows_writer.close()
 
 
 async def _prewarm_atomic_connections(client: ServiceClient,

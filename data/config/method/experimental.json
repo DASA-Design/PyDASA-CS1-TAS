@@ -27,13 +27,19 @@
     "dpl": null,
     "run_label": null,
     "trial": {
-        "_note_rate": "request_rate_per_s = 248 matches `lambda_z` = TAS_{1}.lambda_z in `data/config/profile/dflt.json` (the case-study design point). The latest calibration on this host measured a per-worker saturation knee at ~328 req/s, so the envelopes under `data/results/calibration/<dpl>/` were manually bumped to `r_max_req_s = 350` to keep the bounds gate aligned with the case-study design rather than the host's hardware ceiling. The undershoot (real throughput < 248) lands in `verdict.operational.X_0_req_per_s` for stage 9 to see.",
+        "_note_rate": "request_rate_per_s = 248 matches `lambda_z` = TAS_{1}.lambda_z in `data/config/profile/dflt.json` (the case-study design point). The undershoot (real throughput < 248) lands in `verdict.operational.X_0_req_per_s` for stage 9 to see.",
         "_note_open_loop": "The trial driver is open-loop (producer/consumer over an asyncio.Queue): a dispatcher pushes ticks at request_rate_per_s regardless of how fast the server replies; consumer_pool_size consumers drain the queue, each running its own User + httpx pool. The in-flight ceiling equals consumer_pool_size (one in-flight per consumer at a time), so keep it below httpx's max_connections=100 default to avoid pool throttling. When the server saturates, the queue grows; on hitting max_queue_depth the dispatcher blocks at queue.put() so saturation surfaces as an offered-rate undershoot in verdict.operational.X_0_req_per_s. drain_timeout_s caps the wait for in-flight consumers at trial end.",
+        "_note_bounds": "r_max / c_max / w_max are the operating ceiling the experiment is checked against by procedure/bounds.py before a run. The ceiling lives here (not in a calibration envelope) so run_experiment is self-contained and consults no tuning output. r_max = 350 reflects the per-worker saturation knee calibration measured on this host (~328-350 req/s); request_rate_per_s = 248 sits inside it. A null axis is unbounded (that axis is skipped). c_max / w_max are null because the open-loop driver does not currently request a per-worker c or a worker count w. --skip-bounds-check / skip_bounds_check=True bypasses the check entirely.",
+        "_note_infra": "infra_consecutive_threshold = consecutive transport-level failures (timeout / drop) on a single consumer that trip the `infra_failure` stop in the open-loop driver; a dead worker produces an unbroken run, so this separates apparatus faults from architecture failures.",
         "n_requests": 200,
         "request_rate_per_s": 248,
+        "r_max": 350,
+        "c_max": null,
+        "w_max": null,
         "consumer_pool_size": 64,
         "max_queue_depth": 1000,
         "drain_timeout_s": 60.0,
+        "infra_consecutive_threshold": 20,
         "kind_probability": {
             "alarm": 0.25,
             "medical_analysis": 0.75
