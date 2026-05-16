@@ -14,6 +14,7 @@ Both factories are top-level and `functools.partial`-bindable so they pickle acr
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from abc import ABC, abstractmethod
@@ -52,6 +53,13 @@ from src.experimental.prototype.target.workflow.loader import (
 )
 
 DFLT_SAMPLES_BUFFER_SIZE = 1024
+
+# Default cap on concurrent workflow dispatches inside one FastAPI composite
+# process. Bounds how many `invoke_operation` coroutines run at once on the
+# dispatch loop; the Flask variant gets the same bound for free from the
+# waitress thread pool. ~8 keeps the loop's run-queue shallow enough that an
+# atomic response is picked up fast instead of queueing behind dozens of flows.
+DFLT_DISPATCH_CONCURRENCY = 8
 
 
 def filter_catalogue_to_mesh(catalogue: ServiceCatalogue,
@@ -253,8 +261,12 @@ class TasFastapiRoutes(TasRoutesBase):
         """
         _composite: CompositeService = self._app.state.composite
         _loop: AsyncLoopThread = self._app.state.dispatch_loop
+        _sem: asyncio.Semaphore = self._app.state.dispatch_sem
         _t_start = time.time()
-        _body, _status = await _loop.submit_async(_composite.invoke_operation(payload))
+        # Cap concurrent dispatches: an over-the-cap request waits here on
+        # uvicorn's loop rather than dog-piling the dispatch loop.
+        async with _sem:
+            _body, _status = await _loop.submit_async(_composite.invoke_operation(payload))
         _t_end = time.time()
         if self._flows_writer is not None:
             _write_flow_record(writer=self._flows_writer,
@@ -334,17 +346,19 @@ async def _tas_lifespan_factory(app: FastAPI,
                                 engine: WorkflowEngine,
                                 timeout_s: float,
                                 samples_buffer_size: int,
+                                dispatch_concurrency: int,
                                 flows_writer: JsonlWriter | None) -> AsyncIterator[None]:
     """Open the dispatch client + composite on a dedicated loop thread; close them on shutdown.
 
-    The composite's outbound httpx I/O runs on its own `AsyncLoopThread`, never on uvicorn's inbound-request loop (Lever P1): a fast atomic response is picked up at once instead of queueing behind dozens of inbound coroutines. Also initialises `app.state.recent_samples` (the rolling sample buffer the controller pulls) and `app.state.sample_offset`.
+    The composite's outbound httpx I/O runs on its own `AsyncLoopThread`, never on uvicorn's inbound-request loop (Lever P1): a fast atomic response is picked up at once instead of queueing behind dozens of inbound coroutines. A `dispatch_sem` caps how many dispatches run at once, so the dispatch loop's run-queue stays shallow. Also initialises `app.state.recent_samples` (the rolling sample buffer the controller pulls) and `app.state.sample_offset`.
 
     Args:
-        app (FastAPI): the app being started; `app.state.composite`, `dispatch_loop`, `recent_samples`, and `sample_offset` are populated for the route handlers.
+        app (FastAPI): the app being started; `app.state.composite`, `dispatch_loop`, `dispatch_sem`, `recent_samples`, and `sample_offset` are populated for the route handlers.
         cache (ServiceCache): the resolved svc-id-to-endpoint cache.
         engine (WorkflowEngine): the workflow engine driving dispatch.
         timeout_s (float): per-dispatch HTTP timeout.
         samples_buffer_size (int): max records retained in `recent_samples`.
+        dispatch_concurrency (int): cap on concurrent `invoke_operation` dispatches.
         flows_writer (JsonlWriter | None): writer to close on shutdown; None when no JSONL output is configured.
 
     Yields:
@@ -352,6 +366,7 @@ async def _tas_lifespan_factory(app: FastAPI,
     """
     app.state.recent_samples = deque(maxlen=samples_buffer_size)
     app.state.sample_offset = 0
+    app.state.dispatch_sem = asyncio.Semaphore(max(1, dispatch_concurrency))
     _loop = AsyncLoopThread()
     app.state.dispatch_loop = _loop
     app.state.composite = await _loop.submit_async(
@@ -390,7 +405,8 @@ def build_tas_fastapi_app(*,
                           run_id: str | None = None,
                           timeout_s: float = DFLT_TIMEOUT_S,
                           internal_url_lt: Mapping[str, str | list[str]] | None = None,
-                          samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE) -> FastAPI:
+                          samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE,
+                          dispatch_concurrency: int = DFLT_DISPATCH_CONCURRENCY) -> FastAPI:
     """Build the composite TAS FastAPI app over a fixed atomic-endpoint mesh.
 
     Args:
@@ -402,6 +418,7 @@ def build_tas_fastapi_app(*,
         timeout_s (float, optional): per-dispatch HTTP timeout. Defaults to `DFLT_TIMEOUT_S`.
         internal_url_lt (dict[str, str] | None, optional): mapping `svc_id -> base URL` for the internal-stage atomics (`TAS_{2..6}`); None in collapsed mode. When set, the `ServiceCache` carries both maps so the engine can dispatch by either step-form.
         samples_buffer_size (int, optional): max records retained in `app.state.recent_samples`. The controller pulls them via `GET /samples`. Defaults to `DFLT_SAMPLES_BUFFER_SIZE` (1024).
+        dispatch_concurrency (int, optional): cap on concurrent workflow dispatches. Defaults to `DFLT_DISPATCH_CONCURRENCY` (8).
 
     Returns:
         FastAPI: configured composite app with `POST /`, `GET /samples`, `POST /config`, and `GET /healthz`.
@@ -435,6 +452,7 @@ def build_tas_fastapi_app(*,
                                      engine=_engine,
                                      timeout_s=timeout_s,
                                      samples_buffer_size=samples_buffer_size,
+                                     dispatch_concurrency=dispatch_concurrency,
                                      flows_writer=_flows_writer)
 
     _app = FastAPI(lifespan=_lifespan)
@@ -535,11 +553,13 @@ def build_tas_flask_app(*,
                         run_id: str | None = None,
                         timeout_s: float = DFLT_TIMEOUT_S,
                         internal_url_lt: Mapping[str, str | list[str]] | None = None,
-                        samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE) -> Flask:
+                        samples_buffer_size: int = DFLT_SAMPLES_BUFFER_SIZE,
+                        dispatch_concurrency: int = DFLT_DISPATCH_CONCURRENCY) -> Flask:
     """Flask twin of `build_tas_fastapi_app`. Same routes, same on-disk schema (`flows/*.jsonl`).
 
-    Args mirror the FastAPI factory. The Flask body runs the composite (engine + httpx client) on a dedicated `AsyncLoopThread` so engine state and the dispatch client live on one event loop across waitress worker threads.
+    Args mirror the FastAPI factory. The Flask body runs the composite (engine + httpx client) on a dedicated `AsyncLoopThread` so engine state and the dispatch client live on one event loop across waitress worker threads. `dispatch_concurrency` is accepted for signature parity with the FastAPI factory but unused: Flask's concurrency bound is the waitress thread pool (`server.waitress.threads`), not a semaphore.
     """
+    _ = dispatch_concurrency  # accepted for parity; Flask bounds via waitress threads
     _all_urls: dict[str, str | list[str]] = dict(url_lt)
     if internal_url_lt is not None:
         _all_urls.update(internal_url_lt)

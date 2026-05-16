@@ -48,6 +48,7 @@ from src.experimental.prototype.target.factory.internal_stage import (
     build_internal_stage_flask_app,
 )
 from src.experimental.prototype.target.factory.tas import (
+    DFLT_DISPATCH_CONCURRENCY,
     build_tas_fastapi_app,
     build_tas_flask_app,
 )
@@ -91,6 +92,7 @@ def _build_mesh_specs(*,
                       framework: Framework = "fastapi",
                       workers_lt: dict[str, int] | None = None,
                       tas_workers: int = 1,
+                      dispatch_concurrency: int = DFLT_DISPATCH_CONCURRENCY,
                       ) -> tuple[list[MeshSpec], list[str], list[str]]:
     """Lay out the TAS mesh.
 
@@ -117,6 +119,7 @@ def _build_mesh_specs(*,
         framework (Framework, optional): server stack picking the FastAPI or Flask app factories. Defaults to `"fastapi"`.
         workers_lt (dict[str, int] | None, optional): per-svc `w_proc` from `profile.specs`; scales each atomic's `(c, K)`. Defaults to None (`w_proc = 1` everywhere).
         tas_workers (int, optional): number of TAS composite worker processes; `> 1` spreads request flows across processes for multi-core parallelism. Defaults to 1.
+        dispatch_concurrency (int, optional): per-composite cap on concurrent workflow dispatches. Defaults to `DFLT_DISPATCH_CONCURRENCY`.
 
     Returns:
         tuple[list[MeshSpec], list[str], list[str]]: spec list + sorted third-party atomic ids + sorted internal-stage ids (empty list in collapsed mode).
@@ -173,6 +176,7 @@ def _build_mesh_specs(*,
         run_id=run_id,
         timeout_s=request_timeout_s,
         internal_url_lt=_internal_url_lt,
+        dispatch_concurrency=dispatch_concurrency,
     )
     _specs: list[MeshSpec] = [MeshSpec(svc_id="TAS",
                                        app_factory=_tas_factory,
@@ -914,6 +918,8 @@ def run_experiment(*,
         _tas_workers = max(1, tas_workers)
     else:
         _tas_workers = max(1, int(_cfg.get("tas_workers", 1)))
+    _dispatch_concurrency = max(1, int(_cfg.get("tas_dispatch_concurrency",
+                                                DFLT_DISPATCH_CONCURRENCY)))
 
     # Pick the workflow file matching the chosen mode.
     _workflows_map = _cfg.get("workflows")
@@ -945,6 +951,7 @@ def run_experiment(*,
         framework=framework,
         workers_lt=_workers_lt,
         tas_workers=_tas_workers,
+        dispatch_concurrency=_dispatch_concurrency,
     )
     _mesh_admission = _build_mesh_admission(atomic_ids=_atomic_ids,
                                             admission_lt=_admission_lt,
