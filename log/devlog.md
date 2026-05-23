@@ -2036,7 +2036,70 @@ Three first-class items carried into next session ([[next-session-todos-2026-05-
 
 Memory entries written: `project_report_a_drafted_2026_05_14.md`, `project_locked_routing_2026_05_13.md`, `project_next_session_todos_2026_05_14.md`. MEMORY.md index + CLAUDE.md (notebook conventions, canonical DC bounds) updated.
 
+## 2026-05-14 — Report C drafted end-to-end (experimental falsification chapter)
+
+Drafted `notes/report-C.md` from the existing `notes/report-C-outline.md` outline — 14 sections, ~800 lines of markdown. Mirrors Report A's chapter-grade prose style but for the experimental half of CS-1. Companion to `notes/ch08-apparatus-outline.md` (which documents the apparatus as a research tool for the dissertation's ch08-evaluation subsection).
+
+Substantive findings derived from the existing data at `data/results/experimental/<adp>_<fw>_<gr>/` (16 cells already produced):
+
+- **F-C.1 Apparatus-error budget is small relative to measured scales.** Calibration precision band (~450 µs total) is two orders of magnitude smaller than the response-time scales the 16-run grid measures (30–880 ms). The chapter's `gate.passed=False` flag is documented as a limitation rather than a blocker.
+- **F-C.3 Predicted verdict is not testable at the model's design rate on this prototype.** All 16 cells achieve $X_0 \in [3.05, 45.61]$ req/s against the model's $\lambda_z = 345$ req/s. Calibration shows per-worker saturation at 456–616 req/s (above the design point), so the constraint is **multi-hop topology times bounded driver concurrency**, not raw single-worker throughput. R1 ranges 6.5–72.3 % (vs model 0.00 %), R2 ranges 30.7–876.2 ms (vs model ≤ 3.6 ms). Every cell fails R1 and R2 by wide margins; the rate-scale gap is the dominant explanation.
+- **F-C.4 Architectural invariance fails — granularity dominates framework.** Granularity-pair $\Delta$ R1 ranges +16 to +57 pp; framework-pair $\Delta$ R1 ranges +5 to +20 pp. Granularity is roughly $3\times$ framework on R1 and $5\times$ on R2. Expanding from one composite to thirteen services adds six HTTP hops per request; the per-hop queueing interference amplifies failure rate beyond what the model's per-call $\varepsilon_j$ predicts.
+- **F-C.5 Cost-per-evidence is asymmetric.** Report A's three model iterations produced 24 PASS verdicts at notebook cost; Report C's apparatus produced 16 FAIL verdicts plus the rate-scale finding at ~10$\times$ the wall-clock + engineering cost. The two methods are complementary cost regimes, not substitutes — the dissertation §7.3 cross-case comparison should fold this into "when each is the right tool".
+- **F-C.6 Where measured diverges from predicted, the gap is the finding.** The 16-cell grid does not falsify Report A's predictions in the strict sense; it falsifies the *testability* of those predictions on this stack. Named follow-ups (remote deployment, UDS upgrade, rate-rescaling) are the engineering closure path.
+
+Falsification verdict has three layers:
+- L1: prediction not directly testable at design rate on this prototype.
+- L2: framework + granularity invariance both falsified at the prototype's accessible rates.
+- L3: qualitative preference-ordering between adaptations matches Report A's prediction, even where absolute values do not — partial confirmation.
+
+Three named follow-ups (mirroring next-session TODOs):
+1. Remote deployment (stage 8.1, [[next-session-todos-2026-05-14]] item 2) — closes the rate-scale gap.
+2. Rate-rescaling sensitivity sweep — re-run Report A at $\lambda_z = 50$ req/s for direct predicted-vs-measured comparison at matched rate (cheap analytical bridge).
+3. Cross-case synthesis with CS-2 (IoT-SDP) at dissertation §7.3.
+
+`notes/report-C-outline.md` was drafted earlier (other-agent scope, full chapter outline); `notes/report-C.md` is the body realisation. Two coordinated files now exist: outline (planning) + body (chapter draft). Companion file `notes/ch08-apparatus-outline.md` carries the parallel apparatus-documentation outline for the dissertation's ch08-evaluation subsection (separate scope: documents the apparatus as a research tool, not the falsification verdict).
+
 ## Open questions
 
 - Does PyDASA 0.3.2 already expose the π-group builders this case study needs, or do we need helpers in local `src/`?
 - Calibration notebook (`CS-01X`) — keep as separate deliverable or fold into `CS-01A`?
+
+## 2026-05-15 — Benchmark relocation + apparatus tooling fixes
+
+Tooling / bugfix session, no research findings.
+
+- **Multi-trial benchmark moved into the calibration notebook.** The 16-cell x N-trial apparatus benchmark left `05-experimental.ipynb` and became section 5 of `00-calibration.ipynb` (it characterises the apparatus, sibling to calibration). Logic consolidated in `src/experimental/procedure/bench.py` (`run_bench` / `summarize_bench` / `save_bench_summary` / `profile_stages`); plotters in `src/view/bench.py`. Output: data under `BENCH_DATA_DIR` = `data/results/calibration/bench/`, figures under `BENCH_IMG_DIR` = `data/img/calibration/bench/` (both public constants). `summarize_bench` loads R1/R2 + design `lambda_z` from config and attaches them to the frame's `.attrs`; the plotters read thresholds + axes off the frame and carry no constants. Temp scripts `_bench_16cells.py` / `_profile_344ms.py` / `_sweep_grace.py` deleted.
+- **`methods/experimental.py` private re-exports stripped by an editor autofix.** A ruff/autoflake "remove unused import" autofix-on-save deleted the test-monkeypatch private re-exports (`_resolve_admission`, `_drive_trial`, ...), causing 10 `AttributeError` test failures. Fixed by listing every re-exported private name in `__all__` so linters treat them as used.
+- **`cleanup_calibration_ports` crashed the Jupyter kernel.** It killed *every* process LISTENING on a port in the swept range (`run_bench` swept 8001-8049 + 9001-9049); a kernel ZMQ port landed in-range, so `proc.kill()` hit the kernel — surfaced as "The Kernel crashed", no traceback. Fixed to kill only descendants of the current process (workers we spawned); ancestors (kernel, VS Code server, shell) and strangers are never touched.
+- **Bounds gate is per-dpl.** `05-experimental.ipynb` runs `DPL="multiprocess"`; `run_experiment` -> `_maybe_check_bounds` reads `find_latest_envelope("multiprocess")`, whose measured `r_max_req_s` is noisy run-to-run (136..590). A run that lands below `lambda_z=248` raises `EnvelopeExceededError`. The grid cell now passes `skip_bounds_check=True`, matching `experimental.json::trial._note_rate` design intent (drive the design rate, let undershoot land in `verdict.operational.X_0_req_per_s`).
+
+Full pytest: 575 passed.
+
+## 2026-05-16 — collapsed_staged granularity + w_proc as process count
+
+Tooling session, two apparatus changes. No research findings.
+
+### `collapsed_staged` — a third target granularity
+
+The collapsed run could not produce per-stage TAS_{2..6} data (those stages are workflow code inside TAS_1, not processes); expanded produces it but at the cost of five extra processes and six HTTP hops. `collapsed_staged` is the middle option: the collapsed mesh (TAS_1 + 7 third-party atomics, no extra processes) plus per-stage timing reconstructed post-hoc.
+
+- **Engine** (`WorkflowEngine`): new `stage_route_lt` (operation -> internal-stage id). When set, `_dispatch` brackets each step — stamp `t_in`, run the dispatch, stamp `t_out`, append a synthetic `WorkflowStep` for the internal stage spanning `[t_in, t_out]`. No mu-sleep: TAS internal stages are passthroughs (mu is only for third-party atomics), consistent with `inject_internal_stage_mu=false`.
+- The stage entries ride the existing audit path: `body.workflow.steps` -> composite flow JSONL `steps`.
+- **Aggregator** (`observed_nodes_from_run`): new `staged_flows_path` / `staged_stage_ids`. `_staged_stage_rows` walks the flow JSONL and derives TAS_{2..6} rows — A/C from the bracket count, W = mean span, lambda = A/T_s, L = lambda*W. `mu` / `rho` are NaN and `c` / `K` are None, because an internal stage is a passthrough, not an M/M/c/K station.
+- `target.json::workflows` maps `collapsed_staged -> tas` (reuses the collapsed workflow file; `stage_route_lt` is built by inverting `target.json::stage_routes`). `_op_to_stage_lt` does the inversion.
+- Plain `collapsed` / `expanded` are untouched: `stage_route_lt` is None for them, so no brackets are emitted.
+- `05-experimental.ipynb` cell 5 passes `staged_flows_path` when the run reports `staged_stage_ids`; `GRANULARITIES` stays `["collapsed"]` (flip to opt in).
+
+### `w_proc` is now the worker-process count, not a (c, K) multiplier
+
+Previously `w_proc` scaled one process's `(c, K)` to `(c*w, K*w)` — which silently modelled `w` separate processes as one pooled M/M/(c*w)/(K*w) station (shared queue). They are not: `w` processes each own a private event loop and a private admission queue (split queues). `c=1, w_proc=2` is two independent single-server queues, not a `c=2` station.
+
+- `_w_proc` returns the process count, clamped to `[1, MAX_WORKERS]` (`MAX_WORKERS = 8`).
+- `_build_mesh_specs`: every service (TAS_1, internal stages, atomics) spawns `w_proc` processes via `MeshSpec.workers`. New `_slot_urls` enumerates all `w_proc` worker URLs inside the service's `PORT_STRIDE` slot so the composite's `ServiceClient` round-robins across them.
+- Deleted `_effective_admission` (the `(c,K)*w` multiplier); each process keeps base `(c, K)`. `verdict.json::mesh` rows now carry `{c, K, mu, eps, w_proc}` (base `(c,K)` + the worker count recorded separately) via the new `_mesh_row` helper.
+- Removed `target.json::tas_workers` (and `_note_tas_workers`); per-service `w_proc` lives only in the profile specs layer. `run_experiment` lost its `tas_workers` parameter; the run summary reports `tas_w_proc`.
+- Profile specs (`dflt.json` / `opti.json`): every specs node `K` 16 -> 32; `w_proc_{TAS_{1}}` 4 -> 2 (atomics + TAS_{2..6} already `w_proc=1`, `c=1`). Artifacts layer untouched (`c=1`, `K=16` — the frozen Camara model).
+- With the confirmed config a collapsed run spawns TAS_1 x2 + 7 atomics x1 = 9 processes; expanded adds TAS_{2..6} x1 = 14.
+
+Full pytest: 585 passed.
